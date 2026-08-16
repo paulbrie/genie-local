@@ -1,0 +1,13 @@
+{
+  "name": "local-genie-mcp",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local MCP server: manage a project's tasks in the admin dashboard DB.",
+  "type": "module",
+  "bin": { "local-genie-mcp": "server.mjs" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "pg": "^8.13.0",
+    "zod": "^3.24.0"
+  }
+}

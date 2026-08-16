@@ -1,0 +1,26 @@
+# User projects (excluded per request — they live in their own repos)
+/projects/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.mcp.json
+
+# Dependencies & build output
+node_modules/
+.next/
+*.tsbuildinfo
+dist/
+build/
+out/
+
+# Runtime logs / pids / caches
+.run-logs/
+*.log
+*.pid
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,10 @@
+{
+  "name": "influentech-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Server-wide tooling (headless browser, etc.) for verifying any project under /opt/project.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.62.1"
+  }
+}
