@@ -9,9 +9,11 @@ live in version control, diff cleanly, and can be authored without touching code
 - **A pipeline** = one Markdown file under [`pipelines/`](./pipelines) that wires
   several agents together, feeding the work of each agent into the next.
 
-The admin dashboard lists everything here at **/admin/agents** and can **run**
-each agent or pipeline: click **Run**, fill in the declared `inputs`, and the
-run executes headlessly via `claude -p` as a detached process. It opens in a
+The admin dashboard at **/admin/agents** is where you **create, edit, delete,
+and run** these definitions. Authoring is **visual** — a form writes the file
+for you (see *Editing in the admin* below), and the files stay the source of
+truth. To **run** one, click **Run**, fill in the declared `inputs`, and the run
+executes headlessly via `claude -p` as a detached process. It opens in a
 **movable, resizable run window** (the same dock UX as the terminals) that
 shows, live:
 
@@ -54,6 +56,29 @@ write to or shell on the server. Grant more only by listing it in `tools:`:
 
 ---
 
+## Editing in the admin
+
+Everything here can be authored **visually** at **/admin/agents** — no need to
+hand-write Markdown:
+
+- **New agent** / **New pipeline** create a file from a template; the **✎** on
+  each card edits it; the **🗑** deletes it.
+- The editor is a **form, not a text box**: the frontmatter becomes fields (name,
+  description), a **model** dropdown, and chip pickers for `tools` / `inputs` /
+  `outputs` (with suggestion toggles for the common tools). A pipeline's
+  **steps** are an ordered list where each step is a **dropdown of existing
+  agents** — so you can't reference one that doesn't exist — plus the optional
+  `as` label and reorder controls. Only the body (system prompt / description)
+  is a free-text area.
+- On **Save** the file is written in exactly the format documented below, so a
+  dashboard-authored file can't be malformed; invalid input is rejected. You can
+  still edit the `.md` files directly — both round-trip cleanly.
+
+The filename **slug** is chosen once at creation and isn't renamed from the
+editor (pipelines reference agents by slug).
+
+---
+
 ## 1. Agent file format
 
 ```markdown
@@ -61,7 +86,7 @@ write to or shell on the server. Grant more only by listing it in `tools:`:
 name: researcher                     # unique slug (defaults to the file name)
 description: Gathers sources on a topic and summarizes the findings
 model: claude-opus-4-8               # optional; omit to inherit the caller's model
-tools: [WebSearch, WebFetch, Read]   # optional allowlist; omit for "all tools"
+tools: [WebSearch, WebFetch, Read]   # allowlist; omit → read-only default (see tool policy)
 inputs: [topic]                      # named values this agent expects
 outputs: [findings]                  # named values this agent promises to return
 ---
@@ -80,8 +105,8 @@ Return your result as the `findings` output.
 |---------------|----------|---------|
 | `name`        | no       | Unique slug used to reference the agent from a pipeline. Defaults to the filename without `.md`. |
 | `description` | yes      | One line shown in listings and used to decide relevance. |
-| `model`       | no       | Model id (e.g. `claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5-20251001`). Omit to inherit the caller's model. |
-| `tools`       | no       | Allowlist of tool names the agent may use. Omit for no restriction. |
+| `model`       | no       | Model id (e.g. `claude-opus-4-8`, `claude-sonnet-5`, `claude-haiku-4-5-20251001`, `claude-fable-5`). Omit to inherit the caller's model. |
+| `tools`       | no       | Allowlist of tool names the agent may use. When omitted, a dashboard run falls back to a **read-only** default (see the tool policy above), not "all tools". |
 | `inputs`      | no       | Names the agent reads from the shared context (see §3). |
 | `outputs`     | no       | Names the agent writes back into the shared context. |
 
