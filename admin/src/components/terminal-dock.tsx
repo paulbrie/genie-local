@@ -982,12 +982,15 @@ function TerminalView({
     const el = screenRef.current;
     if (!el) return;
     const id = setTimeout(() => {
-      el.focus();
+      // On mobile, don't auto-focus the pane: focus belongs to the hidden
+      // textarea (raised on tap), and focusing the pane here would hide the
+      // "tap to type" hint without actually opening the keyboard.
+      if (!mobile) el.focus();
       stick.current = true;
       pinToBottom();
     }, 30);
     return () => clearTimeout(id);
-  }, [minimized, pinToBottom]);
+  }, [minimized, mobile, pinToBottom]);
 
   // One POST at a time, in order: without this, fast typing raced (each key was
   // its own request) and tmux received characters transposed. A single pump
@@ -1167,7 +1170,7 @@ function TerminalView({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       {/* Hidden metrics probe: 50 chars wide, 2 lines tall, same font as the
           screen — lets us map pixels → tmux cols/rows precisely. */}
       <span
@@ -1193,58 +1196,64 @@ function TerminalView({
       </pre>
 
       {mobile ? (
-        <div className="shrink-0 border-t bg-background">
-          {/* Control keys — horizontally scrollable, thumb-reachable. */}
-          <div className="flex items-center gap-1 overflow-x-auto px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <BarKey label="Esc" onTap={() => tapKey("Escape")} />
-            <BarKey label="Tab" onTap={() => tapKey("Tab")} />
-            <BarKey
-              label="Ctrl"
-              active={ctrlArmed}
-              onTap={() => {
-                setCtrlArmed((v) => !v);
-                inputRef.current?.focus();
-              }}
-            />
-            <BarKey label="^C" onTap={() => tapKey("C-c")} />
-            <BarKey label="^D" onTap={() => tapKey("C-d")} />
-            <BarKey label="←" onTap={() => tapKey("Left")} />
-            <BarKey label="↓" onTap={() => tapKey("Down")} />
-            <BarKey label="↑" onTap={() => tapKey("Up")} />
-            <BarKey label="→" onTap={() => tapKey("Right")} />
-            <BarKey label="Clear" onTap={() => tapKey("C-l")} />
-            <BarKey label="|" onTap={() => tapText("|")} />
-            <BarKey label="~" onTap={() => tapText("~")} />
-            <BarKey label="/" onTap={() => tapText("/")} />
+        <>
+          {/* Invisible, focusable input — a <pre> can't raise the soft keyboard,
+              so this does. Tapping the pane (or a control key) focuses it; typed
+              text goes straight to tmux and the field stays empty. */}
+          <textarea
+            ref={inputRef}
+            rows={1}
+            defaultValue=""
+            onKeyDown={onKeyDown}
+            onBeforeInput={onBeforeInput}
+            onInput={onInput}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            inputMode="text"
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            spellCheck={false}
+            aria-label="Terminal input"
+            className="pointer-events-none absolute bottom-0 left-0 size-px resize-none border-0 bg-transparent p-0 text-transparent opacity-0 outline-none"
+          />
+          {/* Faint hint until the keyboard is up (reappears when it's dismissed). */}
+          {!focused && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center">
+              <span className="rounded-full bg-background/85 px-3 py-1 text-xs text-muted-foreground shadow ring-1 ring-foreground/10 backdrop-blur">
+                {ctrlArmed ? "Ctrl armed — tap a key" : "Tap the terminal to type"}
+              </span>
+            </div>
+          )}
+          {/* Control keys — horizontally scrollable, thumb-reachable. These cover
+              what a soft keyboard lacks (Esc, Ctrl, Tab, arrows) plus a standalone
+              Enter so commands run even with the keyboard dismissed. */}
+          <div className="shrink-0 border-t bg-background">
+            <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <BarKey label="Esc" onTap={() => tapKey("Escape")} />
+              <BarKey label="Tab" onTap={() => tapKey("Tab")} />
+              <BarKey label="⏎" onTap={() => tapKey("Enter")} />
+              <BarKey
+                label="Ctrl"
+                active={ctrlArmed}
+                onTap={() => {
+                  setCtrlArmed((v) => !v);
+                  inputRef.current?.focus();
+                }}
+              />
+              <BarKey label="^C" onTap={() => tapKey("C-c")} />
+              <BarKey label="^D" onTap={() => tapKey("C-d")} />
+              <BarKey label="←" onTap={() => tapKey("Left")} />
+              <BarKey label="↓" onTap={() => tapKey("Down")} />
+              <BarKey label="↑" onTap={() => tapKey("Up")} />
+              <BarKey label="→" onTap={() => tapKey("Right")} />
+              <BarKey label="Clear" onTap={() => tapKey("C-l")} />
+              <BarKey label="|" onTap={() => tapText("|")} />
+              <BarKey label="~" onTap={() => tapText("~")} />
+              <BarKey label="/" onTap={() => tapText("/")} />
+            </div>
           </div>
-          {/* Input row: the hidden textarea summons the keyboard + captures typing. */}
-          <div className="flex items-center gap-2 border-t px-2 py-2">
-            <textarea
-              ref={inputRef}
-              rows={1}
-              defaultValue=""
-              onKeyDown={onKeyDown}
-              onBeforeInput={onBeforeInput}
-              onInput={onInput}
-              inputMode="text"
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Terminal input"
-              placeholder={ctrlArmed ? "Ctrl + next key…" : "Tap to type…"}
-              className="max-h-24 min-w-0 flex-1 resize-none rounded-md border bg-muted/40 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-            <button
-              type="button"
-              onClick={() => tapKey("Enter")}
-              aria-label="Enter"
-              className="shrink-0 rounded-md bg-primary px-4 py-2 text-base font-medium text-primary-foreground active:opacity-80"
-            >
-              ⏎
-            </button>
-          </div>
-        </div>
+        </>
       ) : (
         <div
           style={
