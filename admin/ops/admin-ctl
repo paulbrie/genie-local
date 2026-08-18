@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# admin-ctl — confined privileged helper for the Projects Supervisor UI.
+#
+# The admin app runs as `genie` with no sudo. This root-owned script is the ONE
+# thing genie may run as root (via a scoped NOPASSWD sudoers rule), so the UI can
+# control the prod/dev services and ship builds without granting broad sudo.
+#
+#   deploy [--migrate]  build prod (.next-prod) [after drizzle migrate] then
+#                       restart admin.service. Runs detached; progress streams to
+#                       /tmp/projects/admin-deploy.log (visible in the Logs page).
+#   dev-start|dev-stop|dev-restart   control admin-dev.service (:3002, /admin-dev)
+#   status              prod/dev active state + last deploy result (one k=v/line)
+#
+# Security: root-owned, not group/other-writable; internally whitelists the
+# subcommands below, so the sudoers wildcard on arguments can't run anything else.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+APP_DIR=/opt/project/admin
+NODE=/usr/bin/node
+NEXT="$APP_DIR/node_modules/next/dist/bin/next"
+DRIZZLE="$APP_DIR/node_modules/.bin/drizzle-kit"
+RUN_USER=genie
+
+LOGDIR=/tmp/projects
+LOG="$LOGDIR/admin-deploy.log"
+STATUS="$LOGDIR/admin-deploy.status"   # one line: RUNNING|SUCCESS|FAILED <epoch>
+LOCK=/run/admin-ctl.deploy.lock
+
+# Prod instance env — baked into the build (NEXT_PUBLIC_*) and read by next.config.ts.
+PROD_ENV=(APP_BASE_PATH=/admin NEXT_PUBLIC_BASE_PATH=/admin APP_DIST_DIR=.next-prod)
+
+require_root() {
+  [ "$(id -u)" = 0 ] || { echo "admin-ctl: must run as root (via sudo)" >&2; exit 1; }
+}
+
+# The detached deploy worker. Holds a lock so two clicks can't build concurrently.
+do_worker() {
+  local migrate="$1"
+  exec 9>"$LOCK"
+  flock -n 9 || { echo "admin-ctl: a deploy is already running" >&2; exit 1; }
+  mkdir -p "$LOGDIR"
+  {
+    echo "===== deploy started $(date -Is) (migrate=$migrate) ====="
+    echo "RUNNING $(date +%s)" > "$STATUS"
+    local ok=1
+    cd "$APP_DIR"
+    if [ "$migrate" = "1" ]; then
+      echo "--- drizzle-kit migrate ---"
+      runuser -u "$RUN_USER" -- env "${PROD_ENV[@]}" "$NODE" "$DRIZZLE" migrate || ok=0
+    fi
+    if [ "$ok" = 1 ]; then
+      echo "--- next build (.next-prod) ---"
+      runuser -u "$RUN_USER" -- env "${PROD_ENV[@]}" NODE_ENV=production "$NODE" "$NEXT" build || ok=0
+    fi
+    if [ "$ok" = 1 ]; then
+      echo "--- systemctl restart admin.service ---"
+      systemctl restart admin.service || ok=0
+    fi
+    if [ "$ok" = 1 ]; then
+      echo "SUCCESS $(date +%s)" > "$STATUS"
+      echo "===== deploy OK $(date -Is) ====="
+    else
+      echo "FAILED $(date +%s)" > "$STATUS"
+      echo "===== deploy FAILED $(date -Is) ====="
+    fi
+  } >>"$LOG" 2>&1
+  chmod 644 "$LOG" "$STATUS" 2>/dev/null || true
+}
+
+case "${1:-}" in
+  dev-start)   require_root; exec systemctl start   admin-dev.service ;;
+  dev-stop)    require_root; exec systemctl stop    admin-dev.service ;;
+  dev-restart) require_root; exec systemctl restart admin-dev.service ;;
+  status)
+    echo "prod=$(systemctl is-active admin.service 2>/dev/null || true)"
+    echo "dev=$(systemctl is-active admin-dev.service 2>/dev/null || true)"
+    echo "deploy=$(cat "$STATUS" 2>/dev/null || echo none)"
+    ;;
+  deploy)
+    require_root
+    migrate=0; [ "${2:-}" = "--migrate" ] && migrate=1
+    mkdir -p "$LOGDIR"
+    setsid "$0" __worker "$migrate" >/dev/null 2>&1 </dev/null &
+    echo "deploy started (tail /tmp/projects/admin-deploy.log)"
+    ;;
+  __worker) require_root; do_worker "${2:-0}" ;;
+  *)
+    echo "usage: admin-ctl {deploy [--migrate]|dev-start|dev-stop|dev-restart|status}" >&2
+    exit 2 ;;
+esac

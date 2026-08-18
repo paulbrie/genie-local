@@ -1,0 +1,11 @@
+# Install as /etc/sudoers.d/admin-supervisor (mode 0440, root:root).
+#
+# The Projects Supervisor admin app runs as `genie` with no sudo. Grant it the
+# single, confined privilege of running the root-owned helper /usr/local/bin/admin-ctl
+# — and nothing else — so it can control the prod/dev services and ship builds.
+#
+# The wildcard covers admin-ctl's subcommands/flags; because sudo passes them as
+# literal argv (no shell) to a fixed root-owned binary that whitelists its
+# subcommands, this cannot be used to run arbitrary commands.
+Cmnd_Alias ADMIN_CTL = /usr/local/bin/admin-ctl, /usr/local/bin/admin-ctl *
+genie ALL=(root) NOPASSWD: ADMIN_CTL
