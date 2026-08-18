@@ -2,10 +2,12 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Menu } from "lucide-react";
 
 import { BASE_PATH } from "@/lib/config";
 import { formatBytes } from "@/lib/format";
 import type { SystemStats } from "@/lib/stats";
+import { mobileNav } from "@/store/ui";
 
 const POLL_MS = 5000;
 
@@ -50,6 +52,15 @@ export function StatsToolbar() {
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      {/* Mobile nav trigger — the sidebar is an off-canvas drawer below `md`. */}
+      <button
+        type="button"
+        onClick={() => mobileNav.next(true)}
+        aria-label="Open navigation"
+        className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:hidden"
+      >
+        <Menu className="size-5" />
+      </button>
       <div className="flex flex-1 items-center gap-4 overflow-x-auto">
         <Metric
           label="CPU"

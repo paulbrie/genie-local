@@ -15,15 +15,19 @@ import {
   PanelLeftOpen,
   ScrollText,
   Server,
+  Sparkles,
   SquareTerminal,
   Workflow,
+  X,
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { activeRuns, openRun } from "@/store/runs";
+import { mobileNav } from "@/store/ui";
 import {
   liveTerminals,
   openTerminal,
@@ -47,6 +51,7 @@ const NAV: NavItem[] = [
   { href: "/services", label: "Services", icon: Server },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/logs", label: "Logs", icon: ScrollText },
+  { href: "/claude", label: "Claude", icon: Sparkles },
 ];
 
 const STORAGE_KEY = "admin.sidebar.collapsed";
@@ -58,6 +63,12 @@ const STORAGE_KEY = "admin.sidebar.collapsed";
 export function AppSidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen] = useSubject(mobileNav);
+  const isMobile = useIsMobile();
+  // The icon-rail collapse is a desktop affordance; on mobile the sidebar is a
+  // full-width off-canvas drawer, so it never uses the rail.
+  const rail = collapsed && !isMobile;
+  const closeMobile = () => mobileNav.next(false);
   const [chromeCount, setChromeCount] = useState<number | null>(null);
   const [runs] = useSubject(activeRuns);
   // Currently-active runs (kept fresh by <RunDock>), shown as sub-items.
@@ -122,33 +133,52 @@ export function AppSidebar() {
   if (pathname === "/login") return null;
 
   return (
-    <aside
-      className={`${
-        collapsed ? "w-16" : "w-60"
-      } flex h-screen shrink-0 flex-col border-r bg-background/95 transition-[width] duration-200`}
-    >
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
-        {!collapsed && (
-          <Link
-            href="/"
-            className="flex-1 truncate text-sm font-semibold tracking-tight"
-          >
-            Supervisor
-          </Link>
-        )}
-        <button
-          onClick={toggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand" : "Collapse"}
-          className="ml-auto text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {collapsed ? (
-            <PanelLeftOpen className="size-4" />
-          ) : (
-            <PanelLeftClose className="size-4" />
+    <>
+      {/* Scrim behind the mobile drawer (below md only). */}
+      {mobileOpen && (
+        <div
+          onClick={closeMobile}
+          aria-hidden
+          className="fixed inset-0 z-40 bg-black/50 md:hidden"
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r bg-background/95 transition-transform duration-200 md:static md:z-auto md:transition-[width] ${
+          rail ? "md:w-16" : "md:w-60"
+        } ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
+      >
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+          {!rail && (
+            <Link
+              href="/"
+              onClick={closeMobile}
+              className="flex-1 truncate text-sm font-semibold tracking-tight"
+            >
+              Supervisor
+            </Link>
           )}
-        </button>
-      </div>
+          {/* Collapse toggle — desktop only. */}
+          <button
+            onClick={toggle}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand" : "Collapse"}
+            className="ml-auto hidden text-muted-foreground transition-colors hover:text-foreground md:block"
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="size-4" />
+            ) : (
+              <PanelLeftClose className="size-4" />
+            )}
+          </button>
+          {/* Close — mobile drawer only. */}
+          <button
+            onClick={closeMobile}
+            aria-label="Close navigation"
+            className="ml-auto text-muted-foreground transition-colors hover:text-foreground md:hidden"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
 
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
         {NAV.map((item) => {
@@ -168,14 +198,15 @@ export function AppSidebar() {
             <div key={item.href}>
               <Link
                 href={item.href}
+                onClick={closeMobile}
                 aria-current={active ? "page" : undefined}
                 title={
-                  collapsed
+                  rail
                     ? `${item.label}${badge ? ` (${badge})` : ""}`
                     : undefined
                 }
                 className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
-                  collapsed ? "justify-center" : ""
+                  rail ? "justify-center" : ""
                 } ${
                   active
                     ? "bg-accent font-medium text-accent-foreground"
@@ -183,9 +214,9 @@ export function AppSidebar() {
                 }`}
               >
                 <Icon className="size-4 shrink-0" />
-                {!collapsed && <span className="truncate">{item.label}</span>}
+                {!rail && <span className="truncate">{item.label}</span>}
                 {badge != null &&
-                  (collapsed ? (
+                  (rail ? (
                     <span className="absolute -top-0.5 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
                       {badge}
                     </span>
@@ -198,7 +229,7 @@ export function AppSidebar() {
 
               {/* Live agent/pipeline runs, as sub-items under Agents. Clicking
                   opens (or un-minimizes) the run's window in the global dock. */}
-              {item.href === "/agents" && !collapsed && liveRuns.length > 0 && (
+              {item.href === "/agents" && !rail && liveRuns.length > 0 && (
                 <div className="mt-0.5 flex flex-col gap-0.5">
                   {liveRuns.map((r) => {
                     const KindIcon = r.kind === "pipeline" ? Workflow : Bot;
@@ -206,7 +237,10 @@ export function AppSidebar() {
                       <button
                         key={r.runId}
                         type="button"
-                        onClick={() => openRun(r.runId)}
+                        onClick={() => {
+                          openRun(r.runId);
+                          closeMobile();
+                        }}
                         title={`Open ${r.name}${
                           r.kind === "pipeline"
                             ? ` — ${r.stepsDone}/${r.stepsTotal}`
@@ -231,14 +265,17 @@ export function AppSidebar() {
               {/* Currently-working terminals, as sub-items under Terminals.
                   Clicking opens (or un-minimizes) the tmux window in the dock. */}
               {item.href === "/terminals" &&
-                !collapsed &&
+                !rail &&
                 workingTerms.length > 0 && (
                   <div className="mt-0.5 flex flex-col gap-0.5">
                     {workingTerms.map((t) => (
                       <button
                         key={t.name}
                         type="button"
-                        onClick={() => openTerminal(t.name)}
+                        onClick={() => {
+                          openTerminal(t.name);
+                          closeMobile();
+                        }}
                         title={`Open ${t.name} — ${termLabel(t.status)}`}
                         className="flex items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
@@ -253,24 +290,25 @@ export function AppSidebar() {
         })}
       </nav>
 
-      <div
-        className={`flex shrink-0 items-center gap-1 border-t p-2 ${
-          collapsed ? "flex-col" : ""
-        }`}
-      >
-        <ThemeToggle />
-        <button
-          onClick={logout}
-          title="Logout"
-          className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground ${
-            collapsed ? "justify-center" : "flex-1"
+        <div
+          className={`flex shrink-0 items-center gap-1 border-t p-2 ${
+            rail ? "flex-col" : ""
           }`}
         >
-          <LogOut className="size-4 shrink-0" />
-          {!collapsed && <span>Logout</span>}
-        </button>
-      </div>
-    </aside>
+          <ThemeToggle />
+          <button
+            onClick={logout}
+            title="Logout"
+            className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground ${
+              rail ? "justify-center" : "flex-1"
+            }`}
+          >
+            <LogOut className="size-4 shrink-0" />
+            {!rail && <span>Logout</span>}
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
 
