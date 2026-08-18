@@ -586,21 +586,33 @@ function TerminalView({
     onStatusRef.current = onStatus;
   }, [onStatus]);
 
+  // Monotonic id for input POSTs. Lets us (a) ignore an out-of-order capture
+  // that would rewind fresher content, and (b) have the 1s poll stand down
+  // while keystrokes are in flight — their POST responses carry newer captures.
+  const seq = useRef(0);
+  const inflight = useRef(0);
+
+  const applySnap = useCallback(
+    (json: { content?: string; size?: string; status?: TermStatus }) => {
+      const s: TermStatus = json.status ?? "idle";
+      setContent(json.content ?? "");
+      setSize(json.size ?? "");
+      setStatus(s);
+      onStatusRef.current?.(s);
+    },
+    [],
+  );
+
   const refresh = useCallback(async () => {
+    if (inflight.current > 0) return; // don't clobber in-flight keystrokes
     try {
       const res = await fetch(base, { cache: "no-store" });
       const json = await res.json();
-      if (res.ok) {
-        const s: TermStatus = json.status ?? "idle";
-        setContent(json.content ?? "");
-        setSize(json.size ?? "");
-        setStatus(s);
-        onStatusRef.current?.(s);
-      }
+      if (res.ok) applySnap(json);
     } catch {
       /* transient */
     }
-  }, [base]);
+  }, [base, applySnap]);
 
   useEffect(() => {
     let active = true;
@@ -717,19 +729,36 @@ function TerminalView({
   }, [minimized, pinToBottom]);
 
   const send = useCallback(
-    async (payload: { text?: string; key?: string }) => {
+    async (payload: { text?: string; key?: string }, echo?: string) => {
+      const mySeq = ++seq.current;
+      // Optimistic local echo: paint the typed char immediately so it feels
+      // instant. Only for an idle shell prompt — a TUI's redraw can't be
+      // predicted by appending, so we let those wait for the real capture.
+      if (echo) setContent((c) => c + echo);
+      inflight.current++;
       try {
-        await fetch(base, {
+        const res = await fetch(base, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
+        const json = await res.json().catch(() => null);
+        // The POST now returns the fresh pane (one round-trip, no separate GET).
+        // Apply it only if no newer keystroke has been sent since, so an
+        // out-of-order response can't rewind the screen.
+        if (res.ok && json?.content !== undefined && mySeq === seq.current) {
+          applySnap(json);
+        }
       } catch {
         /* ignore */
+      } finally {
+        inflight.current--;
+        // After a burst settles, pull one authoritative capture to correct any
+        // mis-prediction (e.g. the trailing prompt space that capture strips).
+        if (inflight.current === 0) setTimeout(() => void refresh(), 80);
       }
-      setTimeout(() => void refresh(), 120);
     },
-    [base, refresh],
+    [base, applySnap, refresh],
   );
 
   const onKeyDown = useCallback(
@@ -756,10 +785,10 @@ function TerminalView({
       }
       if (e.key.length === 1) {
         e.preventDefault();
-        void send({ text: e.key });
+        void send({ text: e.key }, status === "idle" ? e.key : undefined);
       }
     },
-    [send],
+    [send, status],
   );
 
   return (

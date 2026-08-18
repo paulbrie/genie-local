@@ -61,6 +61,19 @@ export async function POST(
     if (resize) await resizeTerminal(name, resize.cols, resize.rows);
     if (text) await sendText(name, text);
     if (key) await sendKey(name, key);
+    // For input (not resize-only), return the fresh pane in this same response
+    // so the client echoes in a single round-trip instead of a POST followed by
+    // a separate GET. A short settle delay lets the shell's echo land in the
+    // capture; the client's optimistic local echo covers any residual gap.
+    if (text || key) {
+      await new Promise((r) => setTimeout(r, 15));
+      try {
+        const snap = await captureTerminal(name);
+        return NextResponse.json({ ok: true, ...snap }, { headers: noStore });
+      } catch {
+        /* fall through to the bare ok — the client's poll will catch up */
+      }
+    }
     return NextResponse.json({ ok: true }, { headers: noStore });
   } catch (e) {
     return NextResponse.json(
