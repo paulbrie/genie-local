@@ -17,24 +17,6 @@ export function runSlug(
   return raw.replace(UNSAFE, "-").replace(/^-+|-+$/g, "") || "app";
 }
 
-/**
- * A sensible pre-set value for the Logs sidebar filter when deep-linking to
- * `logFile` (`?filter=…`). Returns the file's basename without directory or
- * `.log` — i.e. the run slug (`projects/roa-server-app-dev.log` ->
- * `roa-server-app-dev`). When `script` is given, its trailing `-<script>`
- * segment is stripped so a script's log groups with its app siblings
- * (dev/build/lint -> `roa-server-app`). Matches the sidebar's substring filter
- * over each file's relative path.
- */
-export function logFilter(logFile: string, script?: string): string {
-  const base = (logFile.split(/[\\/]/).pop() ?? logFile).replace(/\.log$/i, "");
-  if (script) {
-    const suffix = `-${runSlug("", "", script)}`;
-    if (base.endsWith(suffix)) return base.slice(0, -suffix.length);
-  }
-  return base;
-}
-
 /** The dashboard treats an app as "running" when its dev or start server is up. */
 export function isAppServerRunning(
   running: Set<string>,

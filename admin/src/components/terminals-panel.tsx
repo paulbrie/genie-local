@@ -5,7 +5,11 @@ import { toast } from "sonner";
 import { Maximize2, Plus, TerminalSquare, Trash2 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
-import { killSession, StatusDot, statusLabel } from "@/components/terminal-dock";
+import {
+  killSession,
+  statusLabel,
+  TermStatusDot,
+} from "@/components/terminal-dock";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -119,7 +123,7 @@ export function TerminalsPanel() {
               className="flex items-center gap-2 rounded-md border px-2.5 py-2 text-sm"
             >
               <TerminalSquare className="size-4 shrink-0 text-muted-foreground" />
-              <StatusDot status={t.status} />
+              <TermStatusDot status={t.status} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{t.name}</span>
                 <span className="block truncate font-mono text-xs text-muted-foreground">

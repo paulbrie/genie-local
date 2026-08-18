@@ -6,12 +6,11 @@ import { Markdown } from "@/components/markdown";
 import { RunHistory } from "@/components/run-history";
 import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 import {
   AGENTS_ROOT,
   listAgents,
@@ -38,8 +37,10 @@ export default async function AgentsPage() {
             {AGENTS_ROOT}
           </code>
           . Create, edit, run, and delete them here; see the{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-xs">README.md</code>{" "}
-          below for the format.
+          <code className="rounded bg-muted px-1 py-0.5 text-xs">
+            Documentation
+          </code>{" "}
+          tab below for the format.
         </p>
       </header>
 
@@ -60,14 +61,20 @@ export default async function AgentsPage() {
         {pipelines.length === 0 ? (
           <EmptyState label="No pipelines defined yet." />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="divide-y rounded-lg border">
             {pipelines.map((p) => (
-              <Card key={p.slug}>
-                <CardHeader>
-                  <CardTitle className="font-mono">{p.name}</CardTitle>
-                  <CardDescription>{p.description}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
+              <div
+                key={p.slug}
+                className="flex items-start gap-3 px-3 py-2.5 text-sm"
+              >
+                <Workflow className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <span className="font-mono font-medium">{p.name}</span>
+                  {p.description && (
+                    <p className="text-xs text-muted-foreground">
+                      {p.description}
+                    </p>
+                  )}
                   {p.inputs.length > 0 && (
                     <FieldRow label="inputs" values={p.inputs} />
                   )}
@@ -83,29 +90,27 @@ export default async function AgentsPage() {
                       </span>
                     ))}
                   </div>
-                  <div className="flex items-center justify-between gap-2 border-t pt-3">
-                    <AgentRunControls
-                      kind="pipeline"
-                      slug={p.slug}
-                      name={p.name}
-                      inputs={p.inputs}
-                    />
-                    <div className="flex items-center">
-                      <AgentEditor
-                        mode="edit"
-                        kind="pipeline"
-                        slug={p.slug}
-                        agentOptions={agents.map((a) => a.slug)}
-                      />
-                      <DeleteAgentButton
-                        kind="pipeline"
-                        slug={p.slug}
-                        name={p.name}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <AgentRunControls
+                    kind="pipeline"
+                    slug={p.slug}
+                    name={p.name}
+                    inputs={p.inputs}
+                  />
+                  <AgentEditor
+                    mode="edit"
+                    kind="pipeline"
+                    slug={p.slug}
+                    agentOptions={agents.map((a) => a.slug)}
+                  />
+                  <DeleteAgentButton
+                    kind="pipeline"
+                    slug={p.slug}
+                    name={p.name}
+                  />
+                </div>
+              </div>
             ))}
           </div>
         )}
@@ -123,21 +128,27 @@ export default async function AgentsPage() {
         {agents.length === 0 ? (
           <EmptyState label="No agents defined yet." />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="divide-y rounded-lg border">
             {agents.map((a) => (
-              <Card key={a.slug}>
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between gap-2 font-mono">
-                    {a.name}
+              <div
+                key={a.slug}
+                className="flex items-start gap-3 px-3 py-2.5 text-sm"
+              >
+                <Bot className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-medium">{a.name}</span>
                     {a.model && (
                       <Badge variant="secondary" className="font-normal">
                         {a.model}
                       </Badge>
                     )}
-                  </CardTitle>
-                  <CardDescription>{a.description}</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-2">
+                  </div>
+                  {a.description && (
+                    <p className="text-xs text-muted-foreground">
+                      {a.description}
+                    </p>
+                  )}
                   {a.inputs.length > 0 && (
                     <FieldRow label="in" values={a.inputs} />
                   )}
@@ -145,53 +156,55 @@ export default async function AgentsPage() {
                     <FieldRow label="out" values={a.outputs} />
                   )}
                   {a.tools && <FieldRow label="tools" values={a.tools} />}
-                  <div className="flex items-center justify-between gap-2 border-t pt-2">
-                    <AgentRunControls
-                      kind="agent"
-                      slug={a.slug}
-                      name={a.name}
-                      inputs={a.inputs}
-                    />
-                    <div className="flex items-center">
-                      <AgentEditor mode="edit" kind="agent" slug={a.slug} />
-                      <DeleteAgentButton
-                        kind="agent"
-                        slug={a.slug}
-                        name={a.name}
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <AgentRunControls
+                    kind="agent"
+                    slug={a.slug}
+                    name={a.name}
+                    inputs={a.inputs}
+                  />
+                  <AgentEditor mode="edit" kind="agent" slug={a.slug} />
+                  <DeleteAgentButton kind="agent" slug={a.slug} name={a.name} />
+                </div>
+              </div>
             ))}
           </div>
         )}
       </section>
 
-      <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-lg font-medium">
-          <History className="size-4 text-muted-foreground" />
-          Run history
-        </h2>
-        <RunHistory />
+      <section>
+        <Tabs defaultValue="runs">
+          <TabsList>
+            <TabsTrigger value="runs">
+              <History className="size-4" />
+              Run history
+            </TabsTrigger>
+            {readme && (
+              <TabsTrigger value="docs">
+                <BookOpen className="size-4" />
+                Documentation
+              </TabsTrigger>
+            )}
+          </TabsList>
+          <TabsContent value="runs" className="pt-3">
+            <RunHistory />
+          </TabsContent>
+          {readme && (
+            <TabsContent value="docs" className="pt-3">
+              <div className="rounded-lg border bg-card px-4 py-3">
+                <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
+                  <BookOpen className="size-4" />
+                  <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+                    agents/README.md
+                  </code>
+                </div>
+                <Markdown source={readme} />
+              </div>
+            </TabsContent>
+          )}
+        </Tabs>
       </section>
-
-      {readme && (
-        <section>
-          <details open className="rounded-lg border bg-card">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-lg font-medium select-none">
-              <BookOpen className="size-4 text-muted-foreground" />
-              README
-              <code className="ml-auto rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-normal text-muted-foreground">
-                agents/README.md
-              </code>
-            </summary>
-            <div className="border-t px-4 py-3">
-              <Markdown source={readme} />
-            </div>
-          </details>
-        </section>
-      )}
     </main>
   );
 }

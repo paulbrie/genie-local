@@ -11,19 +11,22 @@ import {
   stopAppAction,
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
-import { logFilter } from "@/lib/run-slug";
+import { StatusDot } from "@/components/ui/status-dot";
+import { runSlug } from "@/lib/run-slug";
 import type { RunStatus } from "@/lib/runner";
 
 const POLL_MS = 5000;
 
 export function ScriptRow({
   projectSlug,
+  appSlug,
   appId,
   script,
   command,
   initial,
 }: {
   projectSlug: string;
+  appSlug: string;
   appId: number;
   script: string;
   command: string;
@@ -63,21 +66,11 @@ export function ScriptRow({
 
   return (
     <div data-script={script} className="flex items-center gap-2 px-2.5 py-1.5">
-      <span
-        role="img"
-        aria-label={running ? `Running (pid ${status.pid})` : "Stopped"}
-        className="relative flex size-2 shrink-0 items-center justify-center"
-        title={running ? `running (pid ${status.pid})` : "stopped"}
-      >
-        {running && (
-          <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-        )}
-        <span
-          className={`relative inline-flex size-2 rounded-full ${
-            running ? "bg-emerald-500" : "bg-muted-foreground/30"
-          }`}
-        />
-      </span>
+      <StatusDot
+        color={running ? "bg-emerald-500" : "bg-muted-foreground/30"}
+        pulse={running}
+        label={running ? `Running (pid ${status.pid})` : "Stopped"}
+      />
 
       <code className="w-24 shrink-0 truncate font-mono text-xs font-semibold">
         {script}
@@ -132,7 +125,7 @@ export function ScriptRow({
           </Button>
         )}
         <Link
-          href={`/logs?file=${encodeURIComponent(status.logFile)}&filter=${encodeURIComponent(logFilter(status.logFile, script))}`}
+          href={`/logs?file=${encodeURIComponent(status.logFile)}&filter=${encodeURIComponent(runSlug(projectSlug, appSlug))}`}
           className="px-1 text-xs text-muted-foreground hover:underline"
         >
           logs

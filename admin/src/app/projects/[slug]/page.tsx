@@ -14,6 +14,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -133,21 +134,12 @@ async function AppCard({
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span
-              role="img"
-              aria-label={anyRunning ? "Running" : "Stopped"}
-              className="relative flex size-2.5 shrink-0 items-center justify-center"
-              title={anyRunning ? "running" : "stopped"}
-            >
-              {anyRunning && (
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-              )}
-              <span
-                className={`relative inline-flex size-2.5 rounded-full ${
-                  anyRunning ? "bg-emerald-500" : "bg-muted-foreground/30"
-                }`}
-              />
-            </span>
+            <StatusDot
+              size="lg"
+              color={anyRunning ? "bg-emerald-500" : "bg-muted-foreground/30"}
+              pulse={anyRunning}
+              label={anyRunning ? "Running" : "Stopped"}
+            />
             <CardTitle className="truncate text-base">{label}</CardTitle>
           </div>
           <div className="flex items-center gap-1.5">
@@ -215,6 +207,7 @@ async function AppCard({
                 <ScriptRow
                   key={name}
                   projectSlug={projectSlug}
+                  appSlug={app.slug}
                   appId={app.id}
                   script={name}
                   command={cmd}

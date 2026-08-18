@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Bot,
+  Container,
   Database,
   Globe,
   LayoutDashboard,
@@ -14,12 +15,14 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
+  Server,
   SquareTerminal,
   Workflow,
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
+import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import { activeRuns, openRun } from "@/store/runs";
 import {
@@ -41,6 +44,8 @@ const NAV: NavItem[] = [
   { href: "/chrome", label: "Chrome", icon: Globe },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },
   { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/docker", label: "Docker", icon: Container },
+  { href: "/services", label: "Services", icon: Server },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/task-browser", label: "Task browser", icon: Monitor },
@@ -211,10 +216,7 @@ export function AppSidebar() {
                         }`}
                         className="flex items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
-                        <span className="relative flex size-1.5 shrink-0 items-center justify-center">
-                          <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-                          <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
-                        </span>
+                        <StatusDot color="bg-emerald-500" pulse size="sm" />
                         <KindIcon className="size-3 shrink-0 opacity-70" />
                         <span className="truncate">{r.name}</span>
                         {r.kind === "pipeline" && r.stepsTotal > 0 && (
@@ -300,13 +302,6 @@ function termLabel(status: TermStatus): string {
 function TermDot({ status }: { status: TermStatus }) {
   const { dot, ping } = TERM_DOT[status];
   return (
-    <span className="relative flex size-1.5 shrink-0 items-center justify-center">
-      {ping && (
-        <span
-          className={`absolute inline-flex size-full animate-ping rounded-full opacity-70 ${ping}`}
-        />
-      )}
-      <span className={`relative inline-flex size-1.5 rounded-full ${dot}`} />
-    </span>
+    <StatusDot color={dot} pulse={ping !== null} size="sm" label={termLabel(status)} />
   );
 }

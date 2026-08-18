@@ -17,6 +17,7 @@ import { useSubject } from "subjecto/react";
 import { AnsiText } from "@/components/ansi-text";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import {
   closeTerminal,
@@ -225,7 +226,7 @@ export function TerminalDock() {
                 title={`Restore ${name} — ${statusLabel(statuses[name] ?? "idle")}`}
                 className="flex items-center gap-1.5 font-medium hover:underline"
               >
-                <StatusDot status={statuses[name] ?? "idle"} />
+                <TermStatusDot status={statuses[name] ?? "idle"} />
                 <span className="max-w-[10rem] truncate">{name}</span>
               </button>
               <button
@@ -347,7 +348,7 @@ function TerminalWindow({
         }`}
       >
         <TerminalSquare className="size-4 shrink-0 opacity-70" />
-        <StatusDot status={status} />
+        <TermStatusDot status={status} />
         {renaming ? (
           <form onSubmit={submitRename} className="flex flex-1 items-center gap-1">
             <Input
@@ -524,22 +525,10 @@ const DOT: Record<TermStatus, { dot: string; ping: string | null }> = {
  * command, orange = a Claude session (pulsing while Claude works, steady while
  * it waits for input).
  */
-export function StatusDot({ status }: { status: TermStatus }) {
+export function TermStatusDot({ status }: { status: TermStatus }) {
   const { dot, ping } = DOT[status];
   return (
-    <span
-      role="img"
-      aria-label={statusLabel(status)}
-      title={statusLabel(status)}
-      className="relative flex size-2 shrink-0 items-center justify-center"
-    >
-      {ping && (
-        <span
-          className={`absolute inline-flex size-full animate-ping rounded-full opacity-70 ${ping}`}
-        />
-      )}
-      <span className={`relative inline-flex size-2 rounded-full ${dot}`} />
-    </span>
+    <StatusDot color={dot} pulse={ping !== null} label={statusLabel(status)} />
   );
 }
 
@@ -811,7 +800,7 @@ function TerminalView({
             footerBg ? "opacity-80" : "text-muted-foreground"
           }`}
         >
-          <StatusDot status={status} />
+          <TermStatusDot status={status} />
           {statusLabel(status)}
           {size && ` · ${size}`}
         </span>

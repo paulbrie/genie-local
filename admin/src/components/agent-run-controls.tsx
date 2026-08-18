@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { StatusDot } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
 import { activeRuns, openRun, upsertActiveRun } from "@/store/runs";
 
@@ -116,10 +117,7 @@ export function AgentRunControls({
           }
         >
           {activeCount > 0 ? (
-            <span className="relative flex size-2 items-center justify-center">
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-              <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-            </span>
+            <StatusDot color="bg-emerald-500" pulse />
           ) : (
             <SquareTerminal className="size-3" />
           )}

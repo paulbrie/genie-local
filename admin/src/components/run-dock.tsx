@@ -7,6 +7,7 @@ import { useSubject } from "subjecto/react";
 
 import { RunConsole, LIFECYCLE_BADGE } from "@/components/run-console";
 import { Badge } from "@/components/ui/badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import type { RunLifecycle, RunSummary } from "@/lib/agent-run-types";
 import { listRunsAction } from "@/app/actions";
 import {
@@ -35,16 +36,7 @@ function RunDot({ state, running }: { state: RunLifecycle; running: boolean }) {
             ? "bg-emerald-500"
             : "bg-amber-500";
   const pulse = running || state === "running" || state === "starting";
-  return (
-    <span className="relative flex size-2 shrink-0 items-center justify-center">
-      {pulse && (
-        <span
-          className={`absolute inline-flex size-full animate-ping rounded-full opacity-70 ${color}`}
-        />
-      )}
-      <span className={`relative inline-flex size-2 rounded-full ${color}`} />
-    </span>
-  );
+  return <StatusDot color={color} pulse={pulse} />;
 }
 
 /**

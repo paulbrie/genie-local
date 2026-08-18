@@ -14,7 +14,6 @@ import type {
   StepState,
 } from "@/lib/agent-run-types";
 import { BASE_PATH } from "@/lib/config";
-import { logFilter } from "@/lib/run-slug";
 import type { RunStatus } from "@/lib/runner";
 
 const POLL_MS = 1500;
@@ -168,7 +167,7 @@ export function RunConsole({
           )}
           {logFile && (
             <a
-              href={`${BASE_PATH}/logs?file=${encodeURIComponent(logFile)}&filter=${encodeURIComponent(logFilter(logFile))}`}
+              href={`${BASE_PATH}/logs?file=${encodeURIComponent(logFile)}&filter=${encodeURIComponent(runId)}`}
               className="text-xs text-muted-foreground hover:underline"
             >
               open in Logs

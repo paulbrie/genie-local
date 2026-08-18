@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { StatusDot } from "@/components/ui/status-dot";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { appServerMemBytes, isAppServerRunning } from "@/lib/run-slug";
 import type { AppSignals, ProjectSignals } from "@/lib/types";
@@ -16,36 +17,22 @@ export function appLabel(app: AppSignals): string {
   return app.name ?? (app.slug === "" ? "(root)" : app.slug);
 }
 
-function StatusDot({ running }: { running: boolean }) {
-  return (
-    <span
-      className="relative flex size-2 shrink-0 items-center justify-center"
-      title={running ? "running" : "stopped"}
-    >
-      {running && (
-        <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-      )}
-      <span
-        className={`relative inline-flex size-2 rounded-full ${
-          running ? "bg-emerald-500" : "bg-muted-foreground/30"
-        }`}
-      />
-    </span>
-  );
-}
-
 function AppRow({ app, running }: { app: AppSignals; running: boolean }) {
   const { git, fs } = app;
   return (
     <div
-      className={`flex items-center justify-between gap-2 rounded-lg border py-1.5 pr-2.5 pl-2.5 text-sm transition-colors ${
+      className={`flex items-center justify-between gap-2 rounded-lg border py-1.5 pr-2.5 text-sm transition-colors ${
         running
           ? "border-l-[3px] border-emerald-500/50 border-l-emerald-500 bg-emerald-500/[0.06] pl-2"
-          : "border-border/60 bg-muted/30 hover:bg-muted/60"
+          : "border-border/60 bg-muted/30 pl-2.5 hover:bg-muted/60"
       }`}
     >
       <div className="flex min-w-0 items-center gap-2">
-        <StatusDot running={running} />
+        <StatusDot
+          color={running ? "bg-emerald-500" : "bg-muted-foreground/30"}
+          pulse={running}
+          label={running ? "running" : "stopped"}
+        />
         <span
           className="max-w-[55%] shrink-0 truncate font-medium"
           title={appLabel(app)}
@@ -102,22 +89,23 @@ export function ProjectCard({
   running: Set<string>;
   memory: Record<string, number>;
 }) {
+  // One pass over the apps: pair each with its live running state (so the row
+  // map below doesn't recompute isAppServerRunning) and accumulate the header
+  // aggregates in the same loop.
   const appCount = project.apps.length;
-  const dirtyCount = project.apps.filter((a) => a.git.dirty === true).length;
-  const runningCount = project.apps.filter((a) =>
-    isAppServerRunning(running, project.slug, a.slug),
-  ).length;
-  const memBytes = project.apps.reduce(
-    (sum, a) => sum + appServerMemBytes(memory, project.slug, a.slug),
-    0,
-  );
-
-  // Most recent commit across the project's apps, for the description line.
-  const lastActivity = project.apps
-    .map((a) => a.git.lastCommitAt)
-    .filter((d): d is string => !!d)
-    .sort()
-    .at(-1);
+  let dirtyCount = 0;
+  let runningCount = 0;
+  let memBytes = 0;
+  let lastActivity: string | undefined;
+  const rows = project.apps.map((app) => {
+    const isRunning = isAppServerRunning(running, project.slug, app.slug);
+    if (app.git.dirty === true) dirtyCount++;
+    if (isRunning) runningCount++;
+    memBytes += appServerMemBytes(memory, project.slug, app.slug);
+    const at = app.git.lastCommitAt;
+    if (at && (!lastActivity || at > lastActivity)) lastActivity = at;
+    return { app, running: isRunning };
+  });
 
   return (
     <Link
@@ -161,10 +149,7 @@ export function ProjectCard({
                       : undefined
                   }
                 >
-                  <span className="relative flex size-1.5">
-                    <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-                    <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
-                  </span>
+                  <StatusDot color="bg-emerald-500" pulse size="sm" />
                   {runningCount} running
                   {memBytes > 0 && (
                     <span className="font-mono tabular-nums opacity-80">
@@ -186,11 +171,11 @@ export function ProjectCard({
               No apps yet
             </p>
           ) : (
-            project.apps.map((app) => (
+            rows.map(({ app, running: isRunning }) => (
               <AppRow
                 key={app.slug || "(root)"}
                 app={app}
-                running={isAppServerRunning(running, project.slug, app.slug)}
+                running={isRunning}
               />
             ))
           )}

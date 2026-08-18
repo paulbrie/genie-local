@@ -41,7 +41,7 @@ export function LogsViewer() {
 
   // Deep-link support: /admin/logs?file=projects/<slug>.log opens that file, and
   // ?filter=<text> pre-sets the sidebar filter so the list is narrowed to the
-  // relevant logs (callers pass the app/run group — see logFilter()).
+  // relevant logs (callers pass the app group `runSlug(project, app)` or a run id).
   const [filter, setFilter] = useState(() =>
     typeof window === "undefined"
       ? ""

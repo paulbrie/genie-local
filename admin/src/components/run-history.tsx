@@ -7,8 +7,8 @@ import { deleteRunAction } from "@/app/actions";
 import { LIFECYCLE_BADGE } from "@/components/run-console";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
-import { logFilter } from "@/lib/run-slug";
 import { activeRuns, closeRun, openRun } from "@/store/runs";
 
 /** Relative "3m ago" style time; falls back to a locale string for old runs. */
@@ -50,22 +50,16 @@ export function RunHistory() {
             key={r.runId}
             className="flex items-center gap-3 px-3 py-2 text-sm"
           >
-            <span className="relative flex size-2 shrink-0 items-center justify-center">
-              {(r.running || r.state === "running") && (
-                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400/70" />
-              )}
-              <span
-                className={`relative inline-flex size-2 rounded-full ${
-                  r.state === "failed"
-                    ? "bg-red-500"
-                    : r.state === "done"
-                      ? "bg-emerald-500"
-                      : r.running || r.state === "running"
-                        ? "bg-emerald-500"
-                        : "bg-muted-foreground/40"
-                }`}
-              />
-            </span>
+            <StatusDot
+              color={
+                r.state === "failed"
+                  ? "bg-red-500"
+                  : r.state === "done" || r.running || r.state === "running"
+                    ? "bg-emerald-500"
+                    : "bg-muted-foreground/40"
+              }
+              pulse={r.running || r.state === "running"}
+            />
             <Icon className="size-4 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate font-mono">{r.name}</span>
             {r.kind === "pipeline" && (
@@ -80,7 +74,7 @@ export function RunHistory() {
               {ago(r.startedAt)}
             </span>
             <a
-              href={`${BASE_PATH}/logs?file=${encodeURIComponent(r.logFile)}&filter=${encodeURIComponent(logFilter(r.logFile))}`}
+              href={`${BASE_PATH}/logs?file=${encodeURIComponent(r.logFile)}&filter=${encodeURIComponent(r.runId)}`}
               className="shrink-0 text-muted-foreground hover:text-foreground"
               title="Open in Logs"
             >
