@@ -11,7 +11,6 @@ import {
   Globe,
   LayoutDashboard,
   LogOut,
-  Monitor,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -48,7 +47,6 @@ const NAV: NavItem[] = [
   { href: "/services", label: "Services", icon: Server },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/logs", label: "Logs", icon: ScrollText },
-  { href: "/task-browser", label: "Task browser", icon: Monitor },
 ];
 
 const STORAGE_KEY = "admin.sidebar.collapsed";

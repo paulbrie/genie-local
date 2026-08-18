@@ -1,6 +1,6 @@
 "use client";
 
-import { GripVertical, Monitor, Pencil, Trash2 } from "lucide-react";
+import { GripVertical, Pencil, Trash2 } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { TaskBrowserView } from "@/components/task-browser-view";
 import type { Task } from "@/db/schema";
 import { formatRelativeTime } from "@/lib/format";
 
@@ -52,10 +51,6 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
   }, []);
 
   const [filter, setFilter] = useState<Filter>("all");
-
-  // Which task currently has its live browser panel expanded (at most one, so we
-  // never run multiple viewport streams at once).
-  const [browserTaskId, setBrowserTaskId] = useState<number | null>(null);
 
   // Inline-edit state (one task at a time).
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -369,22 +364,6 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
                 <div className="flex shrink-0 items-center gap-0.5">
                   <button
                     type="button"
-                    onClick={() =>
-                      setBrowserTaskId((id) => (id === t.id ? null : t.id))
-                    }
-                    aria-label="Toggle live browser"
-                    aria-pressed={browserTaskId === t.id}
-                    title="Live browser"
-                    className={`rounded p-1 transition-opacity hover:text-foreground focus-visible:opacity-100 ${
-                      browserTaskId === t.id
-                        ? "text-foreground opacity-100"
-                        : "text-muted-foreground opacity-0 group-hover:opacity-100"
-                    }`}
-                  >
-                    <Monitor className="size-3.5" />
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => startEdit(t)}
                     disabled={isPending}
                     aria-label="Edit task"
@@ -403,11 +382,6 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
                   </button>
                 </div>
                 </div>
-                {browserTaskId === t.id && (
-                  <div className="border-t p-2">
-                    <TaskBrowserView taskId={String(t.id)} />
-                  </div>
-                )}
               </li>
             ),
           )}
