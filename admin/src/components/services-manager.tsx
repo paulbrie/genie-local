@@ -166,9 +166,9 @@ export function ServicesManager() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-56">Unit</TableHead>
-              <TableHead>Description</TableHead>
+              <TableHead className="hidden lg:table-cell">Description</TableHead>
               <TableHead className="w-24">State</TableHead>
-              <TableHead className="w-24">Startup</TableHead>
+              <TableHead className="hidden w-24 sm:table-cell">Startup</TableHead>
               <TableHead className="w-px text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -238,7 +238,7 @@ function ServiceRow({
           )}
         </span>
       </TableCell>
-      <TableCell className="max-w-[24rem] truncate text-xs text-muted-foreground" title={s.description}>
+      <TableCell className="hidden max-w-[24rem] truncate text-xs text-muted-foreground lg:table-cell" title={s.description}>
         {s.description || "—"}
       </TableCell>
       <TableCell>
@@ -247,7 +247,7 @@ function ServiceRow({
           {s.sub && s.sub !== s.active ? ` (${s.sub})` : ""}
         </Badge>
       </TableCell>
-      <TableCell className="text-xs text-muted-foreground">
+      <TableCell className="hidden text-xs text-muted-foreground sm:table-cell">
         {s.enabled || "—"}
       </TableCell>
       <TableCell className="text-right">

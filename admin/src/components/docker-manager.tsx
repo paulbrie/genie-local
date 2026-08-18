@@ -188,9 +188,9 @@ export function DockerManager() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-40">Name</TableHead>
-                <TableHead>Image</TableHead>
+                <TableHead className="hidden md:table-cell">Image</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Ports</TableHead>
+                <TableHead className="hidden lg:table-cell">Ports</TableHead>
                 <TableHead className="w-px text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -215,13 +215,13 @@ export function DockerManager() {
                           </span>
                         </span>
                       </TableCell>
-                      <TableCell className="max-w-[16rem] truncate font-mono text-xs text-muted-foreground" title={c.image}>
+                      <TableCell className="hidden max-w-[16rem] truncate font-mono text-xs text-muted-foreground md:table-cell" title={c.image}>
                         {c.image}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {c.status}
                       </TableCell>
-                      <TableCell className="max-w-[14rem] truncate text-xs text-muted-foreground" title={c.ports}>
+                      <TableCell className="hidden max-w-[14rem] truncate text-xs text-muted-foreground lg:table-cell" title={c.ports}>
                         {c.ports || "—"}
                       </TableCell>
                       <TableCell className="text-right">
@@ -291,9 +291,9 @@ export function DockerManager() {
             <TableHeader>
               <TableRow>
                 <TableHead>Repository</TableHead>
-                <TableHead className="w-32">Tag</TableHead>
-                <TableHead className="w-28">ID</TableHead>
-                <TableHead className="w-24 text-right">Size</TableHead>
+                <TableHead className="hidden w-32 sm:table-cell">Tag</TableHead>
+                <TableHead className="hidden w-28 md:table-cell">ID</TableHead>
+                <TableHead className="hidden w-24 text-right sm:table-cell">Size</TableHead>
                 <TableHead className="w-px text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -310,13 +310,13 @@ export function DockerManager() {
                     <TableCell className="max-w-[18rem] truncate font-medium" title={img.repository}>
                       {img.repository}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="hidden text-xs text-muted-foreground sm:table-cell">
                       {img.tag}
                     </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
+                    <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
                       {img.id.replace(/^sha256:/, "").slice(0, 12)}
                     </TableCell>
-                    <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+                    <TableCell className="hidden text-right text-xs tabular-nums text-muted-foreground sm:table-cell">
                       {img.size}
                     </TableCell>
                     <TableCell className="text-right">

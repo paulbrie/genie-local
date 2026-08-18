@@ -219,8 +219,8 @@ export function ProcessesTable() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Right-click a process for actions (kill, force kill, kill tree, copy
-        PID).
+        Right-click (or long-press on touch) a process for actions (kill, force
+        kill, kill tree, copy PID).
       </p>
 
       {view === "table" ? (
