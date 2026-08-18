@@ -82,13 +82,15 @@ export function hydrateDock() {
   }
 }
 
-/** Open a window (or un-minimize + focus one that already exists). */
+/** Open a window (or un-minimize + focus one that already exists). Moves the
+ *  name to the end of `open` so it's the frontmost — on mobile the last visible
+ *  terminal is the one shown full-screen. */
 export function openTerminal(name: string) {
   const s = dock.getValue();
-  set({
-    open: s.open.includes(name) ? s.open : [...s.open, name],
-    minimized: s.minimized.filter((n) => n !== name),
-  });
+  const open = s.open.includes(name)
+    ? [...s.open.filter((n) => n !== name), name]
+    : [...s.open, name];
+  set({ open, minimized: s.minimized.filter((n) => n !== name) });
 }
 
 /** Close a window entirely (the tmux session keeps running). */

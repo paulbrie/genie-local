@@ -339,7 +339,9 @@ const NAMED_KEYS = new Set([
 ]);
 
 export function isNamedKey(k: string): boolean {
-  return NAMED_KEYS.has(k);
+  // The fixed set above, plus any Ctrl+letter (the mobile "Ctrl" modifier arms
+  // an arbitrary C-<letter>). The strict pattern keeps it injection-safe.
+  return NAMED_KEYS.has(k) || /^C-[a-z]$/.test(k);
 }
 
 /** Type literal text into the session (no trailing newline). */

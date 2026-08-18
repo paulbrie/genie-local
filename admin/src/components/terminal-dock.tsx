@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   ALargeSmall,
   Check,
+  ChevronLeft,
   Minus,
   Palette,
   Pencil,
@@ -20,11 +21,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import {
   closeTerminal,
   dock,
   hydrateDock,
   minimizeTerminal,
+  openTerminal,
   reconcileTerminals,
   renameTerminal,
   restoreTerminal,
@@ -188,6 +191,7 @@ export function TerminalDock() {
   const pathname = usePathname();
   const [{ open, minimized }] = useSubject(dock);
   const [statuses] = useSubject(termStatus);
+  const isMobile = useIsMobile();
   const zTop = useRef(10);
   const bringToFront = useCallback(() => ++zTop.current, []);
 
@@ -229,6 +233,28 @@ export function TerminalDock() {
 
   // The login screen renders without app chrome.
   if (pathname === "/login") return null;
+
+  // Mobile: floating draggable windows don't work on a phone. Show the frontmost
+  // open terminal as a full-screen sheet; other open terminals are switchable
+  // tabs. (The desktop dock/minimize bar is hidden below md.)
+  if (isMobile) {
+    const visible = open.filter((n) => !minimized.includes(n));
+    const active = visible[visible.length - 1];
+    if (!active) return null;
+    return (
+      <MobileTerminalSheet
+        key={active}
+        name={active}
+        openNames={visible}
+        onClose={() => closeTerminal(active)}
+        onKill={() => {
+          if (confirm(`Kill terminal "${active}"? Running processes will stop.`))
+            void killSession(active);
+        }}
+        onRename={(next) => renameSession(active, next)}
+      />
+    );
+  }
 
   return (
     <>
@@ -501,6 +527,178 @@ function TerminalWindow({
   );
 }
 
+/* --------------------------- mobile full-screen ------------------------- */
+
+/**
+ * Tracks the visual viewport height so the sheet shrinks when the soft keyboard
+ * opens — keeping the prompt visible above it instead of hidden behind it.
+ */
+function useViewportHeight(): number {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    const update = () => setH(vv ? vv.height : window.innerHeight);
+    update();
+    vv?.addEventListener("resize", update);
+    vv?.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
+    return () => {
+      vv?.removeEventListener("resize", update);
+      vv?.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+  return h;
+}
+
+/**
+ * Full-screen terminal for mobile. Replaces the floating window (which can't fit
+ * or be dragged on a phone): a top bar with back/rename/font/kill, a tab strip
+ * to switch between open terminals, and the shared {@link TerminalView} in
+ * `mobile` mode (hidden-textarea keyboard + on-screen control keys).
+ */
+function MobileTerminalSheet({
+  name,
+  openNames,
+  onClose,
+  onKill,
+  onRename,
+}: {
+  name: string;
+  openNames: string[];
+  onClose: () => void;
+  onKill: () => void;
+  onRename: (next: string) => Promise<boolean>;
+}) {
+  const [status, setStatus] = useState<TermStatus>("idle");
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(name);
+  // Default one size up on mobile for legibility; honour an explicit saved pref.
+  const [fontSize, setFontSize] = useState<FontSizeCls>("text-sm");
+  const vh = useViewportHeight();
+
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(fontKey(name));
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFontSize(
+      saved && FONT_SIZES.some((f) => f.cls === saved)
+        ? (saved as FontSizeCls)
+        : "text-sm",
+    );
+  }, [name]);
+
+  function cycleFontSize() {
+    const next = nextFontSize(fontSize);
+    setFontSize(next);
+    saveFontSize(name, next);
+  }
+
+  async function submitRename(e: React.FormEvent) {
+    e.preventDefault();
+    const ok = await onRename(draft);
+    if (ok) setRenaming(false);
+  }
+
+  const iconBtn =
+    "shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
+  return (
+    <div
+      role="dialog"
+      aria-label={`Terminal ${name}`}
+      className="fixed inset-x-0 top-0 z-[70] flex flex-col overflow-hidden bg-background md:hidden"
+      style={{ height: vh ? `${vh}px` : "100dvh" }}
+    >
+      <div className="flex h-11 shrink-0 items-center gap-1 border-b px-2">
+        <button onClick={onClose} aria-label="Back to terminals" className={iconBtn}>
+          <ChevronLeft className="size-5" />
+        </button>
+        <TermStatusDot status={status} />
+        {renaming ? (
+          <form onSubmit={submitRename} className="flex flex-1 items-center gap-1">
+            <Input
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+              className="h-7 py-0 text-sm"
+              aria-label="Rename terminal"
+            />
+            <button type="submit" aria-label="Save name" className={iconBtn}>
+              <Check className="size-4" />
+            </button>
+          </form>
+        ) : (
+          <span
+            className="min-w-0 flex-1 truncate text-sm font-medium"
+            onDoubleClick={() => {
+              setDraft(name);
+              setRenaming(true);
+            }}
+          >
+            {name}
+          </span>
+        )}
+        <button
+          onClick={cycleFontSize}
+          aria-label="Font size"
+          title={`Font size: ${fontLabel(fontSize)}`}
+          className={iconBtn}
+        >
+          <ALargeSmall className="size-5" />
+        </button>
+        <button
+          onClick={() => {
+            setDraft(name);
+            setRenaming((v) => !v);
+          }}
+          aria-label="Rename"
+          className={iconBtn}
+        >
+          <Pencil className="size-4" />
+        </button>
+        <button onClick={onKill} aria-label="Kill session" className={iconBtn}>
+          <Trash2 className="size-4" />
+        </button>
+      </div>
+
+      {openNames.length > 1 && (
+        <div className="flex shrink-0 gap-1 overflow-x-auto border-b px-2 py-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {openNames.map((n) => (
+            <button
+              key={n}
+              type="button"
+              onClick={() => openTerminal(n)}
+              className={`shrink-0 rounded-full px-3 py-1 text-xs ${
+                n === name
+                  ? "bg-accent font-medium text-accent-foreground"
+                  : "bg-muted/60 text-muted-foreground"
+              }`}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <TerminalView
+        mobile
+        name={name}
+        fontSize={fontSize}
+        onStatus={(s) => {
+          setStatus(s);
+          setTerminalStatus(name, s);
+        }}
+      />
+    </div>
+  );
+}
+
 function BarPalette({
   label,
   value,
@@ -623,12 +821,14 @@ function TerminalView({
   footerBg,
   fontSize,
   minimized,
+  mobile,
   onStatus,
 }: {
   name: string;
   footerBg?: string | null;
   fontSize: FontSizeCls;
   minimized?: boolean;
+  mobile?: boolean;
   onStatus?: (status: TermStatus) => void;
 }) {
   const [content, setContent] = useState("");
@@ -789,13 +989,16 @@ function TerminalView({
     return () => clearTimeout(id);
   }, [minimized, pinToBottom]);
 
-  const send = useCallback(
-    async (payload: { text?: string; key?: string }, echo?: string) => {
+  // One POST at a time, in order: without this, fast typing raced (each key was
+  // its own request) and tmux received characters transposed. A single pump
+  // drains a queue and coalesces adjacent text ops, so a burst of keys is still
+  // just one or two requests — ordered, not raced.
+  const queue = useRef<Array<{ text?: string; key?: string }>>([]);
+  const pumping = useRef(false);
+
+  const postSend = useCallback(
+    async (payload: { text?: string; key?: string }) => {
       const mySeq = ++seq.current;
-      // Optimistic local echo: paint the typed char immediately so it feels
-      // instant. Only for an idle shell prompt — a TUI's redraw can't be
-      // predicted by appending, so we let those wait for the real capture.
-      if (echo) setContent((c) => c + echo);
       inflight.current++;
       try {
         const res = await fetch(base, {
@@ -804,9 +1007,7 @@ function TerminalView({
           body: JSON.stringify(payload),
         });
         const json = await res.json().catch(() => null);
-        // The POST now returns the fresh pane (one round-trip, no separate GET).
-        // Apply it only if no newer keystroke has been sent since, so an
-        // out-of-order response can't rewind the screen.
+        // The POST returns the fresh pane (one round-trip, no separate GET).
         if (res.ok && json?.content !== undefined && mySeq === seq.current) {
           applySnap(json);
         }
@@ -820,6 +1021,40 @@ function TerminalView({
       }
     },
     [base, applySnap, refresh],
+  );
+
+  const pump = useCallback(async () => {
+    if (pumping.current) return;
+    pumping.current = true;
+    try {
+      while (queue.current.length) {
+        // Coalesce a run of literal-text ops into a single send.
+        let text = "";
+        while (queue.current.length && queue.current[0].text !== undefined) {
+          text += queue.current.shift()!.text;
+        }
+        if (text) {
+          await postSend({ text });
+          continue;
+        }
+        const op = queue.current.shift();
+        if (op?.key) await postSend({ key: op.key });
+      }
+    } finally {
+      pumping.current = false;
+    }
+  }, [postSend]);
+
+  const send = useCallback(
+    (payload: { text?: string; key?: string }, echo?: string) => {
+      // Optimistic local echo: paint the typed char immediately (idle shell
+      // only — a TUI redraw can't be predicted by appending). Applied in call
+      // order so the echoed text never transposes either.
+      if (echo) setContent((c) => c + echo);
+      queue.current.push(payload);
+      void pump();
+    },
+    [pump],
   );
 
   // Paste: a non-editable <pre> never receives a `paste` event, so Cmd/Ctrl+V
@@ -871,6 +1106,66 @@ function TerminalView({
     [send, status, pasteFromClipboard],
   );
 
+  // --- Mobile input --------------------------------------------------------
+  // A <pre> can't summon the soft keyboard, so on mobile a hidden <textarea>
+  // owns focus. Soft keyboards fire `beforeinput`/`input` rather than reliable
+  // keydowns, so we split: beforeinput handles Enter/Backspace (which don't
+  // change the field once we cancel them), and input handles inserted text and
+  // paste (read the value, forward it, clear). Hardware keyboards are covered by
+  // the shared onKeyDown, which preventDefaults and thus suppresses these.
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [ctrlArmed, setCtrlArmed] = useState(false);
+
+  const onBeforeInput = useCallback(
+    (e: React.FormEvent<HTMLTextAreaElement>) => {
+      const type = (e.nativeEvent as InputEvent).inputType;
+      if (type === "insertLineBreak" || type === "insertParagraph") {
+        e.preventDefault();
+        void send({ key: "Enter" });
+      } else if (
+        type === "deleteContentBackward" ||
+        type === "deleteContent"
+      ) {
+        e.preventDefault();
+        void send({ key: "BSpace" });
+      }
+      // insertText / paste fall through to onInput below.
+    },
+    [send],
+  );
+
+  const onInput = useCallback(
+    (e: React.FormEvent<HTMLTextAreaElement>) => {
+      const el = e.currentTarget;
+      const data = el.value;
+      el.value = ""; // consume: forward to tmux, keep the field empty
+      if (!data) return;
+      if (ctrlArmed && /^[a-z]$/i.test(data)) {
+        void send({ key: `C-${data.toLowerCase()}` });
+        setCtrlArmed(false);
+        return;
+      }
+      void send({ text: data }, status === "idle" ? data : undefined);
+    },
+    [send, status, ctrlArmed],
+  );
+
+  const tapKey = useCallback(
+    (key: string) => {
+      void send({ key });
+      inputRef.current?.focus();
+    },
+    [send],
+  );
+
+  const tapText = useCallback(
+    (text: string) => {
+      void send({ text });
+      inputRef.current?.focus();
+    },
+    [send],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Hidden metrics probe: 50 chars wide, 2 lines tall, same font as the
@@ -885,62 +1180,143 @@ function TerminalView({
       <pre
         ref={screenRef}
         tabIndex={0}
-        onKeyDown={onKeyDown}
+        onKeyDown={mobile ? undefined : onKeyDown}
         onScroll={onScroll}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
+        onClick={mobile ? () => inputRef.current?.focus() : undefined}
         className={`min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-zinc-950 p-3 font-mono ${fontSize} leading-relaxed whitespace-pre text-zinc-100 outline-none ${
-          focused ? "ring-2 ring-ring ring-inset" : ""
+          focused && !mobile ? "ring-2 ring-ring ring-inset" : ""
         }`}
       >
         {content ? <AnsiText text={content} /> : "…"}
       </pre>
 
-      <div
-        style={
-          footerBg
-            ? { backgroundColor: footerBg, color: textOn(footerBg) }
-            : undefined
-        }
-        className="flex flex-wrap items-center gap-2 border-t px-2 py-1.5"
-      >
-        <span
-          className={`flex items-center gap-1.5 text-xs ${
-            footerBg ? "opacity-80" : "text-muted-foreground"
-          }`}
-        >
-          <TermStatusDot status={status} />
-          {statusLabel(status)}
-          {size && ` · ${size}`}
-        </span>
-        <div className="ml-auto flex flex-wrap gap-1">
-          {(
-            [
-              ["Ctrl-C", "C-c"],
-              ["Ctrl-D", "C-d"],
-              ["Tab", "Tab"],
-              ["Esc", "Escape"],
-              ["↑", "Up"],
-              ["↓", "Down"],
-              ["Clear", "C-l"],
-              ["Enter", "Enter"],
-            ] as const
-          ).map(([label, key]) => (
-            <Button
-              key={label}
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 font-mono text-xs"
-              onClick={() => {
-                void send({ key });
-                screenRef.current?.focus();
+      {mobile ? (
+        <div className="shrink-0 border-t bg-background">
+          {/* Control keys — horizontally scrollable, thumb-reachable. */}
+          <div className="flex items-center gap-1 overflow-x-auto px-2 py-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <BarKey label="Esc" onTap={() => tapKey("Escape")} />
+            <BarKey label="Tab" onTap={() => tapKey("Tab")} />
+            <BarKey
+              label="Ctrl"
+              active={ctrlArmed}
+              onTap={() => {
+                setCtrlArmed((v) => !v);
+                inputRef.current?.focus();
               }}
+            />
+            <BarKey label="^C" onTap={() => tapKey("C-c")} />
+            <BarKey label="^D" onTap={() => tapKey("C-d")} />
+            <BarKey label="←" onTap={() => tapKey("Left")} />
+            <BarKey label="↓" onTap={() => tapKey("Down")} />
+            <BarKey label="↑" onTap={() => tapKey("Up")} />
+            <BarKey label="→" onTap={() => tapKey("Right")} />
+            <BarKey label="Clear" onTap={() => tapKey("C-l")} />
+            <BarKey label="|" onTap={() => tapText("|")} />
+            <BarKey label="~" onTap={() => tapText("~")} />
+            <BarKey label="/" onTap={() => tapText("/")} />
+          </div>
+          {/* Input row: the hidden textarea summons the keyboard + captures typing. */}
+          <div className="flex items-center gap-2 border-t px-2 py-2">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              defaultValue=""
+              onKeyDown={onKeyDown}
+              onBeforeInput={onBeforeInput}
+              onInput={onInput}
+              inputMode="text"
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Terminal input"
+              placeholder={ctrlArmed ? "Ctrl + next key…" : "Tap to type…"}
+              className="max-h-24 min-w-0 flex-1 resize-none rounded-md border bg-muted/40 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            <button
+              type="button"
+              onClick={() => tapKey("Enter")}
+              aria-label="Enter"
+              className="shrink-0 rounded-md bg-primary px-4 py-2 text-base font-medium text-primary-foreground active:opacity-80"
             >
-              {label}
-            </Button>
-          ))}
+              ⏎
+            </button>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div
+          style={
+            footerBg
+              ? { backgroundColor: footerBg, color: textOn(footerBg) }
+              : undefined
+          }
+          className="flex flex-wrap items-center gap-2 border-t px-2 py-1.5"
+        >
+          <span
+            className={`flex items-center gap-1.5 text-xs ${
+              footerBg ? "opacity-80" : "text-muted-foreground"
+            }`}
+          >
+            <TermStatusDot status={status} />
+            {statusLabel(status)}
+            {size && ` · ${size}`}
+          </span>
+          <div className="ml-auto flex flex-wrap gap-1">
+            {(
+              [
+                ["Ctrl-C", "C-c"],
+                ["Ctrl-D", "C-d"],
+                ["Tab", "Tab"],
+                ["Esc", "Escape"],
+                ["↑", "Up"],
+                ["↓", "Down"],
+                ["Clear", "C-l"],
+                ["Enter", "Enter"],
+              ] as const
+            ).map(([label, key]) => (
+              <Button
+                key={label}
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 font-mono text-xs"
+                onClick={() => {
+                  void send({ key });
+                  screenRef.current?.focus();
+                }}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** A single tappable key in the mobile control bar. */
+function BarKey({
+  label,
+  onTap,
+  active,
+}: {
+  label: string;
+  onTap: () => void;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      className={`shrink-0 rounded-md border px-2.5 py-1.5 font-mono text-xs ${
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "bg-background text-foreground active:bg-muted"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
