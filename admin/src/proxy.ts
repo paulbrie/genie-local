@@ -25,11 +25,17 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // API → 401 JSON; pages → redirect to the login page (full public path).
+  // API → 401 JSON; pages → redirect to this instance's login page.
   if (path.startsWith("/api/")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const loginUrl = new URL("/admin/login", req.url);
-  if (path !== "/") loginUrl.searchParams.set("next", path); // basePath-relative
+  // Resolve the login URL against the CURRENT request's origin (req.url) rather
+  // than a hardcoded host, so the redirect stays on whatever domain the user is
+  // on. Use this instance's basePath so the dev instance lands on
+  // /admin-dev/login, not prod's /admin/login (basePath is per-instance env).
+  // `path` is basePath-stripped.
+  const basePath = process.env.APP_BASE_PATH ?? "/admin";
+  const loginUrl = new URL(`${basePath}/login`, req.url);
+  if (path !== "/") loginUrl.searchParams.set("next", path);
   return NextResponse.redirect(loginUrl);
 }
