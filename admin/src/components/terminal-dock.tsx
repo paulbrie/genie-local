@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 import {
+  ALargeSmall,
   Check,
   Minus,
   Palette,
@@ -86,6 +87,44 @@ function saveBarColor(name: string, color: string | null) {
     /* ignore */
   }
 }
+// Three terminal font sizes, cycled by the header button. The Tailwind classes
+// drive BOTH the pane and the hidden metrics probe, so the pixels→cols/rows math
+// (and the tmux reshape) stays exact at any size.
+const FONT_SIZES = [
+  { cls: "text-xs", label: "Small" },
+  { cls: "text-sm", label: "Medium" },
+  { cls: "text-base", label: "Large" },
+] as const;
+type FontSizeCls = (typeof FONT_SIZES)[number]["cls"];
+const DEFAULT_FONT: FontSizeCls = "text-xs";
+
+function fontKey(name: string) {
+  return `admin-term-font:${name}`;
+}
+function loadFontSize(name: string): FontSizeCls {
+  try {
+    const raw = localStorage.getItem(fontKey(name));
+    if (raw && FONT_SIZES.some((f) => f.cls === raw)) return raw as FontSizeCls;
+  } catch {
+    /* ignore */
+  }
+  return DEFAULT_FONT;
+}
+function saveFontSize(name: string, cls: FontSizeCls) {
+  try {
+    localStorage.setItem(fontKey(name), cls);
+  } catch {
+    /* ignore */
+  }
+}
+function fontLabel(cls: FontSizeCls): string {
+  return FONT_SIZES.find((f) => f.cls === cls)?.label ?? "Small";
+}
+function nextFontSize(cls: FontSizeCls): FontSizeCls {
+  const i = FONT_SIZES.findIndex((f) => f.cls === cls);
+  return FONT_SIZES[(i + 1) % FONT_SIZES.length].cls;
+}
+
 /** Readable text colour (black/white) for a given background hex. */
 function textOn(bg: string): string {
   const c = bg.replace("#", "");
@@ -276,19 +315,27 @@ function TerminalWindow({
   const [draft, setDraft] = useState(name);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [color, setColor] = useState<string | null>(null);
+  const [fontSize, setFontSize] = useState<FontSizeCls>(DEFAULT_FONT);
   const [status, setStatus] = useState<TermStatus>("idle");
   const drag = useRef<{ dx: number; dy: number } | null>(null);
 
-  // Load the persisted bar colour for this terminal (client-only; localStorage
-  // is unavailable during SSR, so this must run after mount).
+  // Load persisted per-terminal prefs (client-only; localStorage is unavailable
+  // during SSR, so this must run after mount).
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setColor(loadBarColor(name));
+    setFontSize(loadFontSize(name));
   }, [name]);
 
   function pickColor(next: string | null) {
     setColor(next);
     saveBarColor(name, next);
+  }
+
+  function cycleFontSize() {
+    const next = nextFontSize(fontSize);
+    setFontSize(next);
+    saveFontSize(name, next);
   }
 
   function onHeaderPointerDown(e: React.PointerEvent) {
@@ -389,6 +436,15 @@ function TerminalWindow({
         </button>
         <button
           type="button"
+          onClick={cycleFontSize}
+          aria-label="Font size"
+          title={`Font size: ${fontLabel(fontSize)} — click to cycle`}
+          className={iconBtn}
+        >
+          <ALargeSmall className="size-4" />
+        </button>
+        <button
+          type="button"
           onClick={() => setPaletteOpen((v) => !v)}
           aria-label="Window colour"
           title="Window colour"
@@ -434,6 +490,7 @@ function TerminalWindow({
       <TerminalView
         name={name}
         footerBg={color}
+        fontSize={fontSize}
         minimized={minimized}
         onStatus={(s) => {
           setStatus(s);
@@ -564,11 +621,13 @@ const SPECIAL_KEYS: Record<string, string> = {
 function TerminalView({
   name,
   footerBg,
+  fontSize,
   minimized,
   onStatus,
 }: {
   name: string;
   footerBg?: string | null;
+  fontSize: FontSizeCls;
   minimized?: boolean;
   onStatus?: (status: TermStatus) => void;
 }) {
@@ -681,7 +740,9 @@ function TerminalView({
       clearTimeout(timer);
       ro.disconnect();
     };
-  }, [base, refresh]);
+    // fontSize is a dep so changing it re-measures and reshapes tmux: the pane's
+    // pixel box is unchanged, so only the char metrics (not a resize event) shift.
+  }, [base, refresh, fontSize]);
 
   // Stick to the newest output, but only while the user is already at (or near)
   // the bottom. Once they scroll up to read scrollback, leave their position
@@ -761,8 +822,27 @@ function TerminalView({
     [base, applySnap, refresh],
   );
 
+  // Paste: a non-editable <pre> never receives a `paste` event, so Cmd/Ctrl+V
+  // does nothing on its own. Intercept it and pull the text via the async
+  // Clipboard API (the keypress is a user gesture; the site is HTTPS), then send
+  // it literally to tmux — same as fast typing.
+  const pasteFromClipboard = useCallback(async () => {
+    try {
+      const text = await navigator.clipboard?.readText();
+      if (text) void send({ text });
+    } catch {
+      /* clipboard blocked / unavailable — ignore */
+    }
+  }, [send]);
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Paste (Cmd+V / Ctrl+V) — handle before the meta/ctrl early-returns.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        void pasteFromClipboard();
+        return;
+      }
       if (e.metaKey) return;
       if (e.ctrlKey && !e.altKey) {
         const mapped = CTRL_KEYS[e.key.toLowerCase()];
@@ -788,7 +868,7 @@ function TerminalView({
         void send({ text: e.key }, status === "idle" ? e.key : undefined);
       }
     },
-    [send, status],
+    [send, status, pasteFromClipboard],
   );
 
   return (
@@ -798,7 +878,7 @@ function TerminalView({
       <span
         ref={measureRef}
         aria-hidden
-        className="pointer-events-none invisible absolute font-mono text-xs leading-relaxed whitespace-pre"
+        className={`pointer-events-none invisible absolute font-mono ${fontSize} leading-relaxed whitespace-pre`}
       >
         {"0".repeat(50) + "\n0"}
       </span>
@@ -809,7 +889,7 @@ function TerminalView({
         onScroll={onScroll}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        className={`min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-zinc-950 p-3 font-mono text-xs leading-relaxed whitespace-pre text-zinc-100 outline-none ${
+        className={`min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-zinc-950 p-3 font-mono ${fontSize} leading-relaxed whitespace-pre text-zinc-100 outline-none ${
           focused ? "ring-2 ring-ring ring-inset" : ""
         }`}
       >
