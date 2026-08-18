@@ -1180,6 +1180,38 @@ function TerminalView({
       >
         {"0".repeat(50) + "\n0"}
       </span>
+      {/* On mobile the control bar sits ABOVE the pane, so the keyboard ends up
+          directly under the terminal output — nothing between the prompt and the
+          keys. Covers what a soft keyboard lacks (Esc, Ctrl, Tab/Shift-Tab,
+          arrows) plus a standalone Enter so commands run with the keyboard down. */}
+      {mobile && (
+        <div className="shrink-0 border-b bg-background">
+          <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <BarKey label="Esc" onTap={() => tapKey("Escape")} />
+            <BarKey label="Tab" onTap={() => tapKey("Tab")} />
+            <BarKey label="⇧Tab" onTap={() => tapKey("BTab")} />
+            <BarKey label="⏎" onTap={() => tapKey("Enter")} />
+            <BarKey
+              label="Ctrl"
+              active={ctrlArmed}
+              onTap={() => {
+                setCtrlArmed((v) => !v);
+                inputRef.current?.focus();
+              }}
+            />
+            <BarKey label="^C" onTap={() => tapKey("C-c")} />
+            <BarKey label="^D" onTap={() => tapKey("C-d")} />
+            <BarKey label="←" onTap={() => tapKey("Left")} />
+            <BarKey label="↓" onTap={() => tapKey("Down")} />
+            <BarKey label="↑" onTap={() => tapKey("Up")} />
+            <BarKey label="→" onTap={() => tapKey("Right")} />
+            <BarKey label="Clear" onTap={() => tapKey("C-l")} />
+            <BarKey label="|" onTap={() => tapText("|")} />
+            <BarKey label="~" onTap={() => tapText("~")} />
+            <BarKey label="/" onTap={() => tapText("/")} />
+          </div>
+        </div>
+      )}
       <pre
         ref={screenRef}
         tabIndex={0}
@@ -1195,7 +1227,7 @@ function TerminalView({
         {content ? <AnsiText text={content} /> : "…"}
       </pre>
 
-      {mobile ? (
+      {mobile && (
         <>
           {/* Invisible, focusable input — a <pre> can't raise the soft keyboard,
               so this does. Tapping the pane (or a control key) focuses it; typed
@@ -1219,42 +1251,15 @@ function TerminalView({
           />
           {/* Faint hint until the keyboard is up (reappears when it's dismissed). */}
           {!focused && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center">
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
               <span className="rounded-full bg-background/85 px-3 py-1 text-xs text-muted-foreground shadow ring-1 ring-foreground/10 backdrop-blur">
                 {ctrlArmed ? "Ctrl armed — tap a key" : "Tap the terminal to type"}
               </span>
             </div>
           )}
-          {/* Control keys — horizontally scrollable, thumb-reachable. These cover
-              what a soft keyboard lacks (Esc, Ctrl, Tab, arrows) plus a standalone
-              Enter so commands run even with the keyboard dismissed. */}
-          <div className="shrink-0 border-t bg-background">
-            <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              <BarKey label="Esc" onTap={() => tapKey("Escape")} />
-              <BarKey label="Tab" onTap={() => tapKey("Tab")} />
-              <BarKey label="⏎" onTap={() => tapKey("Enter")} />
-              <BarKey
-                label="Ctrl"
-                active={ctrlArmed}
-                onTap={() => {
-                  setCtrlArmed((v) => !v);
-                  inputRef.current?.focus();
-                }}
-              />
-              <BarKey label="^C" onTap={() => tapKey("C-c")} />
-              <BarKey label="^D" onTap={() => tapKey("C-d")} />
-              <BarKey label="←" onTap={() => tapKey("Left")} />
-              <BarKey label="↓" onTap={() => tapKey("Down")} />
-              <BarKey label="↑" onTap={() => tapKey("Up")} />
-              <BarKey label="→" onTap={() => tapKey("Right")} />
-              <BarKey label="Clear" onTap={() => tapKey("C-l")} />
-              <BarKey label="|" onTap={() => tapText("|")} />
-              <BarKey label="~" onTap={() => tapText("~")} />
-              <BarKey label="/" onTap={() => tapText("/")} />
-            </div>
-          </div>
         </>
-      ) : (
+      )}
+      {!mobile && (
         <div
           style={
             footerBg
