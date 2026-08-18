@@ -1,3 +1,4 @@
+import { DeployPanel } from "@/components/deploy-panel";
 import { ServicesManager } from "@/components/services-manager";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ export default function ServicesPage() {
           stop/disable.
         </p>
       </header>
+      <DeployPanel />
       <ServicesManager />
     </main>
   );

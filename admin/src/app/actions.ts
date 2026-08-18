@@ -41,6 +41,11 @@ import {
   updateNote,
   updateTask,
 } from "@/lib/data";
+import {
+  type DeployStatus,
+  deployStatus,
+  startDeploy,
+} from "@/lib/deploy";
 import { applyNginx, type NginxApplyResult } from "@/lib/nginx";
 import {
   restartApp,
@@ -284,6 +289,25 @@ export async function appStatusAction(
   const t = await requireAppTarget(slug, appId);
   const parsedScript = scriptNameSchema.parse(script);
   return statusFor(t.projectSlug, t.appSlug, parsedScript);
+}
+
+// ---------------------------------------------------------------------------
+// Deploy — build the prod bundle from the current source and restart /admin.
+// Dev (/admin-dev) start/stop lives on the Services page (plain systemctl).
+// ---------------------------------------------------------------------------
+
+/** Build + deploy prod (optionally running migrations first). Detached. */
+export async function deployProdAction(
+  migrate: boolean,
+): Promise<{ ok: boolean; output?: string; error?: string }> {
+  const result = await startDeploy(z.boolean().parse(migrate));
+  revalidatePath("/services");
+  return result;
+}
+
+/** Poll prod/dev service state + last deploy outcome (no revalidation). */
+export async function deployStatusAction(): Promise<DeployStatus> {
+  return deployStatus();
 }
 
 // ---------------------------------------------------------------------------
