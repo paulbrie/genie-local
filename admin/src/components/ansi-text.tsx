@@ -118,6 +118,12 @@ function styleToCss(s: Style): React.CSSProperties {
 const ANSI_PATTERN =
   "\\x1b\\[([0-9;]*)m|\\x1b\\[[0-9;?]*[A-Za-z]|\\x1b\\][\\s\\S]*?(?:\\x07|\\x1b\\\\)";
 
+/** Strip every ANSI CSI/OSC sequence, leaving plain text (e.g. to feed a
+ *  Markdown renderer). Uses the same grammar as {@link AnsiText}. */
+export function stripAnsi(text: string): string {
+  return text.replace(new RegExp(ANSI_PATTERN, "g"), "");
+}
+
 export function AnsiText({ text }: { text: string }) {
   const nodes: React.ReactNode[] = [];
   const re = new RegExp(ANSI_PATTERN, "g");

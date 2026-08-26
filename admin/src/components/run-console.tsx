@@ -1,28 +1,79 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Circle, Loader2, Square, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Circle,
+  Code2,
+  Eye,
+  FileText,
+  Loader2,
+  RotateCw,
+  Square,
+  XCircle,
+} from "lucide-react";
+import { toast } from "sonner";
 
-import { runProgressByIdAction, stopRunByIdAction } from "@/app/actions";
-import { AnsiText } from "@/components/ansi-text";
+import {
+  rerunRunAction,
+  runProgressByIdAction,
+  stopRunByIdAction,
+} from "@/app/actions";
+import { AnsiText, stripAnsi } from "@/components/ansi-text";
+import { Markdown } from "@/components/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type {
   RunLifecycle,
   RunProgress,
   RunStep,
+  RunUsage,
   StepState,
 } from "@/lib/agent-run-types";
 import { BASE_PATH } from "@/lib/config";
 import type { RunStatus } from "@/lib/runner";
+import { openRun } from "@/store/runs";
+
+/** Compact one-line usage summary, e.g. "3 turns · $0.0421 · 12.3k tok · 8.1s". */
+export function formatUsage(u: RunUsage | null | undefined): string | null {
+  if (!u) return null;
+  const parts: string[] = [];
+  if (u.turns != null) parts.push(`${u.turns} turn${u.turns === 1 ? "" : "s"}`);
+  if (u.costUsd != null) parts.push(`$${u.costUsd.toFixed(4)}`);
+  const tok = (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
+  if (tok > 0)
+    parts.push(tok >= 1000 ? `${(tok / 1000).toFixed(1)}k tok` : `${tok} tok`);
+  if (u.durationMs != null) parts.push(`${(u.durationMs / 1000).toFixed(1)}s`);
+  return parts.length ? parts.join(" · ") : null;
+}
 
 const POLL_MS = 1500;
 const TAIL_BYTES = 128 * 1024;
+
+/** How the log pane renders its content: raw terminal output or rendered
+ *  Markdown. Persisted so the choice sticks across runs and reloads. */
+type LogView = "raw" | "rendered";
+const LOG_VIEW_KEY = "admin-run-log-view";
+function loadLogView(): LogView {
+  try {
+    return localStorage.getItem(LOG_VIEW_KEY) === "rendered" ? "rendered" : "raw";
+  } catch {
+    return "raw";
+  }
+}
+function saveLogView(v: LogView) {
+  try {
+    localStorage.setItem(LOG_VIEW_KEY, v);
+  } catch {
+    /* ignore */
+  }
+}
 
 export const LIFECYCLE_BADGE: Record<
   RunLifecycle,
   { label: string; className: string }
 > = {
+  queued: { label: "queued", className: "bg-sky-500/15 text-sky-600" },
   starting: { label: "starting", className: "bg-amber-500/15 text-amber-600" },
   running: { label: "running", className: "bg-emerald-500/15 text-emerald-600" },
   done: { label: "done", className: "bg-emerald-500/15 text-emerald-600" },
@@ -62,8 +113,15 @@ export function RunConsole({
   const [status, setStatus] = useState<RunStatus | null>(null);
   const [log, setLog] = useState("");
   const [stopping, setStopping] = useState(false);
+  const [logView, setLogView] = useState<LogView>("raw");
   const logRef = useRef<HTMLDivElement>(null);
   const stickyRef = useRef(true);
+
+  // Restore the persisted view after mount (localStorage is client-only).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLogView(loadLogView());
+  }, []);
 
   const onProgressRef = useRef(onProgress);
   useEffect(() => {
@@ -137,11 +195,28 @@ export function RunConsole({
     }
   }
 
+  const [rerunning, setRerunning] = useState(false);
+  async function rerun() {
+    setRerunning(true);
+    try {
+      const newId = await rerunRunAction(runId);
+      openRun(newId);
+      toast.success("Re-running with the same inputs");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRerunning(false);
+    }
+  }
+
   const state = progress?.state ?? "starting";
   const steps: RunStep[] = progress?.steps ?? [];
   const badge = LIFECYCLE_BADGE[state];
-  const running = Boolean(status?.running) || state === "starting";
+  const running =
+    Boolean(status?.running) || state === "starting" || state === "queued";
   const doneCount = steps.filter((s) => s.state === "done").length;
+  const usageLine = formatUsage(progress?.usage);
+  const artifacts = progress?.artifacts ?? [];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -152,8 +227,16 @@ export function RunConsole({
             ? `${doneCount}/${steps.length} steps`
             : "agent"}
         </span>
+        {usageLine && (
+          <span
+            className="truncate text-xs text-muted-foreground tabular-nums"
+            title="tokens / cost / duration reported by the CLI"
+          >
+            · {usageLine}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
-          {running && (
+          {running ? (
             <Button
               size="sm"
               variant="outline"
@@ -163,6 +246,18 @@ export function RunConsole({
             >
               <Square className="size-3" />
               {stopping ? "Stopping…" : "Stop"}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 gap-1.5 px-2 text-xs"
+              disabled={rerunning}
+              onClick={rerun}
+              title="Run again with the same inputs"
+            >
+              <RotateCw className="size-3" />
+              {rerunning ? "…" : "Re-run"}
             </Button>
           )}
           {logFile && (
@@ -193,6 +288,11 @@ export function RunConsole({
             {s.state === "running" && (
               <span className="text-xs text-emerald-600">working…</span>
             )}
+            {formatUsage(s.usage) && (
+              <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                {formatUsage(s.usage)}
+              </span>
+            )}
           </li>
         ))}
         {steps.length === 0 && (
@@ -206,21 +306,91 @@ export function RunConsole({
         </p>
       )}
 
+      {artifacts.length > 0 && (
+        <div className="mx-3 mb-2 space-y-1 rounded-md border bg-muted/30 px-3 py-1.5">
+          <span className="text-xs font-medium text-muted-foreground">
+            Files written ({artifacts.length})
+          </span>
+          <ul className="space-y-0.5">
+            {artifacts.map((f) => (
+              <li
+                key={f}
+                className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground"
+              >
+                <FileText className="size-3 shrink-0" />
+                <span className="truncate" title={f}>
+                  {f}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Live log */}
       <div className="flex min-h-0 flex-1 flex-col border-t">
-        <div
-          ref={logRef}
-          onScroll={onLogScroll}
-          className="min-h-0 flex-1 overflow-auto bg-zinc-950 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-200"
-        >
-          {log ? (
-            <pre className="whitespace-pre-wrap break-words">
-              <AnsiText text={log} />
-            </pre>
-          ) : (
-            <span className="text-zinc-500">Waiting for output…</span>
-          )}
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1">
+          <span className="text-xs font-medium text-muted-foreground">Log</span>
+          <div className="ml-auto flex overflow-hidden rounded-md border">
+            {(
+              [
+                ["raw", "Raw", Code2],
+                ["rendered", "Markdown", Eye],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  setLogView(value);
+                  saveLogView(value);
+                }}
+                title={
+                  value === "raw"
+                    ? "Raw terminal output (ANSI colours)"
+                    : "Render the log as Markdown"
+                }
+                className={`flex items-center gap-1 px-2 py-0.5 text-xs transition-colors ${
+                  logView === value
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                }`}
+              >
+                <Icon className="size-3" />
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
+        {logView === "rendered" ? (
+          <div
+            ref={logRef}
+            onScroll={onLogScroll}
+            className="min-h-0 flex-1 overflow-auto bg-background px-4 py-2"
+          >
+            {log ? (
+              <Markdown source={stripAnsi(log)} />
+            ) : (
+              <span className="text-sm text-muted-foreground">
+                Waiting for output…
+              </span>
+            )}
+          </div>
+        ) : (
+          <div
+            ref={logRef}
+            onScroll={onLogScroll}
+            className="min-h-0 flex-1 overflow-auto bg-zinc-950 px-3 py-2 font-mono text-xs leading-relaxed text-zinc-200"
+          >
+            {log ? (
+              <pre className="whitespace-pre-wrap break-words">
+                <AnsiText text={log} />
+              </pre>
+            ) : (
+              <span className="text-zinc-500">Waiting for output…</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

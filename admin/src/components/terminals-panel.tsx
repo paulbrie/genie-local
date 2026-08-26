@@ -10,6 +10,7 @@ import {
   statusLabel,
   TermStatusDot,
 } from "@/components/terminal-dock";
+import { TerminalVoiceControls } from "@/components/terminal-voice-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -109,6 +110,8 @@ export function TerminalsPanel() {
           <Plus /> New
         </Button>
       </form>
+
+      <TerminalVoiceControls />
 
       <div className="space-y-1">
         {terminals.length === 0 ? (

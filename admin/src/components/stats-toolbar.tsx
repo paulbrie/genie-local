@@ -7,6 +7,7 @@ import { Menu } from "lucide-react";
 import { BASE_PATH } from "@/lib/config";
 import { formatBytes } from "@/lib/format";
 import type { SystemStats } from "@/lib/stats";
+import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
 
 const POLL_MS = 5000;
@@ -99,6 +100,7 @@ export function StatsToolbar() {
             ? `updated ${new Date(stats.ts).toLocaleTimeString()}`
             : "loading…"}
       </span>
+      <StatsHistoryChart />
     </header>
   );
 }

@@ -21,7 +21,37 @@ export type Agent = {
   inputs: string[];
   outputs: string[];
   body: string;
+  /** Cap on agent turns per invocation (`--max-turns`); null = CLI default. */
+  maxTurns: number | null;
+  /** Wall-clock timeout in seconds; null = no orchestrator-enforced timeout. */
+  timeoutSec: number | null;
+  /** Claude permission mode (`--permission-mode`); null = default. */
+  permissionMode: string | null;
+  /** Working directory the run executes in; null = a per-run scratch dir. */
+  cwd: string | null;
 };
+
+/** Permission modes accepted in agent frontmatter / the Run dialog. */
+export const PERMISSION_MODES = [
+  "default",
+  "plan",
+  "acceptEdits",
+  "bypassPermissions",
+] as const;
+
+/** Parse a positive-integer scalar, or null when absent/invalid. */
+function parseIntScalar(v: string | undefined): number | null {
+  if (v == null) return null;
+  const n = parseInt(stripComment(v), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/** Accept only a known permission mode, else null. */
+function parsePermissionMode(v: string | undefined): string | null {
+  if (v == null) return null;
+  const s = stripComment(v);
+  return (PERMISSION_MODES as readonly string[]).includes(s) ? s : null;
+}
 
 export type PipelineStep = {
   agent: string;
@@ -130,6 +160,10 @@ function parseAgent(slug: string, raw: string): Agent {
     inputs: s.has("inputs") ? parseInlineList(s.get("inputs")!) : [],
     outputs: s.has("outputs") ? parseInlineList(s.get("outputs")!) : [],
     body,
+    maxTurns: parseIntScalar(s.get("maxTurns")),
+    timeoutSec: parseIntScalar(s.get("timeout")),
+    permissionMode: parsePermissionMode(s.get("permissionMode")),
+    cwd: s.has("cwd") ? stripComment(s.get("cwd")!) || null : null,
   };
 }
 
@@ -171,6 +205,21 @@ export async function listAgents(): Promise<Agent[]> {
 export async function listPipelines(): Promise<Pipeline[]> {
   const files = await readMarkdownDir(path.join(AGENTS_ROOT, "pipelines"));
   return files.map((f) => parsePipeline(f.slug, f.raw));
+}
+
+/**
+ * Interpolate `{{name}}` placeholders from a context map. Mirrors the
+ * orchestrator's `interpolate` (scripts/agent-run.mjs) EXCEPT that an unresolved
+ * key is left as `{{name}}` — used by the dry-run preview so a pipeline step's
+ * not-yet-produced outputs stay visible instead of collapsing to empty strings.
+ */
+export function interpolatePrompt(
+  body: string,
+  context: Record<string, string>,
+): string {
+  return body.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (_, key) =>
+    context[key] != null ? String(context[key]) : `{{${key}}}`,
+  );
 }
 
 /** Raw contents of the agents folder's README.md, or null when it's absent. */
@@ -275,6 +324,25 @@ export async function deleteAgentSource(
   await fs.rm(file);
 }
 
+/** Copy an agent/pipeline to a new slug (fails if the target already exists). */
+export async function duplicateAgentSource(
+  kind: AgentKind,
+  fromSlug: string,
+  toSlug: string,
+): Promise<void> {
+  if (!isValidAgentSlug(toSlug)) throw new Error(`Invalid slug: ${toSlug}`);
+  const raw = await readAgentSource(kind, fromSlug); // throws if source missing
+  if (await agentSourceExists(kind, toSlug)) {
+    throw new Error(`A ${kind} named "${toSlug}" already exists`);
+  }
+  // Rewrite the `name:` line so the copy is distinguishable in the UI.
+  const next = raw.replace(
+    /^(name:\s*)(.*)$/m,
+    (_m, k: string, v: string) => `${k}${v} (copy)`,
+  );
+  await saveAgentSource(kind, toSlug, next, { create: true });
+}
+
 // ---------------------------------------------------------------------------
 // Structured (form) editing: parse one file into fields, and serialize fields
 // back into the exact markdown frontmatter format the parsers above expect.
@@ -291,6 +359,10 @@ export type AgentFields = {
   inputs: string[];
   outputs: string[];
   body: string;
+  maxTurns: number | null;
+  timeoutSec: number | null;
+  permissionMode: string | null;
+  cwd: string | null;
 };
 
 /** Editable fields of a pipeline. */
@@ -321,6 +393,10 @@ function serializeAgent(slug: string, f: AgentFields): string {
   if (f.tools && f.tools.length) lines.push(`tools: [${f.tools.join(", ")}]`);
   if (f.inputs.length) lines.push(`inputs: [${f.inputs.join(", ")}]`);
   if (f.outputs.length) lines.push(`outputs: [${f.outputs.join(", ")}]`);
+  if (f.maxTurns != null) lines.push(`maxTurns: ${f.maxTurns}`);
+  if (f.timeoutSec != null) lines.push(`timeout: ${f.timeoutSec}`);
+  if (f.permissionMode) lines.push(`permissionMode: ${oneLine(f.permissionMode)}`);
+  if (f.cwd) lines.push(`cwd: ${oneLine(f.cwd)}`);
   lines.push("---", "", f.body.trim(), "");
   return lines.join("\n");
 }

@@ -14,6 +14,38 @@ system stats.
 
 ---
 
+## 0. Quick start (automated)
+
+To reproduce this entire setup on a **fresh Ubuntu 24.04** machine, use the
+installer in [`deploy/`](deploy/) instead of running §2–§8 by hand:
+
+```bash
+git clone https://github.com/paulbrie/genie-local.git /tmp/genie-local
+sudo /tmp/genie-local/deploy/install.sh
+```
+
+It's idempotent and does everything below: base packages, PostgreSQL 17 (PGDG
+repo), Node 20, the `genie` user, global npm tooling + the private
+`@genie/vps-stats` package, `npm install` for every package, the Postgres
+role/db, generated `admin/.env.local` + `.mcp.json`, Drizzle migrations, the
+systemd units, and the nginx site. Configure it with env vars (see the header of
+`deploy/install.sh`), e.g.:
+
+```bash
+sudo PUBLIC_HOST=my.host.example ADMIN_PASSWORD=... GENIE_VPS_TOKEN=... \
+     /tmp/genie-local/deploy/install.sh
+```
+
+Afterwards, edit `/opt/project/.mcp.json` and replace
+`REPLACE_WITH_GENIE_VPS_TOKEN` with the real token. To dry-run the whole thing
+against a throwaway systemd Docker container first: `./deploy/test-docker.sh`
+(see [`deploy/README.md`](deploy/README.md)).
+
+**The sections below document what the script automates** — read them to
+understand the topology, or to set things up manually.
+
+---
+
 ## 1. Architecture at a glance
 
 ```
@@ -43,6 +75,7 @@ system stats.
 | `admin/` | The Next.js 16 dashboard (App Router, Drizzle/Postgres, shadcn/Base UI). Start here: `admin/AGENTS.md`. |
 | `agents/` | Markdown-defined **agents** and **pipelines** (see `agents/README.md`). |
 | `tools/` | Server-side tools: `playwright-core` (headless Chromium for UI verification) and `local-genie-mcp` (a stdio MCP server for tasks/notes). |
+| `deploy/` | **Automated installer** (`install.sh`), a Docker test harness (`test-docker.sh`), and the vendored `@genie/vps-stats` package. Reproduces this whole box on a fresh Ubuntu 24.04 machine — see §0. |
 | `projects/` | The supervised apps. **Git-ignored** — each has its own repo. |
 | `.mcp.json` | MCP server registry (git-ignored — contains a secret token; recreate it, see §6). |
 | `AGENTS.MD` / `CLAUDE.MD` | Top-level server notes for agents. |
@@ -58,7 +91,7 @@ Installed and verified on the reference box:
 | Ubuntu | 24.04 | — |
 | Node.js | 20.x (`v20.20.2`) | `nodesource` or nvm |
 | npm | 10.x | ships with Node |
-| PostgreSQL | 17.x | `apt install postgresql` |
+| PostgreSQL | 17.x | PGDG apt repo (Ubuntu 24.04's default ships 16 — see `deploy/install.sh`) |
 | nginx | 1.24 | `apt install nginx` |
 | tmux | 3.4 | `apt install tmux` (powers the Terminals page) |
 | git | 2.43 | `apt install git` |
@@ -200,6 +233,25 @@ WantedBy=multi-user.target
 
 > The admin reads `/run/genie/stats.jsonl` (override with `STATS_FILE`). Without
 > this daemon, stats/processes just show "unavailable" — the app still runs.
+
+#### Persistent history for the activity graph (cron)
+
+`/run/genie/stats.jsonl` is tmpfs — wiped on reboot and not retained long-term,
+so it can't back a **1d / 7d / 30d** graph. A tiny per-minute cron sampler
+(`admin/scripts/stats-history.mjs`) copies a compact `{cpu, mem, disk}` snapshot
+into a **persistent** file (`/opt/project/.stats-history/history.jsonl`, override
+with `STATS_HISTORY_FILE`) and prunes past 30 days. It prefers the daemon's
+latest record and self-measures from `/proc` + `statfs` when that feed is
+stale/absent, so history keeps flowing regardless of the daemon or whether anyone
+has the UI open. The top-bar chart button reads it via `/api/stats/history`.
+
+`install.sh` sets this up as the `genie` user's crontab. To (re)install it by
+hand — idempotently:
+
+```bash
+( crontab -l 2>/dev/null | grep -v -F 'admin/scripts/stats-history.mjs'; \
+  echo '* * * * * /usr/bin/node /opt/project/admin/scripts/stats-history.mjs >/dev/null 2>&1' ) | crontab -
+```
 
 ### 7b. Admin app — `admin.service`
 

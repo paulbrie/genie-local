@@ -36,16 +36,29 @@ the Logs page, or delete it. Run files persist in **`/opt/project/.run-logs`**
 `run-logs/…` namespace. Runs survive an `admin.service` restart and can be
 stopped from the run window.
 
+**Run controls, cost, and safety.** The Run dialog can **Preview** the exact
+prompt(s) it would send (no tokens spent) and set per-launch **Overrides**
+(max-turns, timeout, permission mode). While running, the console and history
+show **token/cost/duration** usage and any **files written**, and any finished
+run can be **re-run** with the same inputs. Runs are **rate-limited** by a
+concurrency semaphore — extra runs wait in a `queued` state — and a dead-but-
+"running" run (e.g. after a reboot) is reconciled to `failed`. History
+**auto-prunes** past the retention window, and **Clear finished** empties it.
+Relevant env vars: `AGENT_MAX_CONCURRENT` (3), `AGENT_DEFAULT_TIMEOUT_SEC`
+(1800), `AGENT_RUNS_RETENTION_DAYS` (30), and `AGENT_RUN_NOTIFY_WEBHOOK` (POST a
+JSON summary on completion — unset by default).
+
 **Tool policy when run from the dashboard.** An agent's `tools:` frontmatter is
 passed verbatim as the run's `--allowedTools` allowlist. An agent that **omits**
 `tools` does *not* get "all tools" here — it falls back to a safe **read-only**
 set (`Read, Grep, Glob, WebSearch, WebFetch`) so a dashboard-triggered run can't
 write to or shell on the server. Grant more only by listing it in `tools:`:
 
-- **Writing files** — add `Write` and `Edit`. A run can then create/modify files
-  anywhere the `genie` user can (the spawned `claude` runs as `genie`); it is
-  *not* confined to a working directory. (The `writer` agent has these, so a
-  pipeline can save its article to disk when asked.)
+- **Writing files** — add `Write` and `Edit`. Such a run executes in a per-run
+  **scratch dir** by default (set `cwd:` to point it elsewhere). Note the spawned
+  `claude` runs as `genie`, so an absolute path or a `cwd:` outside the scratch
+  dir can still write anywhere `genie` can — scope `cwd:` deliberately. (The
+  `writer` agent has these, so a pipeline can save its article to disk.)
 - **The agent browser** — add `mcp__agent-browser` to grant the whole
   browser-automation MCP (navigate, snapshot, click, screenshot; real Chromium,
   for JS-heavy or gated pages that `WebFetch` can't read). List a single tool
@@ -109,6 +122,14 @@ Return your result as the `findings` output.
 | `tools`       | no       | Allowlist of tool names the agent may use. When omitted, a dashboard run falls back to a **read-only** default (see the tool policy above), not "all tools". |
 | `inputs`      | no       | Names the agent reads from the shared context (see §3). |
 | `outputs`     | no       | Names the agent writes back into the shared context. |
+| `maxTurns`    | no       | Cap on agent turns per invocation (`--max-turns`). Bounds a runaway agent. Omit for the CLI default. |
+| `timeout`     | no       | Wall-clock seconds per invocation. The run is killed and marked `failed` if it exceeds this. Omit → `AGENT_DEFAULT_TIMEOUT_SEC` (1800s). |
+| `permissionMode` | no    | `default` \| `plan` \| `acceptEdits` \| `bypassPermissions` (`--permission-mode`). |
+| `cwd`         | no       | Working directory the run executes in (writes land here). Omit → a per-run **scratch dir** when writing is enabled, else the process CWD. |
+
+These execution/safety fields are also editable under **Execution & safety
+(optional)** in the visual editor, and can be overridden per-launch from the Run
+dialog's **Overrides** (see §4).
 
 ### Body = system prompt
 

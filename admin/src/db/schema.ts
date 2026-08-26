@@ -153,8 +153,32 @@ export const savedQueries = pgTable("saved_queries", {
     .defaultNow(),
 });
 
+/**
+ * A saved diagram authored as plain-text source (Mermaid by default). Kept as
+ * text so agents can create/update diagrams by writing the source directly,
+ * either through the UI or the `/api/diagrams` endpoint.
+ */
+export const diagrams = pgTable("diagrams", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  // Diagram language of `source`. Only 'mermaid' is rendered today; kept as a
+  // column so other text formats (d2, dot) can be added without a migration.
+  format: text("format").notNull().default("mermaid"),
+  source: text("source").notNull(),
+  // Soft-delete marker: non-null = archived (hidden from the main list but
+  // restorable). Null = active.
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type Connection = typeof connections.$inferSelect;
 export type SavedQuery = typeof savedQueries.$inferSelect;
+export type Diagram = typeof diagrams.$inferSelect;
 
 export type Project = typeof projects.$inferSelect;
 export type App = typeof apps.$inferSelect;

@@ -1,0 +1,74 @@
+flowchart TB
+  %% ===== Edge / auth =====
+  subgraph Edge["Edge / Auth"]
+    Browser["Browser<br/>ft.cloud.teleporthq.ai/admin"]
+    Nginx["nginx :3000<br/>public TLS + /projects/&lt;slug&gt; proxy"]
+    Proxy["proxy.ts (Next 16 Proxy)<br/>session-cookie auth gate"]
+  end
+  Browser --> Nginx --> Proxy
+
+  %% ===== App Router UI =====
+  subgraph UI["Next.js 16 App Router — :3001 (next dev, systemd admin.service)"]
+    Pages["Pages (RSC)<br/>dashboard, projects/[slug], agents, claude,<br/>chrome, db, diagrams, docker, logs,<br/>processes, services, terminals, login"]
+    Client["Client components<br/>sidebar, dashboard, panels, tables,<br/>charts, run-dock, terminal-dock"]
+    Stores["subjecto stores<br/>ui · runs · terminals"]
+    Client <--> Stores
+  end
+  Proxy --> Pages --> Client
+
+  %% ===== Server entrypoints =====
+  subgraph ServerE["Server entrypoints"]
+    API["API routes /api/*<br/>stats(+history), scan, run-status, logs,<br/>processes, services, docker, chrome, db,<br/>diagrams, claude, terminals, login/logout"]
+    Actions["Server Actions — actions.ts<br/>notes · tasks · rescan · app process control"]
+  end
+  Pages --> API
+  Client --> API
+  Client --> Actions
+
+  %% ===== Domain lib (server-only) =====
+  subgraph Lib["Domain lib (server-only)"]
+    ProjL["Projects: signals · scan · runner<br/>run-slug · run-paths"]
+    AgentL["Agents: agents · agent-runner"]
+    StatsL["Stats: stats · stats-history"]
+    InfraL["Infra: logs · processes · services<br/>docker · nginx · deploy"]
+    BrowserL["Sessions: chrome · terminals"]
+    ClaudeL["Content: claude · diagrams · mermaid-validate"]
+    DbL["DB explorer: db-explorer · connections · saved-queries"]
+    AuthL["Auth: session · crypto · config"]
+  end
+  API --> ProjL & AgentL & StatsL & InfraL & BrowserL & ClaudeL & DbL & AuthL
+  Actions --> ProjL
+  Proxy --> AuthL
+
+  %% ===== Persistence =====
+  subgraph Data["Persistence"]
+    PG[("Postgres via Drizzle<br/>projects · apps · status_snapshots<br/>notes · tasks · connections<br/>saved_queries · diagrams")]
+    FS["Filesystem<br/>PROJECTS_ROOT · /tmp/projects/*.log<br/>.run-logs · .stats-history/history.jsonl"]
+  end
+
+  %% ===== Host / external =====
+  subgraph Host["Host / external systems"]
+    Git["git + /proc"]
+    Sysd["systemd + nginx"]
+    Dock["Docker daemon"]
+    Vps["vps-stats daemon<br/>+ per-minute cron sampler"]
+    CLI["claude CLI (headless runs)<br/>+ ~/.claude projects"]
+    Chrome["Chromium / agent-browser"]
+    Pty["terminals (pty)"]
+  end
+
+  ProjL --> Git
+  ProjL --> PG
+  AgentL --> CLI
+  AgentL --> FS
+  StatsL --> Vps
+  StatsL --> FS
+  InfraL --> Sysd
+  InfraL --> Dock
+  InfraL --> FS
+  DbL --> PG
+  ClaudeL --> CLI
+  ClaudeL --> PG
+  BrowserL --> Chrome
+  BrowserL --> Pty
+  AuthL --> PG

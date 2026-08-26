@@ -1,5 +1,5 @@
 import { Dashboard } from "@/components/dashboard";
-import { listRunning } from "@/lib/runner";
+import { getRunningInfo } from "@/lib/app-run-status";
 import { PROJECTS_ROOT } from "@/lib/signals";
 import { scanAndPersist } from "@/lib/scan";
 
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const [projects, runs] = await Promise.all([
     scanAndPersist(),
-    listRunning(),
+    getRunningInfo(),
   ]);
   const running = runs.map((r) => r.slug);
   const initialMemory = Object.fromEntries(

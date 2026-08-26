@@ -1,6 +1,10 @@
 import { ArrowRight, BookOpen, Bot, History, Workflow } from "lucide-react";
 
-import { AgentEditor, DeleteAgentButton } from "@/components/agent-editor";
+import {
+  AgentEditor,
+  DeleteAgentButton,
+  DuplicateAgentButton,
+} from "@/components/agent-editor";
 import { AgentRunControls } from "@/components/agent-run-controls";
 import { Markdown } from "@/components/markdown";
 import { RunHistory } from "@/components/run-history";
@@ -104,6 +108,7 @@ export default async function AgentsPage() {
                     slug={p.slug}
                     agentOptions={agents.map((a) => a.slug)}
                   />
+                  <DuplicateAgentButton kind="pipeline" slug={p.slug} />
                   <DeleteAgentButton
                     kind="pipeline"
                     slug={p.slug}
@@ -165,6 +170,7 @@ export default async function AgentsPage() {
                     inputs={a.inputs}
                   />
                   <AgentEditor mode="edit" kind="agent" slug={a.slug} />
+                  <DuplicateAgentButton kind="agent" slug={a.slug} />
                   <DeleteAgentButton kind="agent" slug={a.slug} name={a.name} />
                 </div>
               </div>

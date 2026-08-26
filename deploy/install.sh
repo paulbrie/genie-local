@@ -355,6 +355,19 @@ WantedBy=multi-user.target
 EOF
 ok "genie-stats.service, admin.service"
 
+# Per-minute persistent stats sampler (cron). The genie-stats daemon feeds
+# /run/genie/stats.jsonl (tmpfs, wiped on reboot); this copies a compact snapshot
+# into a persistent file so the admin's activity graph keeps 1d/7d/30d history.
+# Installed as the genie user's crontab, idempotently (drop any prior copy first).
+STATS_CRON="* * * * * /usr/bin/node $INSTALL_DIR/admin/scripts/stats-history.mjs >/dev/null 2>&1"
+if command -v crontab >/dev/null; then
+  ( crontab -u "$GENIE_USER" -l 2>/dev/null | grep -v -F "admin/scripts/stats-history.mjs"; \
+    echo "$STATS_CRON" ) | crontab -u "$GENIE_USER" -
+  ok "stats-history sampler cron (every minute, user $GENIE_USER)"
+else
+  warn "crontab not found; the stats-history graph will have no data. Install cron or schedule scripts/stats-history.mjs yourself."
+fi
+
 if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
   log "Installing code-server"
   if command -v code-server >/dev/null; then

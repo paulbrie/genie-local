@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ChevronDown,
   ChevronUp,
+  Copy,
   Pencil,
   Plus,
   Trash2,
@@ -14,6 +15,7 @@ import { toast } from "sonner";
 
 import {
   deleteAgentSourceAction,
+  duplicateAgentAction,
   getAgentDefAction,
   saveAgentDefAction,
 } from "@/app/actions";
@@ -54,6 +56,13 @@ const TOOL_SUGGESTIONS = [
   "mcp__agent-browser",
 ];
 
+const PERMISSION_MODE_OPTS = [
+  "default",
+  "plan",
+  "acceptEdits",
+  "bypassPermissions",
+] as const;
+
 type AData = {
   name: string;
   description: string;
@@ -62,6 +71,10 @@ type AData = {
   inputs: string[];
   outputs: string[];
   body: string;
+  maxTurns: string; // "" = omit; digits otherwise
+  timeoutSec: string; // "" = omit; seconds
+  permissionMode: string; // "" = default
+  cwd: string; // "" = omit
 };
 type PData = {
   name: string;
@@ -81,6 +94,10 @@ const defaultAgent = (): AData => ({
   body:
     "You are a meticulous assistant.\n\nGiven **{{topic}}**, do the work and " +
     "return your answer as the `result` output.",
+  maxTurns: "",
+  timeoutSec: "",
+  permissionMode: "",
+  cwd: "",
 });
 const defaultPipeline = (agentOptions: string[]): PData => ({
   name: "",
@@ -121,6 +138,7 @@ export function AgentEditor({
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && slug) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(true);
       getAgentDefAction(kind, slug)
         .then((def) => {
@@ -143,6 +161,10 @@ export function AgentEditor({
               inputs: d.inputs,
               outputs: d.outputs,
               body: d.body,
+              maxTurns: d.maxTurns != null ? String(d.maxTurns) : "",
+              timeoutSec: d.timeoutSec != null ? String(d.timeoutSec) : "",
+              permissionMode: d.permissionMode ?? "",
+              cwd: d.cwd ?? "",
             });
           }
         })
@@ -184,6 +206,10 @@ export function AgentEditor({
             inputs: a.inputs,
             outputs: a.outputs,
             body: a.body,
+            maxTurns: a.maxTurns.trim() ? Number(a.maxTurns) : null,
+            timeoutSec: a.timeoutSec.trim() ? Number(a.timeoutSec) : null,
+            permissionMode: a.permissionMode || null,
+            cwd: a.cwd.trim() || null,
           };
     startSave(async () => {
       try {
@@ -319,6 +345,70 @@ export function AgentEditor({
                       className="min-h-48 font-mono text-xs leading-relaxed"
                     />
                   </Field>
+
+                  <details className="rounded-md border">
+                    <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted-foreground">
+                      Execution &amp; safety (optional)
+                    </summary>
+                    <div className="space-y-4 border-t p-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <Field label="max turns" hint="cap per run — blank = CLI default">
+                          <Input
+                            type="number"
+                            min={1}
+                            value={a.maxTurns}
+                            onChange={(e) => setA({ ...a, maxTurns: e.target.value })}
+                            placeholder="e.g. 20"
+                            className="text-sm"
+                          />
+                        </Field>
+                        <Field label="timeout (seconds)" hint="wall-clock — blank = 1800s default">
+                          <Input
+                            type="number"
+                            min={1}
+                            value={a.timeoutSec}
+                            onChange={(e) =>
+                              setA({ ...a, timeoutSec: e.target.value })
+                            }
+                            placeholder="e.g. 600"
+                            className="text-sm"
+                          />
+                        </Field>
+                      </div>
+                      <Field
+                        label="permission mode"
+                        hint="how Claude handles tool permissions"
+                      >
+                        <select
+                          value={a.permissionMode}
+                          onChange={(e) =>
+                            setA({ ...a, permissionMode: e.target.value })
+                          }
+                          className={SELECT_CLS}
+                        >
+                          <option value="">default</option>
+                          {PERMISSION_MODE_OPTS.filter((m) => m !== "default").map(
+                            (m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </Field>
+                      <Field
+                        label="working directory"
+                        hint="writes land here — blank = per-run scratch dir when writing is enabled"
+                      >
+                        <Input
+                          value={a.cwd}
+                          onChange={(e) => setA({ ...a, cwd: e.target.value })}
+                          placeholder="/opt/project/projects/…"
+                          className="font-mono text-sm"
+                        />
+                      </Field>
+                    </div>
+                  </details>
                 </>
               ) : (
                 <>
@@ -574,6 +664,50 @@ function StepsField({
         Add step
       </Button>
     </div>
+  );
+}
+
+/** Duplicate one agent/pipeline to a new slug (prompts for it), then refresh. */
+export function DuplicateAgentButton({
+  kind,
+  slug,
+}: {
+  kind: Kind;
+  slug: string;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+
+  function dup() {
+    const to = window.prompt(`Duplicate "${slug}" as (kebab-case slug):`, `${slug}-copy`);
+    if (!to) return;
+    const target = to.trim();
+    if (!SLUG_RE.test(target)) {
+      toast.error("Use kebab-case: a-z, 0-9, hyphens.");
+      return;
+    }
+    start(async () => {
+      try {
+        await duplicateAgentAction(kind, slug, target);
+        toast.success(`Duplicated to "${target}"`);
+        router.refresh();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : String(e));
+      }
+    });
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="size-7 text-muted-foreground"
+      title={`Duplicate ${kind}`}
+      disabled={pending}
+      onClick={dup}
+    >
+      <Copy className="size-3.5" />
+    </Button>
   );
 }
 

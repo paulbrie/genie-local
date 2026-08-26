@@ -60,15 +60,28 @@ function parseScalars(fm) {
   return out;
 }
 
+function parseIntScalar(v) {
+  if (v == null) return null;
+  const n = parseInt(stripComment(v), 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+const PERMISSION_MODES = ["default", "plan", "acceptEdits", "bypassPermissions"];
+
 function parseAgent(slug, raw) {
   const { fm, body } = splitFrontmatter(raw);
   const s = parseScalars(fm);
+  const pm = s.get("permissionMode");
   return {
     slug,
     model: s.get("model") ?? null,
     tools: s.has("tools") ? parseInlineList(s.get("tools")) : null,
     outputs: s.has("outputs") ? parseInlineList(s.get("outputs")) : [],
     body,
+    maxTurns: parseIntScalar(s.get("maxTurns")),
+    timeoutSec: parseIntScalar(s.get("timeout")),
+    permissionMode: pm && PERMISSION_MODES.includes(stripComment(pm)) ? stripComment(pm) : null,
+    cwd: s.has("cwd") ? stripComment(s.get("cwd")) || null : null,
   };
 }
 
@@ -159,31 +172,76 @@ function toolResultText(content) {
   return "";
 }
 
-function runClaude(spec, agent, prompt, log) {
-  const tools = agent.tools ?? spec.readOnlyTools;
+/** Pull the usage/cost/timing fields out of a stream-json `result` event. */
+function usageFromResult(ev) {
+  const u = ev.usage ?? {};
+  const inTok =
+    (u.input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0);
+  return {
+    costUsd: typeof ev.total_cost_usd === "number" ? ev.total_cost_usd : null,
+    inputTokens: Number.isFinite(inTok) && inTok > 0 ? inTok : (u.input_tokens ?? null),
+    outputTokens: typeof u.output_tokens === "number" ? u.output_tokens : null,
+    turns: typeof ev.num_turns === "number" ? ev.num_turns : null,
+    durationMs: typeof ev.duration_ms === "number" ? ev.duration_ms : null,
+  };
+}
+
+/**
+ * Run one agent as a headless `claude -p` call under the effective config
+ * (`cfg`: tools/model/maxTurns/permissionMode/cwd/timeoutSec). Streams each tool
+ * invocation to the log, records write targets via `onArtifact`, enforces a
+ * wall-clock timeout, and resolves `{ text, usage }`.
+ */
+function runClaude(spec, cfg, prompt, log, onArtifact) {
+  const tools = cfg.tools ?? spec.readOnlyTools;
   const args = [
     "-p", prompt,
     "--output-format", "stream-json",
     "--verbose",
     "--allowedTools", tools.join(","),
   ];
-  if (agent.model) args.push("--model", agent.model);
+  if (cfg.model) args.push("--model", cfg.model);
+  if (cfg.maxTurns) args.push("--max-turns", String(cfg.maxTurns));
+  if (cfg.permissionMode && cfg.permissionMode !== "default")
+    args.push("--permission-mode", cfg.permissionMode);
 
   log.write(
     `\n$ claude -p <prompt> --allowedTools "${tools.join(",")}"` +
-      `${agent.model ? ` --model ${agent.model}` : ""}\n`,
+      `${cfg.model ? ` --model ${cfg.model}` : ""}` +
+      `${cfg.maxTurns ? ` --max-turns ${cfg.maxTurns}` : ""}` +
+      `${cfg.permissionMode && cfg.permissionMode !== "default" ? ` --permission-mode ${cfg.permissionMode}` : ""}` +
+      `${cfg.cwd ? ` (cwd: ${cfg.cwd})` : ""}` +
+      `${cfg.timeoutSec ? ` [timeout ${cfg.timeoutSec}s]` : ""}\n`,
   );
 
   return new Promise((resolve, reject) => {
     const child = spawn(spec.claudeBin, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORCE_COLOR: "0" },
+      cwd: cfg.cwd || undefined,
     });
 
     let buf = "";
     let finalText = "";
     let lastText = "";
+    let usage = null;
+    let settled = false;
     const toolNames = new Map(); // tool_use_id -> tool name
+
+    // Wall-clock timeout: SIGTERM, then SIGKILL if it lingers.
+    let timer = null;
+    let timedOut = false;
+    if (cfg.timeoutSec) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        log.write(`\n  ⏱ timeout after ${cfg.timeoutSec}s — terminating\n`);
+        try { child.kill("SIGTERM"); } catch { /* gone */ }
+        setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 5000);
+      }, cfg.timeoutSec * 1000);
+    }
+    const clearTimer = () => { if (timer) clearTimeout(timer); };
 
     const handleEvent = (ev) => {
       if (!ev || typeof ev !== "object") return;
@@ -193,6 +251,11 @@ function runClaude(spec, agent, prompt, log) {
             toolNames.set(b.id, b.name);
             const sum = summarizeToolInput(b.input);
             log.write(`  ↳ ${b.name}${sum ? `(${sum})` : ""}\n`);
+            // Record files a run creates/edits so the console can surface them.
+            if ((b.name === "Write" || b.name === "Edit" || b.name === "NotebookEdit") &&
+                b.input && typeof b.input.file_path === "string") {
+              onArtifact?.(b.input.file_path);
+            }
           } else if (b.type === "text" && b.text) {
             lastText = b.text;
             log.write(`${b.text}\n`);
@@ -211,6 +274,7 @@ function runClaude(spec, agent, prompt, log) {
         }
       } else if (ev.type === "result") {
         if (typeof ev.result === "string") finalText = ev.result;
+        usage = usageFromResult(ev);
         for (const d of ev.permission_denials ?? []) {
           log.write(`  ⚠ permission denied: ${d.tool_name ?? "tool"}\n`);
         }
@@ -232,8 +296,16 @@ function runClaude(spec, agent, prompt, log) {
       }
     });
     child.stderr.on("data", (d) => log.write(d));
-    child.on("error", reject);
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimer();
+      reject(e);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimer();
       if (buf.trim()) {
         try {
           handleEvent(JSON.parse(buf));
@@ -241,10 +313,125 @@ function runClaude(spec, agent, prompt, log) {
           /* ignore trailing partial */
         }
       }
-      if (code === 0) resolve((finalText || lastText).trim());
+      if (timedOut) reject(new Error(`timed out after ${cfg.timeoutSec}s`));
+      else if (code === 0) resolve({ text: (finalText || lastText).trim(), usage });
       else reject(new Error(`claude exited with code ${code}`));
     });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency semaphore — atomic-mkdir slot dirs under spec.slotsDir. At most
+// spec.maxConcurrent runs hold a slot (execute steps) at once; the rest wait in
+// the "queued" state. A slot held by a dead pid is reclaimed (crash-safe).
+// ---------------------------------------------------------------------------
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
+
+async function tryAcquireSlot(spec) {
+  await fs.mkdir(spec.slotsDir, { recursive: true });
+  for (let i = 0; i < spec.maxConcurrent; i++) {
+    const slot = path.join(spec.slotsDir, `slot-${i}`);
+    try {
+      await fs.mkdir(slot); // atomic create — throws if another run holds it
+      await fs.writeFile(path.join(slot, "pid"), String(process.pid));
+      return slot;
+    } catch {
+      try {
+        const pid = parseInt(await fs.readFile(path.join(slot, "pid"), "utf8"), 10);
+        if (Number.isInteger(pid) && !pidAlive(pid)) {
+          await fs.rm(slot, { recursive: true, force: true });
+          i--; // reclaim this stale slot on the next iteration
+        }
+      } catch {
+        /* pid not written yet — treat as held, move on */
+      }
+    }
+  }
+  return null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Block until a slot is free, keeping the run in "queued" state meanwhile. */
+async function acquireSlot(spec, progress, log) {
+  let slot = await tryAcquireSlot(spec);
+  if (slot) return slot;
+  progress.state = "queued";
+  await writeProgress(spec.progressPath, progress);
+  log.write(
+    `\n[agent-run] all ${spec.maxConcurrent} run slots busy — queued…\n`,
+  );
+  while (!slot) {
+    await sleep(1500);
+    slot = await tryAcquireSlot(spec);
+  }
+  return slot;
+}
+
+/** Effective per-step config: dialog overrides > agent frontmatter > defaults. */
+function resolveStepConfig(spec, agent) {
+  const o = spec.config || {};
+  const tools = agent.tools ?? spec.readOnlyTools;
+  const canWrite = tools.some(
+    (t) => t === "Write" || t === "Edit" || t === "NotebookEdit" || t === "Bash",
+  );
+  let cwd = o.cwd ?? agent.cwd ?? null;
+  // Give write-enabled steps a predictable scratch dir instead of the CWD the
+  // admin happened to spawn from, unless one was set explicitly.
+  if (!cwd && canWrite) cwd = spec.scratchCwd;
+  return {
+    tools,
+    model: agent.model,
+    maxTurns: o.maxTurns ?? agent.maxTurns ?? null,
+    permissionMode: o.permissionMode ?? agent.permissionMode ?? null,
+    timeoutSec: o.timeoutSec ?? agent.timeoutSec ?? spec.defaults?.timeoutSec ?? null,
+    cwd,
+  };
+}
+
+/** Add two usage records field-by-field (nulls ignored). */
+function addUsage(acc, u) {
+  if (!u) return acc;
+  const base = acc ?? { costUsd: null, inputTokens: null, outputTokens: null, turns: null, durationMs: null };
+  const add = (a, b) => (a == null && b == null ? null : (a ?? 0) + (b ?? 0));
+  return {
+    costUsd: add(base.costUsd, u.costUsd),
+    inputTokens: add(base.inputTokens, u.inputTokens),
+    outputTokens: add(base.outputTokens, u.outputTokens),
+    turns: add(base.turns, u.turns),
+    durationMs: add(base.durationMs, u.durationMs),
+  };
+}
+
+/** Best-effort completion webhook (never throws into the run). */
+async function notify(spec, progress, log) {
+  if (!spec.notifyWebhook || typeof fetch !== "function") return;
+  try {
+    await fetch(spec.notifyWebhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        runId: progress.runId,
+        name: progress.name,
+        kind: progress.kind,
+        slug: progress.slug,
+        state: progress.state,
+        error: progress.error,
+        usage: progress.usage,
+        artifacts: progress.artifacts,
+      }),
+    });
+  } catch (e) {
+    log.write(`\n[agent-run] notify failed: ${e?.message ?? e}\n`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,22 +449,47 @@ async function main() {
     new Promise((r) => log.write(`\n[agent-run ${stamp()}] ${msg}\n`, r));
 
   const progress = makeProgress(spec);
+  progress.config = spec.config ?? {};
+  progress.usage = null;
+  progress.artifacts = [];
   const title =
     spec.kind === "pipeline"
       ? `pipeline "${spec.slug}" (${spec.steps.length} steps)`
       : `agent "${spec.slug}"`;
 
-  progress.state = "running";
-  progress.startedAt = stamp();
-  await writeProgress(spec.progressPath, progress);
+  const artifacts = new Set();
+  const recordArtifact = (p) => {
+    if (p && !artifacts.has(p)) {
+      artifacts.add(p);
+      progress.artifacts = [...artifacts];
+    }
+  };
 
-  log.write(
-    `\n[agent-run ${stamp()}] starting ${title}\n` +
-      `  inputs: ${JSON.stringify(spec.inputs)}\n`,
-  );
-
-  const context = { ...spec.inputs };
+  let slot = null;
   try {
+    // Preflight: every referenced agent file must exist before we take a slot,
+    // so a typo'd pipeline step fails instantly instead of after queueing.
+    for (const s of spec.steps) {
+      try {
+        await fs.access(path.join(spec.agentsRoot, `${s.agent}.md`));
+      } catch {
+        throw new Error(`agent "${s.agent}" not found in ${spec.agentsRoot}`);
+      }
+    }
+
+    // Acquire a concurrency slot (may park the run in "queued" for a while).
+    slot = await acquireSlot(spec, progress, log);
+
+    progress.state = "running";
+    progress.startedAt = progress.startedAt ?? stamp();
+    await writeProgress(spec.progressPath, progress);
+
+    log.write(
+      `\n[agent-run ${stamp()}] starting ${title}\n` +
+        `  inputs: ${JSON.stringify(spec.inputs)}\n`,
+    );
+
+    const context = { ...spec.inputs };
     for (let i = 0; i < spec.steps.length; i++) {
       const step = progress.steps[i];
       progress.currentStep = i;
@@ -290,8 +502,22 @@ async function main() {
       );
 
       const agent = await loadAgent(spec.agentsRoot, step.agent);
+      const cfg = resolveStepConfig(spec, agent);
+      if (cfg.cwd) await fs.mkdir(cfg.cwd, { recursive: true }).catch(() => {});
       const prompt = interpolate(agent.body, context);
-      const result = await runClaude(spec, agent, prompt, log);
+      const { text: result, usage } = await runClaude(
+        spec, cfg, prompt, log, recordArtifact,
+      );
+
+      step.usage = usage ?? null;
+      progress.usage = addUsage(progress.usage, usage);
+      if (usage) {
+        log.write(
+          `  · usage: ${usage.turns ?? "?"} turns` +
+            `${usage.costUsd != null ? `, $${usage.costUsd.toFixed(4)}` : ""}` +
+            `${usage.outputTokens != null ? `, ${usage.outputTokens} out-tok` : ""}\n`,
+        );
+      }
 
       // Inclusive context: publish this agent's result under each of its
       // declared outputs (or under its slug if it declares none) so later
@@ -309,6 +535,7 @@ async function main() {
     progress.endedAt = stamp();
     await writeProgress(spec.progressPath, progress);
     await done(`done — ${title}`);
+    await notify(spec, progress, log);
     log.end();
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
@@ -322,8 +549,12 @@ async function main() {
     progress.endedAt = stamp();
     await writeProgress(spec.progressPath, progress).catch(() => {});
     await done(`FAILED — ${msg}`);
+    await notify(spec, progress, log);
     log.end();
     process.exitCode = 1;
+  } finally {
+    // Always release the concurrency slot so a queued run can proceed.
+    if (slot) await fs.rm(slot, { recursive: true, force: true }).catch(() => {});
   }
 }
 

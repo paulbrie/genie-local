@@ -1,6 +1,8 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -21,10 +23,16 @@ const DEFAULT_CWD = process.env.PROJECTS_ROOT
  * Live status of a terminal:
  * - `idle`           — sitting at a shell prompt
  * - `busy`           — running some command (foreground process isn't a shell)
- * - `claude-working` — running the Claude CLI and mid-turn (thinking)
- * - `claude-waiting` — running the Claude CLI but waiting for your input
+ * - `claude-working` — running the Claude CLI and mid-turn (active/thinking)
+ * - `claude-idle`    — running the Claude CLI, sitting idle at its prompt
+ * - `claude-input`   — the Claude CLI is blocked on a prompt asking for your input
  */
-export type TermStatus = "idle" | "busy" | "claude-working" | "claude-waiting";
+export type TermStatus =
+  | "idle"
+  | "busy"
+  | "claude-working"
+  | "claude-idle"
+  | "claude-input";
 
 export type Terminal = {
   name: string; // user-facing name (without the admin- prefix)
@@ -36,6 +44,7 @@ export type Terminal = {
   busy: boolean; // a command is running (foreground != a shell)
   status: TermStatus;
   cwd: string; // pane current path
+  tokens: ClaudeTokens | null; // cumulative session tokens (Claude sessions only)
 };
 
 // Login/interactive shells that mean "sitting at a prompt" (idle). A pane whose
@@ -65,22 +74,180 @@ export function isBusy(command: string): boolean {
 
 // The Claude CLI's foreground process is literally `claude`. While it is
 // processing a turn it prints this interrupt hint; when it's done it shows the
-// input prompt instead — so the hint is our "working vs waiting" signal.
+// input prompt instead — so the hint is our "active vs not" signal.
 const CLAUDE_WORKING_RE = /esc to interrupt/i;
 
+// When Claude is blocked asking you to choose (a permission / plan-approval /
+// multiple-choice prompt) it draws a selection list — the `❯` arrow pointing at
+// a numbered option, or an explicit "do you want to proceed" confirmation. That
+// distinguishes "needs your input" from just idling at the ready prompt (whose
+// `❯` is followed by the input cursor, not a numbered choice).
+const CLAUDE_INPUT_RE =
+  /❯\s+\d+\.\s|Do you want to proceed|Would you like to proceed/i;
+
 /**
- * Classify a pane. `content` (a capture of the pane) is only needed to tell
- * whether a Claude session is actively working; without it a Claude pane is
- * reported as waiting.
+ * Classify a pane. `content` (a capture of the pane) is needed to tell a Claude
+ * session's sub-state apart (active / awaiting input / idle); without it a
+ * Claude pane is reported as idle.
  */
 export function classify(command: string, content?: string): TermStatus {
   const cmd = normalizeCmd(command);
   if (cmd === "claude") {
-    return content && CLAUDE_WORKING_RE.test(content)
-      ? "claude-working"
-      : "claude-waiting";
+    if (content && CLAUDE_WORKING_RE.test(content)) return "claude-working";
+    if (content && CLAUDE_INPUT_RE.test(content)) return "claude-input";
+    return "claude-idle";
   }
   return isBusy(command) ? "busy" : "idle";
+}
+
+export type ClaudeTokens = { input: number; output: number; total: number };
+
+// The Claude CLI prints a live token meter on its status line, e.g.
+//   ✻ Working… (5m 58s · ↑ 12.3k tokens · ↓ 24.3k tokens)
+// `↑` is input (sent to the model), `↓` is output (generated). Either arrow may
+// be absent. We surface the sum so a Claude terminal shows how much it has
+// chewed through this turn.
+const TOKEN_RE = /([↑↓])\s*([\d.]+)\s*([kKmM]?)\s*tokens/g;
+
+// ANSI/VT escape sequences (colours, cursor moves) that tmux interleaves into a
+// coloured capture — stripped before token parsing so escapes between the arrow
+// and the number can't defeat the match.
+const ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+function scaleTokens(num: string, suffix: string): number {
+  const n = parseFloat(num);
+  if (!Number.isFinite(n)) return 0;
+  const s = suffix.toLowerCase();
+  const mult = s === "m" ? 1_000_000 : s === "k" ? 1_000 : 1;
+  return Math.round(n * mult);
+}
+
+/**
+ * Extract the input/output token counts the Claude CLI shows on its status
+ * line. Takes the last occurrence of each arrow (the CLI redraws a single live
+ * line, so the most recent is the current total). Returns null when no meter is
+ * visible (e.g. an idle Claude waiting at its prompt).
+ */
+export function parseClaudeTokens(content?: string): ClaudeTokens | null {
+  if (!content) return null;
+  const clean = content.replace(ANSI_RE, "");
+  let input: number | null = null;
+  let output: number | null = null;
+  for (const m of clean.matchAll(TOKEN_RE)) {
+    const val = scaleTokens(m[2], m[3]);
+    if (m[1] === "↑") input = val;
+    else output = val;
+  }
+  if (input === null && output === null) return null;
+  const i = input ?? 0;
+  const o = output ?? 0;
+  return { input: i, output: o, total: i + o };
+}
+
+// The CLI's status-line meter is PER TURN — it counts up while Claude works,
+// then resets when the next turn starts and vanishes when it's idle. To show a
+// running total for the whole session we accumulate those turns here, keyed by
+// tmux target. `counted` is the monotonic cumulative we surface; `prev` is the
+// last turn reading whose growth is already folded into `counted`.
+type TokenAccum = { counted: ClaudeTokens; prev: ClaudeTokens };
+
+// The running totals are mirrored to disk so they survive an admin-server
+// restart — a `next dev` hot-reload (or a systemd restart) wipes module memory,
+// but the tmux sessions outlive the server, so their cumulative token counts
+// should too. Keyed by tmux target; loaded once at module init and rewritten
+// whenever a tally changes. All writes are synchronous, preserving
+// accumulateTokens()' no-await guarantee against double-counting.
+const TOKENS_FILE = "/tmp/projects/terminal-tokens.json";
+
+function loadTokens(): Map<string, TokenAccum> {
+  try {
+    const obj = JSON.parse(readFileSync(TOKENS_FILE, "utf8")) as Record<
+      string,
+      TokenAccum
+    >;
+    return new Map(Object.entries(obj));
+  } catch {
+    return new Map(); // no file yet / malformed → start fresh
+  }
+}
+
+function persistTokens(): void {
+  try {
+    mkdirSync(dirname(TOKENS_FILE), { recursive: true });
+    writeFileSync(TOKENS_FILE, JSON.stringify(Object.fromEntries(sessionTokens)));
+  } catch {
+    /* best-effort: a lost tally just resets the count */
+  }
+}
+
+const sessionTokens = loadTokens();
+const ZERO: ClaudeTokens = { input: 0, output: 0, total: 0 };
+
+/**
+ * Fold a session's current per-turn meter reading into its cumulative total and
+ * return the running total. Fully synchronous (no await), so overlapping pollers
+ * can't double-count: whoever runs first advances `prev`, leaving a zero delta
+ * for the next. Returns null for a session that has never shown a meter.
+ *
+ * `active` is whether the pane is mid-turn (status `claude-working`). It's the
+ * reliable turn boundary: when the pane isn't working we close the turn out so
+ * the next one counts from zero — and, crucially, we do NOT do that merely
+ * because `turn` is null, since a single capture can miss the meter line while
+ * Claude is still working (that would otherwise re-count the whole turn). A
+ * meter reading that shrank is a secondary new-turn signal, covering the case
+ * where two turns run back-to-back and the idle frame between them is polled
+ * over.
+ */
+export function accumulateTokens(
+  target: string,
+  turn: ClaudeTokens | null,
+  active: boolean,
+): ClaudeTokens | null {
+  const acc = sessionTokens.get(target);
+  if (!acc) {
+    if (!turn) return null;
+    // First reading. If it's not from an active turn, the turn is already done,
+    // so leave `prev` empty and let the next turn count from scratch.
+    const fresh: TokenAccum = { counted: turn, prev: active ? turn : ZERO };
+    sessionTokens.set(target, fresh);
+    persistTokens();
+    return fresh.counted;
+  }
+  if (!active) {
+    // Turn finished — next turn starts fresh. Only rewrite the file when `prev`
+    // actually changes, so an idle Claude polled every second doesn't churn it.
+    if (acc.prev.total !== 0) {
+      acc.prev = ZERO;
+      persistTokens();
+    }
+    return acc.counted;
+  }
+  if (!turn) return acc.counted; // mid-turn capture missed the meter; keep prev
+  // Same turn still growing → add the delta; a smaller reading means a new turn
+  // reset the meter, so the prior turn is already fully counted and this turn's
+  // whole value is new.
+  const grew = turn.total >= acc.prev.total;
+  const add = (cur: number, was: number) => Math.max(0, grew ? cur - was : cur);
+  acc.counted = {
+    input: acc.counted.input + add(turn.input, acc.prev.input),
+    output: acc.counted.output + add(turn.output, acc.prev.output),
+    total: acc.counted.total + add(turn.total, acc.prev.total),
+  };
+  acc.prev = turn;
+  persistTokens();
+  return acc.counted;
+}
+
+/** Forget a session's token tally (called when its tmux session disappears). */
+function pruneTokens(liveTargets: Set<string>) {
+  let changed = false;
+  for (const target of sessionTokens.keys()) {
+    if (!liveTargets.has(target)) {
+      sessionTokens.delete(target);
+      changed = true;
+    }
+  }
+  if (changed) persistTokens();
 }
 
 // A session name may be almost anything the user likes, EXCEPT characters that
@@ -167,11 +334,14 @@ export async function listTerminals(): Promise<Terminal[]> {
 
   // A Claude pane's "working vs waiting" state only shows in its output, so
   // capture the visible pane for those (cheap: no scrollback/escapes) and
-  // classify. Non-Claude panes are classified from the command alone.
-  return Promise.all(
+  // classify. That same capture carries the token meter, so we fold it into the
+  // session's running total here — this poll runs even when no window is open,
+  // so the sidebar's cumulative count stays live. Non-Claude panes are
+  // classified from the command alone and carry no token tally.
+  const terminals = await Promise.all(
     base.map(async (t): Promise<Terminal> => {
       if (normalizeCmd(t.command) !== "claude") {
-        return { ...t, status: classify(t.command) };
+        return { ...t, status: classify(t.command), tokens: null };
       }
       let content: string | undefined;
       try {
@@ -179,9 +349,19 @@ export async function listTerminals(): Promise<Terminal[]> {
       } catch {
         /* ignore */
       }
-      return { ...t, status: classify(t.command, content) };
+      const status = classify(t.command, content);
+      const tokens = accumulateTokens(
+        t.target,
+        parseClaudeTokens(content),
+        status === "claude-working",
+      );
+      return { ...t, status, tokens };
     }),
   );
+  // Drop tallies for sessions that no longer exist so the map can't grow without
+  // bound (killed sessions, renames handled separately).
+  pruneTokens(new Set(base.map((t) => t.target)));
+  return terminals;
 }
 
 async function sessionExists(target: string): Promise<boolean> {
@@ -241,6 +421,14 @@ export async function renameTerminal(
     throw new Error(`a terminal named "${newName}" already exists`);
   }
   await tmux(["rename-session", "-t", target, newTarget]);
+  // Carry the token tally over to the new target so a rename doesn't zero it
+  // (and so prune doesn't drop it for the vanished old name).
+  const acc = sessionTokens.get(target);
+  if (acc) {
+    sessionTokens.set(newTarget, acc);
+    sessionTokens.delete(target);
+    persistTokens();
+  }
   const renamed = (await listTerminals()).find((t) => t.target === newTarget);
   if (!renamed) throw new Error("renamed but not found");
   return renamed;
@@ -263,6 +451,7 @@ export async function captureTerminal(name: string): Promise<{
   command: string;
   busy: boolean;
   status: TermStatus;
+  tokens: ClaudeTokens | null;
 }> {
   const target = toTarget(name);
   const raw = await tmux([
@@ -302,12 +491,21 @@ export async function captureTerminal(name: string): Promise<{
   } catch {
     /* ignore */
   }
+  const status = classify(command, visible);
   return {
     content,
     size,
     command,
     busy: isBusy(command),
-    status: classify(command, visible),
+    status,
+    // Parse from the visible pane only (a meter scrolled off the top can't
+    // linger), then fold it into the session's running total so the window
+    // footer shows the same cumulative figure as the sidebar.
+    tokens: accumulateTokens(
+      target,
+      parseClaudeTokens(visible),
+      status === "claude-working",
+    ),
   };
 }
 

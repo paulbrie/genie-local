@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { RunDock } from "@/components/run-dock";
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { TerminalDock } from "@/components/terminal-dock";
+import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </div>
           </div>
           <TerminalDock />
+          <TerminalVoiceMonitor />
           <RunDock />
           <Toaster richColors position="top-right" />
         </ThemeProvider>

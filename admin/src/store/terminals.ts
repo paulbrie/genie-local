@@ -20,7 +20,12 @@ export type DockState = { open: string[]; minimized: string[] };
  * management list — can render the same dot, including while a window is
  * collapsed (a minimized window stays mounted and keeps reporting).
  */
-export type TermStatus = "idle" | "busy" | "claude-working" | "claude-waiting";
+export type TermStatus =
+  | "idle"
+  | "busy"
+  | "claude-working"
+  | "claude-idle"
+  | "claude-input";
 export const termStatus = new Subject<Record<string, TermStatus>>(
   {},
   { name: "terminalStatus" },
@@ -38,7 +43,12 @@ export function setTerminalStatus(name: string, status: TermStatus) {
  * like the sidebar can list "currently working" terminals without showing dead
  * ones. NON-persisted: it's server-derived and ephemeral.
  */
-export type LiveTerminal = { name: string; status: TermStatus };
+export type SessionTokens = { input: number; output: number; total: number };
+export type LiveTerminal = {
+  name: string;
+  status: TermStatus;
+  tokens?: SessionTokens | null; // cumulative session tokens (Claude only)
+};
 export const liveTerminals = new Subject<LiveTerminal[]>([], {
   name: "liveTerminals",
 });

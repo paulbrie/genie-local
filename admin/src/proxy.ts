@@ -25,6 +25,18 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Agent path: the diagrams API accepts a shared key so a server-side agent can
+  // create/update diagrams without a browser session. Only enabled when
+  // DIAGRAMS_API_KEY is set; the header is compared against it verbatim.
+  const apiKey = process.env.DIAGRAMS_API_KEY;
+  if (
+    apiKey &&
+    path.startsWith("/api/diagrams") &&
+    req.headers.get("x-api-key") === apiKey
+  ) {
+    return NextResponse.next();
+  }
+
   // API → 401 JSON; pages → redirect to this instance's login page.
   if (path.startsWith("/api/")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

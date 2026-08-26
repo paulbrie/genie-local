@@ -15,13 +15,16 @@ import {
   PanelLeftOpen,
   ScrollText,
   Server,
+  Share2,
   Sparkles,
   SquareTerminal,
+  TrainFront,
   Workflow,
   X,
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
+import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
@@ -49,7 +52,9 @@ const NAV: NavItem[] = [
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/docker", label: "Docker", icon: Container },
   { href: "/services", label: "Services", icon: Server },
+  { href: "/railway", label: "Railway", icon: TrainFront },
   { href: "/db", label: "DB Explorer", icon: Database },
+  { href: "/diagrams", label: "Diagrams", icon: Share2 },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/claude", label: "Claude", icon: Sparkles },
 ];
@@ -276,11 +281,20 @@ export function AppSidebar() {
                           openTerminal(t.name);
                           closeMobile();
                         }}
-                        title={`Open ${t.name} — ${termLabel(t.status)}`}
+                        title={
+                          t.tokens
+                            ? `Open ${t.name} — ${termLabel(t.status)} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
+                            : `Open ${t.name} — ${termLabel(t.status)}`
+                        }
                         className="flex items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
                         <TermDot status={t.status} />
                         <span className="truncate">{t.name}</span>
+                        {t.tokens && t.tokens.total > 0 && (
+                          <span className="ml-auto shrink-0 font-mono tabular-nums opacity-70">
+                            {fmtTokens(t.tokens.total)}
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -312,22 +326,28 @@ export function AppSidebar() {
   );
 }
 
-// Terminal status → dot colour + optional pulse. Mirrors the dock's palette:
-// green = running a command, orange = a Claude session (pulsing while it works,
-// steady while it waits).
-const TERM_DOT: Record<TermStatus, { dot: string; ping: string | null }> = {
+// Non-Claude terminal status → dot colour + optional pulse. Claude sessions use
+// the glyph below instead, so only the plain shell states live here.
+const TERM_DOT: Record<"idle" | "busy", { dot: string; ping: string | null }> = {
   idle: { dot: "bg-muted-foreground/40", ping: null },
   busy: { dot: "bg-emerald-500", ping: "bg-emerald-400" },
-  "claude-working": { dot: "bg-orange-500", ping: "bg-orange-400" },
-  "claude-waiting": { dot: "bg-orange-500", ping: null },
 };
+
+/** Compact token count: 1_234 → "1.2k", 2_500_000 → "2.5M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
 function termLabel(status: TermStatus): string {
   switch (status) {
     case "claude-working":
       return "Claude is working";
-    case "claude-waiting":
-      return "Claude is waiting for input";
+    case "claude-input":
+      return "Claude needs your input";
+    case "claude-idle":
+      return "Claude is idle";
     case "busy":
       return "Running a command";
     default:
@@ -336,7 +356,22 @@ function termLabel(status: TermStatus): string {
 }
 
 function TermDot({ status }: { status: TermStatus }) {
-  const { dot, ping } = TERM_DOT[status];
+  // Claude sessions get the CLI glyph — twinkling while active, a steady dimmed
+  // spark while idle, and a "?" when blocked on input — same as the dock.
+  const claude = claudeGlyphState(status);
+  if (claude) {
+    return (
+      <span
+        role="img"
+        aria-label={termLabel(status)}
+        title={termLabel(status)}
+        className="inline-flex size-2.5 items-center justify-center"
+      >
+        <ClaudeGlyph state={claude} size="sm" />
+      </span>
+    );
+  }
+  const { dot, ping } = status === "busy" ? TERM_DOT.busy : TERM_DOT.idle;
   return (
     <StatusDot color={dot} pulse={ping !== null} size="sm" label={termLabel(status)} />
   );

@@ -20,10 +20,10 @@ export async function GET(
 ) {
   const { name } = await params;
   try {
-    const { content, size, command, busy, status } =
+    const { content, size, command, busy, status, tokens } =
       await captureTerminal(name);
     return NextResponse.json(
-      { content, size, command, busy, status },
+      { content, size, command, busy, status, tokens },
       { headers: noStore },
     );
   } catch (e) {

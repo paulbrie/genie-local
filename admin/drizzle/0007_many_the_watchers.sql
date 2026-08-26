@@ -1,0 +1,1 @@
+ALTER TABLE "diagrams" ADD COLUMN "archived_at" timestamp with time zone;

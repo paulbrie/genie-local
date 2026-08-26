@@ -7,9 +7,12 @@ import {
   ALargeSmall,
   Check,
   ChevronLeft,
+  ClipboardPaste,
+  Mic,
   Minus,
   Palette,
   Pencil,
+  Pipette,
   TerminalSquare,
   Trash2,
   X,
@@ -17,11 +20,13 @@ import {
 import { useSubject } from "subjecto/react";
 
 import { AnsiText } from "@/components/ansi-text";
+import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { SPEECH_LANGS, useSpeechInput } from "@/lib/use-speech-input";
 import {
   closeTerminal,
   dock,
@@ -44,24 +49,26 @@ const POLL_MS = 1000;
 const CHAR_W = 7.2;
 const LINE_H = 19.5;
 
-// The standard + bright 16-colour ANSI palette, offered for the window bars.
+// A palette of deep, dark tones for the window bars — all dark enough that the
+// white bar text stays legible on top. For anything else there's a colour
+// picker (see BarPalette), whose text colour still adapts via `textOn`.
 const PALETTE: { name: string; value: string }[] = [
-  { name: "Black", value: "#000000" },
-  { name: "Red", value: "#cd3131" },
-  { name: "Green", value: "#0dbc79" },
-  { name: "Yellow", value: "#e5e510" },
-  { name: "Blue", value: "#2472c8" },
-  { name: "Magenta", value: "#bc3fbc" },
-  { name: "Cyan", value: "#11a8cd" },
-  { name: "White", value: "#e5e5e5" },
-  { name: "Bright Black", value: "#666666" },
-  { name: "Bright Red", value: "#f14c4c" },
-  { name: "Bright Green", value: "#23d18b" },
-  { name: "Bright Yellow", value: "#f5f543" },
-  { name: "Bright Blue", value: "#3b8eea" },
-  { name: "Bright Magenta", value: "#d670d6" },
-  { name: "Bright Cyan", value: "#29b8db" },
-  { name: "Bright White", value: "#ffffff" },
+  { name: "Charcoal", value: "#1e1e2e" },
+  { name: "Graphite", value: "#2b2d31" },
+  { name: "Slate", value: "#334155" },
+  { name: "Navy", value: "#1e293b" },
+  { name: "Midnight", value: "#172554" },
+  { name: "Indigo", value: "#312e81" },
+  { name: "Violet", value: "#3b0764" },
+  { name: "Plum", value: "#4a044e" },
+  { name: "Wine", value: "#4c0519" },
+  { name: "Maroon", value: "#450a0a" },
+  { name: "Rust", value: "#431407" },
+  { name: "Umber", value: "#422006" },
+  { name: "Forest", value: "#052e16" },
+  { name: "Pine", value: "#022c22" },
+  { name: "Teal", value: "#042f2e" },
+  { name: "Ocean", value: "#083344" },
 ];
 
 function styleKey(name: string) {
@@ -126,6 +133,16 @@ function fontLabel(cls: FontSizeCls): string {
 function nextFontSize(cls: FontSizeCls): FontSizeCls {
   const i = FONT_SIZES.findIndex((f) => f.cls === cls);
   return FONT_SIZES[(i + 1) % FONT_SIZES.length].cls;
+}
+
+/** The Claude token meter parsed server-side from a session's status line. */
+type TokenMeter = { input: number; output: number; total: number };
+
+/** Compact token count: 1_234 → "1.2k", 2_500_000 → "2.5M". */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 /** Readable text colour (black/white) for a given background hex. */
@@ -194,6 +211,10 @@ export function TerminalDock() {
   const isMobile = useIsMobile();
   const zTop = useRef(10);
   const bringToFront = useCallback(() => ++zTop.current, []);
+  // Which floating window is frontmost/focused — it gets the glow so it's clear
+  // which one keystrokes go to. Set on open and on any interaction.
+  const [activeName, setActiveName] = useState<string | null>(null);
+  const activate = useCallback((name: string) => setActiveName(name), []);
 
   // Restore persisted membership once, after mount.
   useEffect(() => {
@@ -209,14 +230,21 @@ export function TerminalDock() {
         const res = await fetch(API, { cache: "no-store" });
         const json = await res.json();
         if (active && res.ok) {
-          const list: { name: string; status?: TermStatus }[] =
-            json.terminals ?? [];
+          const list: {
+            name: string;
+            status?: TermStatus;
+            tokens?: TokenMeter | null;
+          }[] = json.terminals ?? [];
           reconcileTerminals(list.map((t) => t.name));
           for (const t of list) {
             if (t.status) setTerminalStatus(t.name, t.status);
           }
           setLiveTerminals(
-            list.map((t) => ({ name: t.name, status: t.status ?? "idle" })),
+            list.map((t) => ({
+              name: t.name,
+              status: t.status ?? "idle",
+              tokens: t.tokens ?? null,
+            })),
           );
         }
       } catch {
@@ -264,6 +292,8 @@ export function TerminalDock() {
           name={name}
           index={i}
           minimized={minimized.includes(name)}
+          active={activeName === name}
+          onActivate={() => activate(name)}
           bringToFront={bringToFront}
           onMinimize={() => minimizeTerminal(name)}
           onClose={() => closeTerminal(name)}
@@ -287,7 +317,10 @@ export function TerminalDock() {
             >
               <button
                 type="button"
-                onClick={() => restoreTerminal(name)}
+                onClick={() => {
+                  restoreTerminal(name);
+                  activate(name);
+                }}
                 title={`Restore ${name} — ${statusLabel(statuses[name] ?? "idle")}`}
                 className="flex items-center gap-1.5 font-medium hover:underline"
               >
@@ -317,6 +350,8 @@ function TerminalWindow({
   name,
   index,
   minimized,
+  active,
+  onActivate,
   bringToFront,
   onMinimize,
   onClose,
@@ -326,6 +361,8 @@ function TerminalWindow({
   name: string;
   index: number;
   minimized: boolean;
+  active: boolean;
+  onActivate: () => void;
   bringToFront: () => number;
   onMinimize: () => void;
   onClose: () => void;
@@ -344,6 +381,8 @@ function TerminalWindow({
   const [fontSize, setFontSize] = useState<FontSizeCls>(DEFAULT_FONT);
   const [status, setStatus] = useState<TermStatus>("idle");
   const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const paletteRef = useRef<HTMLDivElement>(null);
+  const paletteBtnRef = useRef<HTMLButtonElement>(null);
 
   // Load persisted per-terminal prefs (client-only; localStorage is unavailable
   // during SSR, so this must run after mount).
@@ -352,6 +391,41 @@ function TerminalWindow({
     setColor(loadBarColor(name));
     setFontSize(loadFontSize(name));
   }, [name]);
+
+  // A freshly opened (or restored) window is the one you want to type into, so
+  // claim focus/glow on mount. Interactions below keep it in sync thereafter.
+  useEffect(() => {
+    onActivate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Raise this window and mark it the active (glowing) one — on click anywhere
+  // or on a header drag.
+  const raise = useCallback(() => {
+    setZ(bringToFront());
+    onActivate();
+  }, [bringToFront, onActivate]);
+
+  // Dismiss the colour palette on a click anywhere outside it (or Escape). The
+  // toggle button is excluded so its own onClick keeps handling open/close.
+  useEffect(() => {
+    if (!paletteOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (paletteRef.current?.contains(t)) return;
+      if (paletteBtnRef.current?.contains(t)) return;
+      setPaletteOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [paletteOpen]);
 
   function pickColor(next: string | null) {
     setColor(next);
@@ -367,7 +441,7 @@ function TerminalWindow({
   function onHeaderPointerDown(e: React.PointerEvent) {
     // Ignore drags that start on a control (buttons, the rename input).
     if ((e.target as HTMLElement).closest("button, input")) return;
-    setZ(bringToFront());
+    raise();
     drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
     const move = (ev: PointerEvent) => {
       if (!drag.current) return;
@@ -405,13 +479,16 @@ function TerminalWindow({
     <div
       role="dialog"
       aria-label={`Terminal ${name}`}
-      onPointerDown={() => setZ(bringToFront())}
+      onPointerDown={raise}
       style={{ left: pos.x, top: pos.y, zIndex: z }}
       // Kept mounted while minimized (hidden) so its position, size and live
-      // output survive a minimize → restore round-trip.
-      className={`fixed flex h-[26rem] max-h-[90vh] min-h-[12rem] w-[44rem] max-w-[92vw] min-w-[20rem] resize flex-col overflow-hidden rounded-lg border bg-background shadow-2xl ring-1 ring-foreground/10 ${
-        minimized ? "hidden" : ""
-      }`}
+      // output survive a minimize → restore round-trip. The active window gets a
+      // purple drop shadow + subtle border so it's obvious which one has focus.
+      className={`fixed flex h-[26rem] max-h-[90vh] min-h-[12rem] w-[44rem] max-w-[92vw] min-w-[20rem] resize flex-col overflow-hidden rounded-lg border bg-background transition-shadow ${
+        active
+          ? "ring-1 ring-purple-500/30 shadow-[0_0_30px_-2px] shadow-purple-500/50"
+          : "ring-1 ring-foreground/10 shadow-2xl"
+      } ${minimized ? "hidden" : ""}`}
     >
       <div
         onPointerDown={onHeaderPointerDown}
@@ -470,6 +547,7 @@ function TerminalWindow({
           <ALargeSmall className="size-4" />
         </button>
         <button
+          ref={paletteBtnRef}
           type="button"
           onClick={() => setPaletteOpen((v) => !v)}
           aria-label="Window colour"
@@ -508,7 +586,10 @@ function TerminalWindow({
       </div>
 
       {paletteOpen && (
-        <div className="absolute top-10 right-2 z-10 w-60 rounded-md border bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+        <div
+          ref={paletteRef}
+          className="absolute top-10 right-2 z-10 w-60 rounded-md border bg-popover p-2 text-popover-foreground shadow-md ring-1 ring-foreground/10"
+        >
           <BarPalette label="Window colour" value={color} onPick={pickColor} />
         </div>
       )}
@@ -518,6 +599,7 @@ function TerminalWindow({
         footerBg={color}
         fontSize={fontSize}
         minimized={minimized}
+        active={active}
         onStatus={(s) => {
           setStatus(s);
           setTerminalStatus(name, s);
@@ -708,6 +790,8 @@ function BarPalette({
   value: string | null;
   onPick: (v: string | null) => void;
 }) {
+  // A colour that isn't one of the presets came from the picker.
+  const isCustom = value !== null && !PALETTE.some((c) => c.value === value);
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
@@ -745,6 +829,37 @@ function BarPalette({
           </button>
         ))}
       </div>
+      {/* Escape hatch: pick any colour. Its bar text still adapts via textOn,
+          so even a light custom colour stays readable. */}
+      <label
+        className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground hover:text-foreground"
+        title="Choose a custom colour"
+      >
+        <span
+          className={`relative flex size-6 items-center justify-center overflow-hidden rounded ring-1 ring-black/20 ${
+            isCustom ? "outline outline-2 outline-offset-1 outline-ring" : ""
+          }`}
+          style={
+            isCustom
+              ? { backgroundColor: value, color: textOn(value) }
+              : undefined
+          }
+        >
+          <input
+            type="color"
+            aria-label={`${label}: custom colour`}
+            value={value ?? "#1e1e2e"}
+            onChange={(e) => onPick(e.target.value)}
+            className="absolute inset-0 size-full cursor-pointer opacity-0"
+          />
+          {isCustom ? (
+            <Check className="size-3.5" />
+          ) : (
+            <Pipette className="size-3.5" />
+          )}
+        </span>
+        Custom…
+      </label>
     </div>
   );
 }
@@ -756,8 +871,10 @@ export function statusLabel(status: TermStatus): string {
   switch (status) {
     case "claude-working":
       return "Claude is working";
-    case "claude-waiting":
-      return "Claude is waiting for input";
+    case "claude-input":
+      return "Claude needs your input";
+    case "claude-idle":
+      return "Claude is idle";
     case "busy":
       return "Running a command";
     default:
@@ -765,23 +882,35 @@ export function statusLabel(status: TermStatus): string {
   }
 }
 
-// dot colour + optional pulse colour, per status. Orange = a Claude session; it
-// pulses while Claude is working and is steady while it waits for you. Class
-// names are literals so Tailwind picks them up.
-const DOT: Record<TermStatus, { dot: string; ping: string | null }> = {
+// Non-Claude states use the shared coloured dot; class names are literals so
+// Tailwind picks them up. Claude sessions get the distinctive spark glyph below
+// instead, so an active Claude terminal never looks like a dim idle dot.
+const DOT: Record<"idle" | "busy", { dot: string; ping: string | null }> = {
   idle: { dot: "bg-muted-foreground/40", ping: null },
   busy: { dot: "bg-emerald-500", ping: "bg-emerald-400" },
-  "claude-working": { dot: "bg-orange-500", ping: "bg-orange-400" },
-  "claude-waiting": { dot: "bg-orange-500", ping: null },
 };
 
 /**
- * Status indicator dot. Grey = idle at a prompt, green (pulsing) = running a
- * command, orange = a Claude session (pulsing while Claude works, steady while
- * it waits for input).
+ * Status indicator. Grey dot = idle at a prompt, green (pulsing) dot = running a
+ * command, and the orange Claude glyph = a Claude session — twinkling through
+ * the CLI's spinner glyphs while it works, a steady dimmed spark while idle, and
+ * a "?" when it's blocked asking you for input.
  */
 export function TermStatusDot({ status }: { status: TermStatus }) {
-  const { dot, ping } = DOT[status];
+  const claude = claudeGlyphState(status);
+  if (claude) {
+    return (
+      <span
+        role="img"
+        aria-label={statusLabel(status)}
+        title={statusLabel(status)}
+        className="inline-flex size-3.5 items-center justify-center"
+      >
+        <ClaudeGlyph state={claude} size="md" />
+      </span>
+    );
+  }
+  const { dot, ping } = status === "busy" ? DOT.busy : DOT.idle;
   return (
     <StatusDot color={dot} pulse={ping !== null} label={statusLabel(status)} />
   );
@@ -821,6 +950,7 @@ function TerminalView({
   footerBg,
   fontSize,
   minimized,
+  active,
   mobile,
   onStatus,
 }: {
@@ -828,12 +958,18 @@ function TerminalView({
   footerBg?: string | null;
   fontSize: FontSizeCls;
   minimized?: boolean;
+  active?: boolean;
   mobile?: boolean;
   onStatus?: (status: TermStatus) => void;
 }) {
   const [content, setContent] = useState("");
   const [size, setSize] = useState("");
   const [status, setStatus] = useState<TermStatus>("idle");
+  // Cumulative token total for this Claude session (summed across turns on the
+  // server). Kept until the session stops being a Claude session, so the total
+  // stays visible after a turn finishes (the CLI only prints its meter while
+  // working).
+  const [tokens, setTokens] = useState<TokenMeter | null>(null);
   const [focused, setFocused] = useState(false);
   const screenRef = useRef<HTMLPreElement>(null);
   const measureRef = useRef<HTMLSpanElement>(null);
@@ -852,11 +988,23 @@ function TerminalView({
   const inflight = useRef(0);
 
   const applySnap = useCallback(
-    (json: { content?: string; size?: string; status?: TermStatus }) => {
+    (json: {
+      content?: string;
+      size?: string;
+      status?: TermStatus;
+      tokens?: TokenMeter | null;
+    }) => {
       const s: TermStatus = json.status ?? "idle";
       setContent(json.content ?? "");
       setSize(json.size ?? "");
       setStatus(s);
+      // Hold the last meter through a whole Claude session; drop it once the
+      // pane goes back to a plain shell (idle/busy).
+      if (claudeGlyphState(s)) {
+        if (json.tokens) setTokens(json.tokens);
+      } else {
+        setTokens(null);
+      }
       onStatusRef.current?.(s);
     },
     [],
@@ -992,6 +1140,18 @@ function TerminalView({
     return () => clearTimeout(id);
   }, [minimized, mobile, pinToBottom]);
 
+  // Whenever this window becomes the active (frontmost) one — e.g. clicking a
+  // background window's header to bring it forward — focus its pane so it's
+  // ready to type with no second click into the pane. (Desktop only; on mobile,
+  // focus lives on the hidden textarea, raised by tapping the pane.)
+  useEffect(() => {
+    if (mobile || minimized || !active) return;
+    const el = screenRef.current;
+    if (!el) return;
+    const id = setTimeout(() => el.focus(), 0);
+    return () => clearTimeout(id);
+  }, [active, minimized, mobile]);
+
   // One POST at a time, in order: without this, fast typing raced (each key was
   // its own request) and tmux received characters transposed. A single pump
   // drains a queue and coalesces adjacent text ops, so a burst of keys is still
@@ -1065,11 +1225,15 @@ function TerminalView({
   // Clipboard API (the keypress is a user gesture; the site is HTTPS), then send
   // it literally to tmux — same as fast typing.
   const pasteFromClipboard = useCallback(async () => {
+    // Reachable two ways: Cmd/Ctrl+V, and the explicit Paste button (needed on
+    // mobile and when the shortcut is awkward). Both are user gestures, so the
+    // async Clipboard read is permitted; surface why nothing happened.
     try {
       const text = await navigator.clipboard?.readText();
       if (text) void send({ text });
+      else if (text === "") toast.info("Clipboard is empty");
     } catch {
-      /* clipboard blocked / unavailable — ignore */
+      toast.error("Clipboard is blocked — allow clipboard access to paste");
     }
   }, [send]);
 
@@ -1169,6 +1333,14 @@ function TerminalView({
     [send],
   );
 
+  // Voice input: dictate straight into tmux. Each finalized phrase is sent as
+  // literal text (no auto-Enter — the user reviews and runs it). Gated on
+  // `supported` so the mic UI only shows in browsers that have the Web Speech API.
+  const speech = useSpeechInput({
+    onText: (text) => send({ text }),
+    onError: (msg) => toast.error(msg),
+  });
+
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {/* Hidden metrics probe: 50 chars wide, 2 lines tall, same font as the
@@ -1199,6 +1371,35 @@ function TerminalView({
                 inputRef.current?.focus();
               }}
             />
+            <BarKey label="Paste" onTap={() => void pasteFromClipboard()} />
+            {speech.supported && (
+              <>
+                <BarKey
+                  label={speech.listening ? "🎤 Stop" : "🎤 Talk"}
+                  active={speech.listening}
+                  onTap={() => {
+                    speech.toggle();
+                    inputRef.current?.focus();
+                  }}
+                />
+                <select
+                  aria-label="Voice input language"
+                  value={speech.lang}
+                  onChange={(e) => speech.setLang(e.target.value)}
+                  className="shrink-0 rounded-md border bg-background px-2 py-1.5 font-mono text-xs text-foreground"
+                >
+                  {!SPEECH_LANGS.some((l) => l.value === speech.lang) &&
+                    speech.lang && (
+                      <option value={speech.lang}>{speech.lang}</option>
+                    )}
+                  {SPEECH_LANGS.map((l) => (
+                    <option key={l.value} value={l.value}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
             <BarKey label="^C" onTap={() => tapKey("C-c")} />
             <BarKey label="^D" onTap={() => tapKey("C-d")} />
             <BarKey label="←" onTap={() => tapKey("Left")} />
@@ -1276,8 +1477,89 @@ function TerminalView({
             <TermStatusDot status={status} />
             {statusLabel(status)}
             {size && ` · ${size}`}
+            {tokens && (
+              <span
+                title={`This session · Input ↑ ${tokens.input.toLocaleString()} · Output ↓ ${tokens.output.toLocaleString()} · Total ${tokens.total.toLocaleString()} tokens`}
+                className="font-mono"
+              >
+                · {fmtTokens(tokens.total)} tokens
+              </span>
+            )}
           </span>
-          <div className="ml-auto flex flex-wrap gap-1">
+          <div className="ml-auto flex flex-wrap items-center gap-1">
+            {speech.supported && (
+              <>
+                {speech.listening && speech.interim && (
+                  <span
+                    className="max-w-[14rem] truncate text-xs italic opacity-70"
+                    title={speech.interim}
+                  >
+                    “{speech.interim}”
+                  </span>
+                )}
+                <select
+                  aria-label="Voice input language"
+                  title="Voice input language"
+                  value={speech.lang}
+                  onChange={(e) => speech.setLang(e.target.value)}
+                  style={
+                    footerBg
+                      ? { backgroundColor: footerBg, color: textOn(footerBg) }
+                      : undefined
+                  }
+                  className={`h-6 rounded-md border px-1 text-xs ${
+                    footerBg ? "" : "bg-background text-foreground"
+                  }`}
+                >
+                  {/* Keep an unlisted browser/persisted locale selectable. */}
+                  {!SPEECH_LANGS.some((l) => l.value === speech.lang) &&
+                    speech.lang && (
+                      <option value={speech.lang}>{speech.lang}</option>
+                    )}
+                  {SPEECH_LANGS.map((l) => (
+                    <option key={l.value} value={l.value}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  variant={speech.listening ? "default" : "outline"}
+                  className={`h-6 gap-1 px-2 text-xs ${
+                    speech.listening
+                      ? "bg-red-600 text-white hover:bg-red-600/90"
+                      : ""
+                  }`}
+                  title={
+                    speech.listening
+                      ? `Listening in ${speech.lang} — click to stop`
+                      : `Talk to the terminal (voice input, ${speech.lang})`
+                  }
+                  onClick={() => {
+                    speech.toggle();
+                    screenRef.current?.focus();
+                  }}
+                >
+                  <Mic
+                    className={`size-3 ${speech.listening ? "animate-pulse" : ""}`}
+                  />
+                  {speech.listening ? `Listening · ${speech.lang}` : "Voice"}
+                </Button>
+              </>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 gap-1 px-2 text-xs"
+              title="Paste clipboard into the terminal (⌘/Ctrl+V)"
+              onClick={() => {
+                void pasteFromClipboard();
+                screenRef.current?.focus();
+              }}
+            >
+              <ClipboardPaste className="size-3" />
+              Paste
+            </Button>
             {(
               [
                 ["Ctrl-C", "C-c"],

@@ -5,6 +5,7 @@ import { closeSync, openSync, promises as fs } from "node:fs";
 import path from "node:path";
 
 import type {
+  RunConfig,
   RunLifecycle,
   RunProgress,
   RunStep,
@@ -37,17 +38,37 @@ const ORCHESTRATOR =
 /** The `claude` CLI (on PATH by default; override with CLAUDE_BIN). */
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
+const intEnv = (key: string, fallback: number): number => {
+  const n = parseInt(process.env[key] ?? "", 10);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
+};
+
+/** Max runs allowed to execute a step at once; extra runs wait in "queued". */
+const MAX_CONCURRENT = intEnv("AGENT_MAX_CONCURRENT", 3);
+/** Default wall-clock timeout per step (seconds) when nothing else sets one. */
+const DEFAULT_TIMEOUT_SEC = intEnv("AGENT_DEFAULT_TIMEOUT_SEC", 1800);
+/** Runs finished longer ago than this are pruned from history on read. */
+const RETENTION_DAYS = intEnv("AGENT_RUNS_RETENTION_DAYS", 30);
+/** Directory of lockfiles implementing the run-concurrency semaphore. */
+const SLOTS_DIR = path.join(AGENT_RUNS_ROOT, ".slots");
+/** Optional webhook the orchestrator POSTs a summary to on completion. */
+const NOTIFY_WEBHOOK = process.env.AGENT_RUN_NOTIFY_WEBHOOK || null;
+
+/** Monotonic within a process so two runs in the same ms can't collide. */
+let runCounter = 0;
+
 /**
  * A fresh, filesystem-safe id for one launch. Every Run gets its own — so the
  * same agent can run many times without clobbering each other's log/progress,
  * which is what makes a run *history* possible. Shape: `<kind>-<slug>-<token>`.
  */
 function newRunId(kind: "agent" | "pipeline", slug: string): string {
+  // Date + a per-process counter guarantees uniqueness even for two launches in
+  // the same millisecond (the random suffix just avoids cross-process clashes).
   const token =
     Date.now().toString(36) +
-    Math.floor(Math.random() * 1296)
-      .toString(36)
-      .padStart(2, "0");
+    (runCounter++).toString(36).padStart(2, "0") +
+    Math.floor(Math.random() * 36).toString(36);
   return runSlug(kind, slug, token);
 }
 
@@ -134,7 +155,30 @@ type Spec = {
   progressPath: string;
   claudeBin: string;
   readOnlyTools: string[];
+  /** Per-launch overrides (from the Run dialog); each null field falls back to
+   *  the agent's frontmatter, then a built-in default. */
+  config: RunConfig;
+  /** Per-run scratch dir the orchestrator uses when a step needs a writable cwd
+   *  and neither the override nor the agent specifies one. */
+  scratchCwd: string;
+  /** Defaults the orchestrator applies when nothing else sets a value. */
+  defaults: { timeoutSec: number };
+  /** Concurrency semaphore: at most `maxConcurrent` runs execute a step at once. */
+  maxConcurrent: number;
+  slotsDir: string;
+  /** Optional webhook POSTed a JSON summary when the run finishes (or null). */
+  notifyWebhook: string | null;
 };
+
+/** Merge nullable override fields over a base config (override wins when set). */
+function mergeConfig(base: RunConfig, over: RunConfig): RunConfig {
+  return {
+    maxTurns: over.maxTurns ?? base.maxTurns ?? null,
+    timeoutSec: over.timeoutSec ?? base.timeoutSec ?? null,
+    permissionMode: over.permissionMode ?? base.permissionMode ?? null,
+    cwd: over.cwd ?? base.cwd ?? null,
+  };
+}
 
 /** Initial progress skeleton so the console shows steps before the run writes. */
 function initialProgress(spec: Spec): RunProgress {
@@ -153,11 +197,15 @@ function initialProgress(spec: Spec): RunProgress {
       state: "pending",
       startedAt: null,
       endedAt: null,
+      usage: null,
     })),
     currentStep: null,
     startedAt: null,
     endedAt: null,
     error: null,
+    config: spec.config,
+    usage: null,
+    artifacts: [],
   };
 }
 
@@ -197,6 +245,7 @@ function buildSpec(
   name: string,
   steps: SpecStep[],
   inputs: Record<string, string>,
+  config: RunConfig,
 ): Spec {
   const runId = newRunId(kind, slug);
   return {
@@ -212,6 +261,22 @@ function buildSpec(
     progressPath: progressPathFor(runId),
     claudeBin: CLAUDE_BIN,
     readOnlyTools: [...READ_ONLY_TOOLS],
+    config,
+    scratchCwd: path.join(AGENT_RUNS_ROOT, `${runId}.cwd`),
+    defaults: { timeoutSec: DEFAULT_TIMEOUT_SEC },
+    maxConcurrent: MAX_CONCURRENT,
+    slotsDir: SLOTS_DIR,
+    notifyWebhook: NOTIFY_WEBHOOK,
+  };
+}
+
+/** Drop undefined fields so overrides only carry what the caller actually set. */
+function cleanOverrides(o: RunConfig | undefined): RunConfig {
+  return {
+    maxTurns: o?.maxTurns ?? null,
+    timeoutSec: o?.timeoutSec ?? null,
+    permissionMode: o?.permissionMode ?? null,
+    cwd: o?.cwd ?? null,
   };
 }
 
@@ -219,7 +284,16 @@ function buildSpec(
 export function startAgentRun(
   agent: Agent,
   inputs: Record<string, string>,
+  overrides?: RunConfig,
 ): Promise<string> {
+  // Base config = the agent's own frontmatter; the dialog's overrides win.
+  // (permissionMode is validated against PERMISSION_MODES when parsed.)
+  const base: RunConfig = {
+    maxTurns: agent.maxTurns,
+    timeoutSec: agent.timeoutSec,
+    permissionMode: agent.permissionMode as RunConfig["permissionMode"],
+    cwd: agent.cwd,
+  };
   return spawnRun(
     buildSpec(
       "agent",
@@ -227,6 +301,7 @@ export function startAgentRun(
       agent.name || agent.slug,
       [{ agent: agent.slug, label: agent.name || agent.slug }],
       inputs,
+      mergeConfig(base, cleanOverrides(overrides)),
     ),
   );
 }
@@ -235,7 +310,10 @@ export function startAgentRun(
 export function startPipelineRun(
   pipeline: Pipeline,
   inputs: Record<string, string>,
+  overrides?: RunConfig,
 ): Promise<string> {
+  // Pipelines have no frontmatter config of their own — each step's agent
+  // supplies its own (read by the orchestrator). Overrides apply run-wide.
   return spawnRun(
     buildSpec(
       "pipeline",
@@ -246,8 +324,32 @@ export function startPipelineRun(
         label: s.as ? `${s.as} · ${s.agent}` : s.agent,
       })),
       inputs,
+      cleanOverrides(overrides),
     ),
   );
+}
+
+/**
+ * Re-run a past run with the same kind/slug/inputs (and optionally new config
+ * overrides). Reads the original spec sidecar. Returns the new runId.
+ */
+export async function rerunRun(
+  runId: string,
+  overrides?: RunConfig,
+): Promise<string> {
+  const raw = await fs.readFile(specPathFor(runId), "utf8").catch(() => null);
+  if (!raw) throw new Error("Original run spec is gone — cannot re-run");
+  const old = JSON.parse(raw) as Spec;
+  const config = mergeConfig(old.config ?? {}, cleanOverrides(overrides));
+  const fresh = buildSpec(
+    old.kind,
+    old.slug,
+    old.name,
+    old.steps,
+    old.inputs,
+    config,
+  );
+  return spawnRun(fresh);
 }
 
 /** Read a run's structured progress (null if the runId is unknown). */
@@ -262,13 +364,56 @@ export async function readProgress(runId: string): Promise<RunProgress | null> {
 /** Effective lifecycle: a run whose process died mid-flight reads as failed. */
 function effectiveState(p: RunProgress, running: boolean): RunLifecycle {
   if (running) return p.state;
-  if (p.state === "running" || p.state === "starting") return "failed";
+  if (p.state === "running" || p.state === "starting" || p.state === "queued")
+    return "failed";
   return p.state;
+}
+
+const ACTIVE_STATES: RunLifecycle[] = ["queued", "starting", "running"];
+
+/**
+ * If a run's file still says active but its process is gone (e.g. the box
+ * rebooted mid-run), persist a "failed" state so history/console stop showing a
+ * phantom "running". Returns the (possibly rewritten) progress.
+ */
+async function reconcileProgress(
+  runId: string,
+  p: RunProgress,
+  running: boolean,
+): Promise<RunProgress> {
+  if (running || !ACTIVE_STATES.includes(p.state)) return p;
+  const cur = p.currentStep != null ? p.steps[p.currentStep] : null;
+  if (cur && cur.state === "running") {
+    cur.state = "failed";
+    cur.endedAt = cur.endedAt ?? new Date().toISOString();
+  }
+  p.state = "failed";
+  p.error = p.error ?? "process exited before completing (reconciled)";
+  p.endedAt = p.endedAt ?? new Date().toISOString();
+  p.currentStep = null;
+  await fs
+    .writeFile(progressPathFor(runId), JSON.stringify(p, null, 2))
+    .catch(() => {});
+  return p;
+}
+
+/** Total run cost = sum of any step usage that reported a cost. */
+function totalCost(p: RunProgress): number | null {
+  let sum = 0;
+  let any = false;
+  for (const s of p.steps) {
+    if (s.usage?.costUsd != null) {
+      sum += s.usage.costUsd;
+      any = true;
+    }
+  }
+  return any ? sum : null;
 }
 
 /**
  * All runs, newest first — the run history. Scans the per-run progress files
- * under RUN_LOG_ROOT (each is a self-contained record + a sibling `.log`).
+ * under AGENT_RUNS_ROOT (each is a self-contained record + a sibling `.log`),
+ * reconciling dead-but-"running" entries and pruning ones past retention.
  */
 export async function listRuns(): Promise<RunSummary[]> {
   let entries: string[];
@@ -277,14 +422,24 @@ export async function listRuns(): Promise<RunSummary[]> {
   } catch {
     return [];
   }
+  const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
   const out: RunSummary[] = [];
   for (const f of entries) {
     if (!f.endsWith(".progress.json")) continue;
     const runId = f.slice(0, -".progress.json".length);
-    const p = await readProgress(runId);
+    let p = await readProgress(runId);
     if (!p) continue;
     const pid = await readPid(runId);
     const running = pid != null && pidAlive(pid);
+    p = await reconcileProgress(runId, p, running);
+
+    // Retention: drop finished runs older than the window entirely.
+    const ended = p.endedAt ? Date.parse(p.endedAt) : NaN;
+    if (!running && Number.isFinite(ended) && ended < cutoff) {
+      await deleteRun(runId);
+      continue;
+    }
+
     out.push({
       runId: p.runId,
       kind: p.kind,
@@ -297,10 +452,23 @@ export async function listRuns(): Promise<RunSummary[]> {
       stepsTotal: p.steps.length,
       startedAt: p.startedAt,
       endedAt: p.endedAt,
+      costUsd: totalCost(p),
     });
   }
   out.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""));
   return out;
+}
+
+/** Delete every finished (not-running) run. Returns how many were removed. */
+export async function clearFinishedRuns(): Promise<number> {
+  const runs = await listRuns();
+  let n = 0;
+  for (const r of runs) {
+    if (r.running) continue;
+    await deleteRun(r.runId);
+    n++;
+  }
+  return n;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -357,12 +525,16 @@ export async function stopRun(runId: string): Promise<RunStatus> {
 
 /** Delete a run's files (used by history to clear an entry). */
 export async function deleteRun(runId: string): Promise<void> {
-  await Promise.all(
-    [
+  await Promise.all([
+    ...[
       logPathFor(runId),
       pidPathFor(runId),
       specPathFor(runId),
       progressPathFor(runId),
     ].map((p) => fs.rm(p, { force: true })),
-  );
+    fs.rm(path.join(AGENT_RUNS_ROOT, `${runId}.cwd`), {
+      force: true,
+      recursive: true,
+    }),
+  ]);
 }

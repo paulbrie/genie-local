@@ -1,8 +1,11 @@
 import "server-only";
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, openSync, promises as fs } from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
 
 import { runSlug } from "@/lib/run-slug";
 
@@ -79,7 +82,9 @@ export async function statusFor(
 }
 
 /** Alive (slug, pid) pairs — one per pid file whose process is still running. */
-async function listRunningPids(): Promise<{ slug: string; pid: number }[]> {
+export async function listRunningPids(): Promise<
+  { slug: string; pid: number }[]
+> {
   let entries: string[];
   try {
     entries = await fs.readdir(RUN_LOG_ROOT);
@@ -111,7 +116,7 @@ const PAGE_SIZE = 4096;
  * every descendant inherits that pgid — so a group's total RSS is the memory of
  * the whole app (npm → node → next-server → workers). Returns bytes keyed by pgid.
  */
-async function rssBytesByProcessGroup(): Promise<Map<number, number>> {
+export async function rssBytesByProcessGroup(): Promise<Map<number, number>> {
   const totals = new Map<number, number>();
   let pids: string[];
   try {
@@ -141,6 +146,52 @@ async function rssBytesByProcessGroup(): Promise<Map<number, number>> {
     }),
   );
   return totals;
+}
+
+/**
+ * Map each currently-LISTENING TCP port to a pid holding it. Lets the dashboard
+ * treat an app as running when its configured port is up, even if the server
+ * wasn't started through the runner (e.g. `npm run dev` in a terminal) or its
+ * tracked pid died while an orphaned server kept the port. Uses `ss`; returns an
+ * empty map if it's unavailable, so callers degrade to pid-file detection.
+ */
+export async function listeningPortPids(): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileP("ss", ["-ltnH", "-p"], { timeout: 2000 }));
+  } catch {
+    return map;
+  }
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    // Columns: State Recv-Q Send-Q Local-Addr:Port Peer-Addr:Port [users:(…)].
+    // The first four are space-free, so the local address is reliably col 4;
+    // the pid lives in the trailing users:() field.
+    const cols = line.trim().split(/\s+/);
+    const local = cols[3];
+    if (!local) continue;
+    const port = Number(local.slice(local.lastIndexOf(":") + 1));
+    if (!Number.isFinite(port)) continue;
+    const m = /pid=(\d+)/.exec(line);
+    if (!m) continue;
+    if (!map.has(port)) map.set(port, Number(m[1]));
+  }
+  return map;
+}
+
+/** Process-group id of a pid, read from /proc; null if it's gone. */
+export async function pgidOf(pid: number): Promise<number | null> {
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    const rparen = stat.lastIndexOf(")");
+    if (rparen < 0) return null;
+    // After the comm field: fields[0]=state, fields[2]=pgrp (stat field 5).
+    const pgrp = Number(stat.slice(rparen + 2).split(" ")[2]);
+    return Number.isFinite(pgrp) ? pgrp : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
