@@ -20,6 +20,7 @@ out/
 
 # Runtime logs / pids / caches
 .run-logs/
+.stats-history/
 *.log
 *.pid
 
