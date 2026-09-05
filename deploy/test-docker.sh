@@ -93,9 +93,12 @@ else
   docker exec -d "${COMMON_ENV[@]}" \
     "$NAME" bash -lc 'bash /srv/genie-src/deploy/install.sh >/var/log/install.log 2>&1'
 
+  # The wizard only comes up after base apt + PostgreSQL 17 + Node install, which
+  # on a fresh container (cold apt cache, PGDG download) can take well over 5 min
+  # — more under load. Wait up to ~15 min; the loop breaks the moment /setup answers.
   echo "    waiting for the wizard to serve :3000/setup ..."
   code=""
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 450); do
     code=$(docker exec "$NAME" curl -s -o /dev/null -w '%{http_code}' \
              -H "X-Forwarded-Host: $EXPECT_HOST" http://127.0.0.1:3000/setup 2>/dev/null || true)
     [ "$code" = "200" ] && break
