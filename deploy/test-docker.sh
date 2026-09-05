@@ -100,7 +100,7 @@ else
   code=""
   for _ in $(seq 1 450); do
     code=$(docker exec "$NAME" curl -s -o /dev/null -w '%{http_code}' \
-             -H "X-Forwarded-Host: $EXPECT_HOST" http://127.0.0.1:3000/setup 2>/dev/null || true)
+             -H "Host: $EXPECT_HOST" http://127.0.0.1:3000/setup 2>/dev/null || true)
     [ "$code" = "200" ] && break
     docker exec "$NAME" grep -q "ERROR:" /var/log/install.log 2>/dev/null && break
     sleep 2
@@ -111,7 +111,7 @@ else
     exit 1
   fi
   # Verify /setup actually shows the detected host, then confirm it.
-  docker exec "$NAME" curl -s -H "X-Forwarded-Host: $EXPECT_HOST" http://127.0.0.1:3000/setup \
+  docker exec "$NAME" curl -s -H "Host: $EXPECT_HOST" http://127.0.0.1:3000/setup \
     | grep -q "$EXPECT_HOST" && echo "    /setup shows detected host: $EXPECT_HOST"
   docker exec "$NAME" curl -s -o /dev/null -w '    POST /setup/confirm -> %{http_code}\n' \
     -X POST http://127.0.0.1:3000/setup/confirm --data "host=$EXPECT_HOST"
