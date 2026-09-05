@@ -60,7 +60,7 @@ export function isServiceUnit(v: unknown): v is string {
  */
 const CURATED_UNITS = new Set([
   "admin.service",
-  "admin-dev.service", // on-demand hot-reload instance (/admin-dev :3002)
+  "admin-dev.service", // on-demand hot-reload instance (/admin-dev :3003)
   "nginx.service",
   "docker.service",
   "containerd.service",

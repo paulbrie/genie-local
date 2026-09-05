@@ -58,13 +58,13 @@ understand the topology, or to set things up manually.
                                    │
                           nginx  (:3000)               /etc/nginx/sites-available/ft-admin
                           ├── /               → 302 /admin
-                          ├── /admin          → 127.0.0.1:3001   (admin app, PROD: next start)
-                          ├── /admin-dev      → 127.0.0.1:3002   (admin app, DEV: next dev, on demand)
+                          ├── /admin          → 127.0.0.1:3002   (admin app, PROD: next start)
+                          ├── /admin-dev      → 127.0.0.1:3003   (admin app, DEV: next dev, on demand)
                           └── /projects/<p>/… → 127.0.0.1:<port> (supervised apps, per-project)
                                    │
         ┌──────────────────────────┴───────────────────────────┐
-        │ admin.service      next start -p 3001  (PROD, .next-prod)  │
-        │ admin-dev.service  next dev   -p 3002  (DEV, on demand)    │
+        │ admin.service      next start -p 3002  (PROD, .next-prod)  │
+        │ admin-dev.service  next dev   -p 3003  (DEV, on demand)    │
         │   user genie  ·  Postgres  ·  APP_PUBLIC_HOSTS from setup  │
         └───────────────────────────────────────────────────────────┘
         genie-stats.service → /run/genie/stats.jsonl  (CPU/mem/disk/process feed)
@@ -268,7 +268,7 @@ hand — idempotently:
 ```ini
 # /etc/systemd/system/admin.service
 [Unit]
-Description=Projects Supervisor (admin Next.js app — DEV behind nginx on :3001)
+Description=Projects Supervisor — admin (Next.js PROD, /admin on :3002)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -277,8 +277,12 @@ Type=simple
 User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
-Environment=PORT=3001
-ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next dev -p 3001 -H 0.0.0.0
+Environment=PORT=3002
+Environment=APP_PUBLIC_HOSTS=<public-host>
+Environment=APP_BASE_PATH=/admin
+Environment=NEXT_PUBLIC_BASE_PATH=/admin
+Environment=APP_DIST_DIR=.next-prod
+ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next start -p 3002 -H 0.0.0.0
 KillMode=process
 Restart=on-failure
 RestartSec=3
@@ -317,7 +321,7 @@ server {
     location = / { return 302 /admin; }
 
     location /admin {                                 # PROD (next start)
-        proxy_pass http://127.0.0.1:3001;
+        proxy_pass http://127.0.0.1:3002;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Upgrade $http_upgrade;      # HMR websocket
@@ -326,7 +330,7 @@ server {
     }
 
     location /admin-dev {                             # DEV (next dev, on demand)
-        proxy_pass http://127.0.0.1:3002;            # longest-prefix wins over /admin
+        proxy_pass http://127.0.0.1:3003;            # longest-prefix wins over /admin
     }
 
     # Per-project app locations (e.g. /projects/<slug>/… → 127.0.0.1:<port>)
@@ -362,7 +366,7 @@ For automated UI checks, use the headless browser in `tools/` (see
 `tools/README.md`): import `playwright-core`, `chromium.launch({ headless:true,
 args:['--no-sandbox'] })`, and log in via the form or by setting the
 `admin_session` cookie. **Reach the app via its public host**, not
-`127.0.0.1:3001` — the raw dev origin 403s `/_next/*` (see §5).
+`127.0.0.1:3002` — the raw dev origin 403s `/_next/*` (see §5).
 
 ---
 

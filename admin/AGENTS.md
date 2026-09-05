@@ -19,14 +19,14 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   host is **not hardcoded** — the setup wizard (`deploy/setup-server.mjs`)
   captures it at install time and the installer bakes it into the systemd units
   as `APP_PUBLIC_HOSTS` (read by `next.config.ts`). Public traffic → box
-  **:3000** (nginx) → the app on **:3001** (prod) or **:3002** (dev).
+  **:3000** (nginx) → the app on **:3002** (prod) or **:3003** (dev).
 - **Two instances from this one working copy**, differing only by per-unit env
   (`APP_BASE_PATH` / `NEXT_PUBLIC_BASE_PATH` / `APP_DIST_DIR`, see `next.config.ts`):
-  - **`admin.service`** — PROD at **`/admin`** on **:3001**: `next start` serving
+  - **`admin.service`** — PROD at **`/admin`** on **:3002**: `next start` serving
     the `.next-prod` build. This is the live site. Source edits do **not** show up
     until you rebuild — ship with **`sudo admin-ctl deploy`** (builds `.next-prod`
     then restarts `admin.service`; add `--migrate` to run drizzle first).
-  - **`admin-dev.service`** — on-demand DEV at **`/admin-dev`** on **:3002**:
+  - **`admin-dev.service`** — on-demand DEV at **`/admin-dev`** on **:3003**:
     `next dev` (`.next-dev` distDir) with hot-reload, for previewing changes on the
     live box before deploying. Not started at boot; control it via
     **`sudo admin-ctl dev-start|dev-stop|dev-restart`** (or the admin UI).
@@ -40,8 +40,8 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   (`ops/admin-supervisor.sudoers`); deploy progress streams to
   `/tmp/projects/admin-deploy.log` (the Logs page).
 - nginx config: `/etc/nginx/sites-available/ft-admin` (`sudo nginx -t &&
-  sudo systemctl reload nginx` after edits) — routes `/admin`→:3001 and
-  `/admin-dev`→:3002 (longest-prefix, so they never collide). It also proxies each
+  sudo systemctl reload nginx` after edits) — routes `/admin`→:3002 and
+  `/admin-dev`→:3003 (longest-prefix, so they never collide). It also proxies each
   project at `/projects/<name>/` → a per-port app (generated in `nginx/projects.conf`).
 - **Auth is enforced in-app by `src/proxy.ts`** — Next 16's "Proxy" (the renamed
   Middleware; `middleware.ts` is deprecated). It gates every route behind a signed

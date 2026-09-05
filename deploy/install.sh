@@ -4,8 +4,8 @@
 #
 # Reproduces the reference box documented in /opt/project/README.md:
 #   Node 20 · PostgreSQL 17 · nginx · tmux · Claude Code CLI · the admin
-#   Next.js dashboard (systemd: PROD `next start` at /admin on :3001 and an
-#   on-demand DEV `next dev` at /admin-dev on :3002, both behind nginx :3000),
+#   Next.js dashboard (systemd: PROD `next start` at /admin on :3002 and an
+#   on-demand DEV `next dev` at /admin-dev on :3003, both behind nginx :3000),
 #   the genie-stats publisher, and (optional) code-server.
 #
 # Idempotent: safe to re-run. Every step checks current state first.
@@ -377,12 +377,12 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-# admin.service — PRODUCTION instance: serves the built app at /admin on :3001
+# admin.service — PRODUCTION instance: serves the built app at /admin on :3002
 # via `next start` (reads the .next-prod build). basePath/distDir come from env
 # (see next.config.ts). nginx on :3000 fronts it.
 cat > /etc/systemd/system/admin.service <<EOF
 [Unit]
-Description=Projects Supervisor — admin (Next.js PROD, /admin on :3001)
+Description=Projects Supervisor — admin (Next.js PROD, /admin on :3002)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -391,12 +391,12 @@ Type=simple
 User=$GENIE_USER
 Group=$GENIE_USER
 WorkingDirectory=$INSTALL_DIR/admin
-Environment=PORT=3001
+Environment=PORT=3002
 Environment=APP_PUBLIC_HOSTS=$PUBLIC_HOST
 Environment=APP_BASE_PATH=/admin
 Environment=NEXT_PUBLIC_BASE_PATH=/admin
 Environment=APP_DIST_DIR=.next-prod
-ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next start -p 3001 -H 0.0.0.0
+ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next start -p 3002 -H 0.0.0.0
 # KillMode=process so restarting admin (e.g. on deploy) does NOT kill the
 # project dev servers launched from the UI (they live in this unit's cgroup).
 KillMode=process
@@ -408,11 +408,11 @@ WantedBy=multi-user.target
 EOF
 
 # admin-dev.service — on-demand DEV instance: hot-reload Next.js at /admin-dev on
-# :3002 (own .next-dev distDir so it never clobbers the prod build). NO [Install]
+# :3003 (own .next-dev distDir so it never clobbers the prod build). NO [Install]
 # section: it is started/stopped from the admin UI (admin-ctl), not at boot.
 cat > /etc/systemd/system/admin-dev.service <<EOF
 [Unit]
-Description=Projects Supervisor — admin-dev (Next.js DEV, /admin-dev on :3002)
+Description=Projects Supervisor — admin-dev (Next.js DEV, /admin-dev on :3003)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -421,17 +421,17 @@ Type=simple
 User=$GENIE_USER
 Group=$GENIE_USER
 WorkingDirectory=$INSTALL_DIR/admin
-Environment=PORT=3002
+Environment=PORT=3003
 Environment=APP_PUBLIC_HOSTS=$PUBLIC_HOST
 Environment=APP_BASE_PATH=/admin-dev
 Environment=NEXT_PUBLIC_BASE_PATH=/admin-dev
 Environment=APP_DIST_DIR=.next-dev
-ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next dev -p 3002 -H 0.0.0.0
+ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next dev -p 3003 -H 0.0.0.0
 KillMode=process
 Restart=on-failure
 RestartSec=3
 EOF
-ok "genie-stats.service, admin.service (prod :3001), admin-dev.service (dev :3002)"
+ok "genie-stats.service, admin.service (prod :3002), admin-dev.service (dev :3003)"
 
 # admin-ctl — root-owned privileged helper the admin UI runs via a scoped
 # NOPASSWD sudoers rule to control the prod/dev services and ship builds. The
@@ -535,16 +535,16 @@ server {
     proxy_read_timeout 300s;
     proxy_buffering off;            # let HMR/SSE streams through (dev hot-reload)
 
-    # Admin Next.js app — PROD (basePath /admin) on :3001.
+    # Admin Next.js app — PROD (basePath /admin) on :3002.
     location /admin {
-        proxy_pass http://127.0.0.1:3001;
+        proxy_pass http://127.0.0.1:3002;
     }
 
-    # Hot-reload DEV instance (basePath /admin-dev) on :3002. nginx longest-prefix
-    # matching sends /admin-dev* here and everything else under /admin* to :3001,
+    # Hot-reload DEV instance (basePath /admin-dev) on :3003. nginx longest-prefix
+    # matching sends /admin-dev* here and everything else under /admin* to :3002,
     # so the two never collide. Started on demand from the admin UI (admin-ctl).
     location /admin-dev {
-        proxy_pass http://127.0.0.1:3002;
+        proxy_pass http://127.0.0.1:3003;
     }
 
     location = / { return 302 /admin; }
@@ -638,8 +638,8 @@ cat <<EOF
   DB          : postgresql://$DB_USER:***@localhost:5432/$DB_NAME
   Admin login : $ADMIN_USER / (see admin/.env.local)
 
-  Admin URLs  : /admin      → PROD (next start, :3001, .next-prod)
-                /admin-dev  → DEV  (next dev,  :3002) — start via the UI/admin-ctl
+  Admin URLs  : /admin      → PROD (next start, :3002, .next-prod)
+                /admin-dev  → DEV  (next dev,  :3003) — start via the UI/admin-ctl
 
   Verify:
     systemctl is-active admin.service genie-stats.service postgresql nginx

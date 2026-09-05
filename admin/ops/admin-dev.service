@@ -1,8 +1,8 @@
 # Install as /etc/systemd/system/admin-dev.service.
-# On-demand dev instance: hot-reload Next.js served at /admin-dev on :3002.
+# On-demand dev instance: hot-reload Next.js served at /admin-dev on :3003.
 # No [Install] section — started/stopped from the UI (admin-ctl), not at boot.
 [Unit]
-Description=Projects Supervisor — admin-dev (Next.js DEV, /admin-dev on :3002)
+Description=Projects Supervisor — admin-dev (Next.js DEV, /admin-dev on :3003)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -11,14 +11,14 @@ Type=simple
 User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
-Environment=PORT=3002
+Environment=PORT=3003
 # Public host(s) the app is reached at, comma-separated (see admin.service).
 # Required for /admin-dev's cross-origin /_next/* dev resources (else 403).
 Environment=APP_PUBLIC_HOSTS=
 Environment=APP_BASE_PATH=/admin-dev
 Environment=NEXT_PUBLIC_BASE_PATH=/admin-dev
 Environment=APP_DIST_DIR=.next-dev
-ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next dev -p 3002 -H 0.0.0.0
+ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next dev -p 3003 -H 0.0.0.0
 # Don't kill project dev servers launched from the UI on stop/restart.
 KillMode=process
 Restart=on-failure

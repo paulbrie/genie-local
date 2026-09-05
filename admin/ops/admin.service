@@ -1,8 +1,8 @@
 # Install as /etc/systemd/system/admin.service (the PROD instance).
-# Serves the built app (.next-prod) at /admin on :3001 via `next start`.
+# Serves the built app (.next-prod) at /admin on :3002 via `next start`.
 # Ship changes with `sudo admin-ctl deploy` (rebuild + restart).
 [Unit]
-Description=Projects Supervisor — admin (Next.js PROD, /admin on :3001)
+Description=Projects Supervisor — admin (Next.js PROD, /admin on :3002)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -11,7 +11,7 @@ Type=simple
 User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
-Environment=PORT=3001
+Environment=PORT=3002
 # Public host(s) the app is reached at, comma-separated. next.config.ts reads
 # this for allowedDevOrigins + Server Actions CSRF — MUST be set or Server
 # Actions 403. deploy/install.sh fills it in from the setup wizard.
@@ -19,7 +19,7 @@ Environment=APP_PUBLIC_HOSTS=
 Environment=APP_BASE_PATH=/admin
 Environment=NEXT_PUBLIC_BASE_PATH=/admin
 Environment=APP_DIST_DIR=.next-prod
-ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next start -p 3001 -H 0.0.0.0
+ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next start -p 3002 -H 0.0.0.0
 # KillMode=process so restarting admin (e.g. on deploy) does NOT kill the
 # project dev servers launched from the UI (they live in this unit's cgroup).
 KillMode=process

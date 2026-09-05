@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 // Public hostnames this app is served under. There is NO hardcoded domain: the
 // setup wizard (deploy/setup-server.mjs) detects the host the box is reached at
 // and the installer bakes it into the systemd units as APP_PUBLIC_HOSTS
-// (comma-separated). nginx terminates TLS and proxies to :3001 (prod) / :3002
+// (comma-separated). nginx terminates TLS and proxies to :3002 (prod) / :3003
 // (dev). Both the dev-origin allowlist and the Server Actions CSRF allowlist
 // must include every domain the app is reached at, or Next 16 blocks /_next/*
 // dev resources (403) and Server Actions (CSRF).
@@ -16,8 +16,8 @@ const nextConfig: NextConfig = {
   // Served behind Nginx at https://<public-host>/admin (prod) and /admin-dev
   // (the hot-reload dev instance). Both run from THIS working copy;
   // they differ only by env, set per systemd unit:
-  //   prod → APP_BASE_PATH=/admin      APP_DIST_DIR=.next-prod  (next start :3001)
-  //   dev  → APP_BASE_PATH=/admin-dev  APP_DIST_DIR=.next-dev   (next dev   :3002)
+  //   prod → APP_BASE_PATH=/admin      APP_DIST_DIR=.next-prod  (next start :3002)
+  //   dev  → APP_BASE_PATH=/admin-dev  APP_DIST_DIR=.next-dev   (next dev   :3003)
   // Separate distDir keeps `next dev` and `next build/start` from clobbering
   // each other's `.next`. Defaults preserve the original single-instance setup.
   // next/link, router, and static assets are automatically prefixed with basePath.
