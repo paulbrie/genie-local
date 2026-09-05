@@ -26,7 +26,7 @@ if command -v rsync >/dev/null; then
   rsync -a \
     --exclude '.git' \
     --exclude 'node_modules' \
-    --exclude '.next' \
+    --exclude '.next*' \
     --exclude 'projects/' \
     --exclude '.run-logs' \
     --exclude 'admin/.env.local' \
@@ -35,7 +35,7 @@ if command -v rsync >/dev/null; then
 else
   mkdir -p "$STAGE/src"
   tar -C "$REPO_ROOT" \
-    --exclude='.git' --exclude='node_modules' --exclude='.next' \
+    --exclude='.git' --exclude='node_modules' --exclude='.next*' \
     --exclude='projects' --exclude='.run-logs' \
     --exclude='admin/.env.local' --exclude='.mcp.json' \
     -cf - . | tar -C "$STAGE/src" -xf -

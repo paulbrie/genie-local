@@ -582,6 +582,14 @@ fi
 log "Building admin for production (.next-prod)"
 BUILD_LOG=/var/log/genie-admin-build.log
 BUILD_ENV="APP_BASE_PATH=/admin NEXT_PUBLIC_BASE_PATH=/admin APP_DIST_DIR=.next-prod NODE_ENV=production"
+# Clean stale build dirs first. tsconfig.json includes the sibling instance's
+# generated types (.next-dev/.next-prod), so a prod build type-checks whatever
+# is on disk — a stale .next-dev (e.g. copied in, or from a prior run) makes
+# `next build` fail with TS2307. These dirs are gitignored (a fresh clone has
+# none); remove any that a reused tree carries. Leave .next-dev alone if the dev
+# instance is actively running (it keeps its own copy fresh).
+rm -rf "$INSTALL_DIR/admin/.next" "$INSTALL_DIR/admin/.next-prod"
+systemctl is-active --quiet admin-dev.service || rm -rf "$INSTALL_DIR/admin/.next-dev"
 build_prod() { as_genie "$INSTALL_DIR/admin" "$BUILD_ENV npm run build" >"$BUILD_LOG" 2>&1; }
 built=0
 if build_prod; then built=1; else
