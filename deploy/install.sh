@@ -4,7 +4,8 @@
 #
 # Reproduces the reference box documented in /opt/project/README.md:
 #   Node 20 · PostgreSQL 17 · nginx · tmux · Claude Code CLI · the admin
-#   Next.js dashboard (systemd, dev server on :3001 behind nginx :3000),
+#   Next.js dashboard (systemd: PROD `next start` at /admin on :3001 and an
+#   on-demand DEV `next dev` at /admin-dev on :3002, both behind nginx :3000),
 #   the genie-stats publisher, and (optional) code-server.
 #
 # Idempotent: safe to re-run. Every step checks current state first.
@@ -18,7 +19,9 @@
 #   REPO_URL            Git repo to clone if no SOURCE_DIR        (default: https://github.com/paulbrie/genie-local.git)
 #   SOURCE_DIR          Copy this local tree instead of cloning   (default: unset)
 #   INSTALL_DIR         Where the tree lives                      (default: /opt/project)
-#   PUBLIC_HOST         Public hostname for nginx/allowedDevOrigins (default: ft.cloud.teleporthq.ai)
+#   PUBLIC_HOST         Public hostname for nginx/APP_PUBLIC_HOSTS. If unset, an
+#                       interactive setup wizard on :3000 (/setup) collects it
+#                       from the URL you open — nothing is hardcoded.
 #   DB_NAME / DB_USER / DB_PASSWORD   Postgres db/role/password   (password: generated if unset)
 #   ADMIN_USER / ADMIN_PASSWORD       Dashboard login            (password: generated if unset)
 #   GENIE_VPS_TOKEN     Bearer token for the genie-* MCP servers  (default: placeholder)
@@ -35,7 +38,10 @@ GENIE_USER="${GENIE_USER:-genie}"
 REPO_URL="${REPO_URL:-https://github.com/paulbrie/genie-local.git}"
 SOURCE_DIR="${SOURCE_DIR:-}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/project}"
-PUBLIC_HOST="${PUBLIC_HOST:-ft.cloud.teleporthq.ai}"
+# No default: the setup wizard (below) collects it from the URL the operator
+# opens, unless PUBLIC_HOST is provided here for a non-interactive install.
+PUBLIC_HOST="${PUBLIC_HOST:-}"
+SETUP_PORT="${SETUP_PORT:-3000}"
 
 DB_NAME="${DB_NAME:-admin_dashboard}"
 DB_USER="${DB_USER:-admin_app}"
@@ -135,6 +141,46 @@ else
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - >/dev/null 2>&1
   apt-get install -y -qq nodejs >/dev/null
   ok "Node $(node -v), npm $(npm -v)"
+fi
+
+# ---------------------------------------------------------------------------
+# 2b. Setup wizard — collect the public host
+# ---------------------------------------------------------------------------
+# Nothing about the public domain is hardcoded: it is whatever URL the operator
+# opens this box at. We serve a tiny page on the exposed port 3000; opening the
+# box's public URL at /setup shows the detected host (from the proxied Host
+# header) and, on confirm, writes it out. The collected host is then baked into
+# the systemd units (APP_PUBLIC_HOSTS, read by next.config.ts) and the nginx
+# server_name. Skipped when PUBLIC_HOST is supplied (non-interactive installs).
+if [[ -z "$PUBLIC_HOST" ]]; then
+  log "Starting setup wizard on :$SETUP_PORT"
+  # Free the port in case a previous nginx run is holding :3000.
+  systemctl stop nginx >/dev/null 2>&1 || true
+  HOST_FILE="$(mktemp)"
+  SETUP_HOST_FILE="$HOST_FILE" SETUP_PORT="$SETUP_PORT" \
+    node "$SCRIPT_DIR/setup-server.mjs" &
+  WIZ_PID=$!
+  sleep 1
+  if ! kill -0 "$WIZ_PID" 2>/dev/null; then
+    die "Setup wizard failed to start (is port $SETUP_PORT free?). Re-run with PUBLIC_HOST=<host> to skip it."
+  fi
+  echo
+  warn "ACTION REQUIRED: open this box's public URL at /setup in a browser,"
+  warn "  e.g. https://<your-domain>/setup  — confirm the hostname to continue."
+  echo
+  # Wait (up to 1h) for the operator to confirm; the wizard writes the host then exits.
+  for _ in $(seq 1 3600); do
+    [[ -s "$HOST_FILE" ]] && break
+    kill -0 "$WIZ_PID" 2>/dev/null || break
+    sleep 1
+  done
+  PUBLIC_HOST="$(tr -d '[:space:]' < "$HOST_FILE" 2>/dev/null || true)"
+  kill "$WIZ_PID" >/dev/null 2>&1 || true
+  rm -f "$HOST_FILE"
+  [[ -n "$PUBLIC_HOST" ]] || die "Setup wizard did not capture a public host (timed out?)."
+  ok "public host confirmed: $PUBLIC_HOST"
+else
+  ok "public host provided: $PUBLIC_HOST (wizard skipped)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -331,9 +377,12 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+# admin.service — PRODUCTION instance: serves the built app at /admin on :3001
+# via `next start` (reads the .next-prod build). basePath/distDir come from env
+# (see next.config.ts). nginx on :3000 fronts it.
 cat > /etc/systemd/system/admin.service <<EOF
 [Unit]
-Description=Projects Supervisor (admin Next.js app — DEV behind nginx on :3001)
+Description=Projects Supervisor — admin (Next.js PROD, /admin on :3001)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -343,9 +392,13 @@ User=$GENIE_USER
 Group=$GENIE_USER
 WorkingDirectory=$INSTALL_DIR/admin
 Environment=PORT=3001
-# Dev server (hot-reload) on :3001; nginx on :3000 fronts it.
-ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next dev -p 3001 -H 0.0.0.0
-# Do NOT kill child processes (project dev servers) when this service restarts.
+Environment=APP_PUBLIC_HOSTS=$PUBLIC_HOST
+Environment=APP_BASE_PATH=/admin
+Environment=NEXT_PUBLIC_BASE_PATH=/admin
+Environment=APP_DIST_DIR=.next-prod
+ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next start -p 3001 -H 0.0.0.0
+# KillMode=process so restarting admin (e.g. on deploy) does NOT kill the
+# project dev servers launched from the UI (they live in this unit's cgroup).
 KillMode=process
 Restart=on-failure
 RestartSec=3
@@ -353,7 +406,53 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
-ok "genie-stats.service, admin.service"
+
+# admin-dev.service — on-demand DEV instance: hot-reload Next.js at /admin-dev on
+# :3002 (own .next-dev distDir so it never clobbers the prod build). NO [Install]
+# section: it is started/stopped from the admin UI (admin-ctl), not at boot.
+cat > /etc/systemd/system/admin-dev.service <<EOF
+[Unit]
+Description=Projects Supervisor — admin-dev (Next.js DEV, /admin-dev on :3002)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=$GENIE_USER
+Group=$GENIE_USER
+WorkingDirectory=$INSTALL_DIR/admin
+Environment=PORT=3002
+Environment=APP_PUBLIC_HOSTS=$PUBLIC_HOST
+Environment=APP_BASE_PATH=/admin-dev
+Environment=NEXT_PUBLIC_BASE_PATH=/admin-dev
+Environment=APP_DIST_DIR=.next-dev
+ExecStart=/usr/bin/node $INSTALL_DIR/admin/node_modules/next/dist/bin/next dev -p 3002 -H 0.0.0.0
+KillMode=process
+Restart=on-failure
+RestartSec=3
+EOF
+ok "genie-stats.service, admin.service (prod :3001), admin-dev.service (dev :3002)"
+
+# admin-ctl — root-owned privileged helper the admin UI runs via a scoped
+# NOPASSWD sudoers rule to control the prod/dev services and ship builds. The
+# helper hardcodes APP_DIR=/opt/project/admin, so retarget it if INSTALL_DIR
+# differs. The sudoers file references the fixed /usr/local/bin/admin-ctl path.
+if [[ -f "$INSTALL_DIR/admin/ops/admin-ctl" ]]; then
+  sed "s#^APP_DIR=/opt/project/admin#APP_DIR=$INSTALL_DIR/admin#" \
+    "$INSTALL_DIR/admin/ops/admin-ctl" > /usr/local/bin/admin-ctl
+  chown root:root /usr/local/bin/admin-ctl
+  chmod 0755 /usr/local/bin/admin-ctl
+  install -o root -g root -m 0440 \
+    "$INSTALL_DIR/admin/ops/admin-supervisor.sudoers" /etc/sudoers.d/admin-supervisor
+  if visudo -cf /etc/sudoers.d/admin-supervisor >/dev/null 2>&1; then
+    ok "admin-ctl + scoped sudoers (genie -> admin-ctl: deploy/dev controls)"
+  else
+    rm -f /etc/sudoers.d/admin-supervisor
+    warn "admin-supervisor sudoers failed validation; removed. UI deploy/dev controls disabled."
+  fi
+else
+  warn "admin/ops/admin-ctl not found; UI deploy/dev controls will be unavailable."
+fi
 
 # Per-minute persistent stats sampler (cron). The genie-stats daemon feeds
 # /run/genie/stats.jsonl (tmpfs, wiped on reboot); this copies a compact snapshot
@@ -434,9 +533,16 @@ server {
     proxy_read_timeout 300s;
     proxy_buffering off;            # let HMR/SSE streams through (dev hot-reload)
 
-    # Admin Next.js app (basePath /admin) on :3001.
+    # Admin Next.js app — PROD (basePath /admin) on :3001.
     location /admin {
         proxy_pass http://127.0.0.1:3001;
+    }
+
+    # Hot-reload DEV instance (basePath /admin-dev) on :3002. nginx longest-prefix
+    # matching sends /admin-dev* here and everything else under /admin* to :3001,
+    # so the two never collide. Started on demand from the admin UI (admin-ctl).
+    location /admin-dev {
+        proxy_pass http://127.0.0.1:3002;
     }
 
     location = / { return 302 /admin; }
@@ -465,10 +571,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 12b. Initial production build (.next-prod)
+# ---------------------------------------------------------------------------
+# admin.service runs `next start`, which requires a prebuilt app. Produce
+# .next-prod with the prod basePath baked in (NEXT_PUBLIC_* is inlined at build
+# time). On later deploys the admin UI's Deploy button (admin-ctl) rebuilds this.
+# The first build on a fresh box occasionally fails transiently (native
+# toolchain warmup under load); a failed/partial build leaves `next start`
+# crash-looping, so we log the output, retry once, and verify BUILD_ID exists.
+log "Building admin for production (.next-prod)"
+BUILD_LOG=/var/log/genie-admin-build.log
+BUILD_ENV="APP_BASE_PATH=/admin NEXT_PUBLIC_BASE_PATH=/admin APP_DIST_DIR=.next-prod NODE_ENV=production"
+build_prod() { as_genie "$INSTALL_DIR/admin" "$BUILD_ENV npm run build" >"$BUILD_LOG" 2>&1; }
+built=0
+if build_prod; then built=1; else
+  warn "next build failed — retrying once (log: $BUILD_LOG)"
+  sleep 2
+  build_prod && built=1
+fi
+if [[ "$built" == 1 && -f "$INSTALL_DIR/admin/.next-prod/BUILD_ID" ]]; then
+  ok "production build complete (.next-prod)"
+else
+  warn "next build did not produce a usable .next-prod; admin.service (next start)"
+  warn "  will crash-loop until it succeeds. Log: $BUILD_LOG"
+  warn "  retry: cd $INSTALL_DIR/admin && $BUILD_ENV npm run build"
+fi
+
+# ---------------------------------------------------------------------------
 # 13. Enable + start services
 # ---------------------------------------------------------------------------
 if [[ "$START_SERVICES" == "1" ]]; then
   log "Enabling and starting services"
+  # admin-dev.service is intentionally NOT enabled/started here: it has no
+  # [Install] section and is launched on demand from the admin UI (admin-ctl).
   UNITS=(admin.service)
   [[ -f "$STATS_GLOBAL/dist/daemon.js" ]] && UNITS+=(genie-stats.service)
   [[ -f /etc/systemd/system/code-server.service ]] && UNITS+=(code-server.service)
@@ -493,10 +628,15 @@ cat <<EOF
   DB          : postgresql://$DB_USER:***@localhost:5432/$DB_NAME
   Admin login : $ADMIN_USER / (see admin/.env.local)
 
+  Admin URLs  : /admin      → PROD (next start, :3001, .next-prod)
+                /admin-dev  → DEV  (next dev,  :3002) — start via the UI/admin-ctl
+
   Verify:
     systemctl is-active admin.service genie-stats.service postgresql nginx
-    curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/    # -> 302
-    curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/admin/login
+    curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/            # -> 302
+    curl -s -o /dev/null -w '%{http_code}\\n' http://127.0.0.1:3000/admin/login # -> 200
+    sudo -u $GENIE_USER sudo -n admin-ctl status                               # prod/dev/deploy
+    sudo -u $GENIE_USER sudo -n admin-ctl dev-start                            # bring up /admin-dev
 
   Secrets written to: $INSTALL_DIR/admin/.env.local  (chmod 600)
   MCP token:          edit $INSTALL_DIR/.mcp.json if it says REPLACE_WITH_...

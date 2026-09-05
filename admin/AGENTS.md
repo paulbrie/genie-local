@@ -15,21 +15,34 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 
 ## How it runs
 
-- Served publicly at **`https://ft.cloud.teleporthq.ai/admin`** via nginx.
-  Public traffic → container **:3000** (nginx) → this app on **:3001**.
-- `basePath: '/admin'` (see `next.config.ts`) — `next/link`/router/static assets
-  are auto-prefixed. Raw `<a href>` is **not** prefixed: use it only to link to
-  the live project apps at `/projects/<slug>` (outside this app).
-- Runs under systemd as `admin.service` (`next dev -p 3001 -H 0.0.0.0`, user
-  `genie`). It's a **dev server**, so source edits hot-reload with no rebuild.
-  Only `next.config.ts` / `.env.local` changes need
-  `sudo systemctl restart admin.service`. Logs: `journalctl -u admin.service -f`.
-  (A production build would be `npm run build && next start`, but that's not how
-  it currently runs.) The unit sets **`KillMode=process`** so a restart does not
-  kill project dev servers launched from the UI (see `src/lib/runner.ts`).
+- Served publicly at **`https://<public-host>/admin`** via nginx. The public
+  host is **not hardcoded** — the setup wizard (`deploy/setup-server.mjs`)
+  captures it at install time and the installer bakes it into the systemd units
+  as `APP_PUBLIC_HOSTS` (read by `next.config.ts`). Public traffic → box
+  **:3000** (nginx) → the app on **:3001** (prod) or **:3002** (dev).
+- **Two instances from this one working copy**, differing only by per-unit env
+  (`APP_BASE_PATH` / `NEXT_PUBLIC_BASE_PATH` / `APP_DIST_DIR`, see `next.config.ts`):
+  - **`admin.service`** — PROD at **`/admin`** on **:3001**: `next start` serving
+    the `.next-prod` build. This is the live site. Source edits do **not** show up
+    until you rebuild — ship with **`sudo admin-ctl deploy`** (builds `.next-prod`
+    then restarts `admin.service`; add `--migrate` to run drizzle first).
+  - **`admin-dev.service`** — on-demand DEV at **`/admin-dev`** on **:3002**:
+    `next dev` (`.next-dev` distDir) with hot-reload, for previewing changes on the
+    live box before deploying. Not started at boot; control it via
+    **`sudo admin-ctl dev-start|dev-stop|dev-restart`** (or the admin UI).
+- `basePath` comes from `APP_BASE_PATH` (`/admin` prod, `/admin-dev` dev) —
+  `next/link`/router/static assets are auto-prefixed. Raw `<a href>` is **not**
+  prefixed: use it only to link to the live project apps at `/projects/<slug>`.
+- Both units set **`KillMode=process`** so restarting them does not kill project
+  dev servers launched from the UI (see `src/lib/runner.ts`). Logs:
+  `journalctl -u admin.service -f` (or `-u admin-dev.service`). `admin-ctl` is a
+  root-owned helper the app runs via a scoped NOPASSWD sudoers rule
+  (`ops/admin-supervisor.sudoers`); deploy progress streams to
+  `/tmp/projects/admin-deploy.log` (the Logs page).
 - nginx config: `/etc/nginx/sites-available/ft-admin` (`sudo nginx -t &&
-  sudo systemctl reload nginx` after edits). It also proxies each project at
-  `/projects/<name>/` → a per-project port (roa 4111, godmother 4102, hmetal 4103).
+  sudo systemctl reload nginx` after edits) — routes `/admin`→:3001 and
+  `/admin-dev`→:3002 (longest-prefix, so they never collide). It also proxies each
+  project at `/projects/<name>/` → a per-port app (generated in `nginx/projects.conf`).
 - **Auth is enforced in-app by `src/proxy.ts`** — Next 16's "Proxy" (the renamed
   Middleware; `middleware.ts` is deprecated). It gates every route behind a signed
   session cookie (`admin_session`, HMAC-SHA256 via `src/lib/session.ts`, key =
@@ -42,14 +55,16 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   the login page). NOTE: proxy sees the basePath-STRIPPED path (`/admin/db` → `/db`).
 - Server Actions require `experimental.serverActions.allowedOrigins` to include
   the public domain — the proxy changes the origin, so dropping this breaks
-  notes/tasks/rescan with a CSRF error.
-- Because we run **`next dev`** behind the proxy on a different host than the dev
-  server's own origin, `next.config.ts` must also set
-  `allowedDevOrigins: ["ft.cloud.teleporthq.ai"]`. Without it, Next 16 blocks
-  cross-origin `/_next/*` dev-resource requests with **403**, client chunks fail
-  to load, and every client component hangs on "loading…" (the process table and
-  the CPU/MEM/DISK toolbar). `curl` won't reveal this — it sends no Origin/Referer;
-  reproduce with a real browser. `next start` doesn't have this restriction.
+  notes/tasks/rescan with a CSRF error. Both this and `allowedDevOrigins` derive
+  from **`APP_PUBLIC_HOSTS`** (comma-separated, set per unit); there is no
+  hardcoded host. If `APP_PUBLIC_HOSTS` is empty/wrong, Server Actions 403.
+- The **`/admin-dev`** instance runs `next dev` behind the proxy on a different
+  host than the dev server's own origin, so its host must be in `allowedDevOrigins`
+  (i.e. in `APP_PUBLIC_HOSTS`). Without it, Next 16 blocks cross-origin `/_next/*`
+  dev-resource requests with **403**, client chunks fail to load, and every client
+  component hangs on "loading…". `curl` won't reveal this — it sends no
+  Origin/Referer; reproduce with a real browser. Prod (`next start` on `/admin`)
+  has no such dev-origin restriction.
 
 ## Data & config
 

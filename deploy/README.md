@@ -2,7 +2,8 @@
 
 Reproduces the reference server documented in the top-level [`README.md`](../README.md):
 Node 20, PostgreSQL 17 (PGDG), nginx, tmux, the Claude Code CLI, the **admin**
-Next.js dashboard (systemd, `next dev` on :3001 behind nginx :3000), the
+Next.js dashboard (systemd: PROD `next start` at `/admin` on :3001 and an
+on-demand DEV `next dev` at `/admin-dev` on :3002, behind nginx :3000), the
 `genie-stats` publisher, and (optionally) code-server.
 
 ## Files
@@ -10,6 +11,7 @@ Next.js dashboard (systemd, `next dev` on :3001 behind nginx :3000), the
 | File | What it does |
 |------|--------------|
 | `install.sh` | The installer. Idempotent — safe to re-run. |
+| `setup-server.mjs` | First-boot wizard on :3000 `/setup`; captures the public host (no domain is hardcoded) so `install.sh` bakes it into the units + nginx. |
 | `test-docker.sh` | Builds a systemd-enabled Ubuntu 24.04 container and runs `install.sh` against it, then verifies HTTP + services. |
 | `vendor/vps-stats/` | The private `@genie/vps-stats` package (not on npm), installed globally by the script. |
 
@@ -19,11 +21,16 @@ Next.js dashboard (systemd, `next dev` on :3001 behind nginx :3000), the
 sudo ./deploy/install.sh
 ```
 
-It clones the repo to `/opt/project`, generates secrets into
+On first run it starts a **setup wizard** on :3000 — open the box's public URL at
+**`/setup`** and confirm the detected hostname. That host (no domain is hardcoded)
+is baked into the systemd units as `APP_PUBLIC_HOSTS` and the nginx `server_name`.
+It then clones the repo to `/opt/project`, generates secrets into
 `admin/.env.local` (chmod 600), creates the Postgres role/db, runs Drizzle
-migrations, installs the systemd units + nginx site, and starts everything.
+migrations, does the production build (`.next-prod`), installs the systemd units +
+nginx site, and starts everything.
 
-Configure via env vars (all optional — see the header of `install.sh`):
+Configure via env vars (all optional — see the header of `install.sh`). Passing
+`PUBLIC_HOST` **skips the wizard** for an unattended install:
 
 ```bash
 sudo PUBLIC_HOST=my.host.example \
@@ -51,8 +58,10 @@ copies the current working tree in as `SOURCE_DIR` (so it tests *your* code, not
 GitHub), runs the installer, and checks:
 
 - `postgresql`, `nginx`, `admin.service`, `genie-stats.service` are `active`
-- `GET /` → 302, `GET /admin/login` → 200 (Next dev compiles and serves)
+- `GET /` → 302, `GET /admin/login` → 200 (from the `next start` prod build)
 - `/run/genie/stats.jsonl` is being written
+
+`test-docker.sh` sets `PUBLIC_HOST`, so the setup wizard is skipped in CI.
 
 The container is left running as `genie-install-test` for inspection
 (`docker exec -it genie-install-test bash`). Set `INSTALL_CODE_SERVER=1` to also

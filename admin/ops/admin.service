@@ -1,6 +1,6 @@
 # Install as /etc/systemd/system/admin.service (the PROD instance).
-# Applied at the "prod flip": serves the built app at /admin on :3001 via
-# `next start`. Until the flip, the live admin.service still runs `next dev`.
+# Serves the built app (.next-prod) at /admin on :3001 via `next start`.
+# Ship changes with `sudo admin-ctl deploy` (rebuild + restart).
 [Unit]
 Description=Projects Supervisor — admin (Next.js PROD, /admin on :3001)
 After=network.target postgresql.service
@@ -12,6 +12,10 @@ User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
 Environment=PORT=3001
+# Public host(s) the app is reached at, comma-separated. next.config.ts reads
+# this for allowedDevOrigins + Server Actions CSRF — MUST be set or Server
+# Actions 403. deploy/install.sh fills it in from the setup wizard.
+Environment=APP_PUBLIC_HOSTS=
 Environment=APP_BASE_PATH=/admin
 Environment=NEXT_PUBLIC_BASE_PATH=/admin
 Environment=APP_DIST_DIR=.next-prod

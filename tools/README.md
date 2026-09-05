@@ -24,7 +24,7 @@ const page = await ctx.newPage();
 page.on("console", (m) => m.type() === "error" && console.log("[console]", m.text()));
 page.on("pageerror", (e) => console.log("[pageerror]", e.message));
 
-await page.goto("https://ft.cloud.teleporthq.ai/admin", { waitUntil: "networkidle" });
+await page.goto("https://<public-host>/admin", { waitUntil: "networkidle" });
 // Admin app is behind auth: log in via the form, or set the `admin_session`
 // cookie on `ctx` before navigating.
 console.log(page.url(), await page.title());

@@ -24,12 +24,17 @@ git clone https://github.com/paulbrie/genie-local.git /tmp/genie-local
 sudo /tmp/genie-local/deploy/install.sh
 ```
 
-It's idempotent and does everything below: base packages, PostgreSQL 17 (PGDG
-repo), Node 20, the `genie` user, global npm tooling + the private
-`@genie/vps-stats` package, `npm install` for every package, the Postgres
-role/db, generated `admin/.env.local` + `.mcp.json`, Drizzle migrations, the
-systemd units, and the nginx site. Configure it with env vars (see the header of
-`deploy/install.sh`), e.g.:
+On first run it launches a short **setup wizard** on the exposed port 3000: open
+the box's public URL at **`/setup`** and confirm the hostname it detects (the URL
+you're reaching it at). Nothing about the domain is hardcoded — the confirmed host
+is baked into the app config (`APP_PUBLIC_HOSTS`, read by `next.config.ts`) and the
+nginx `server_name`. It is otherwise idempotent and does everything below: base
+packages, PostgreSQL 17 (PGDG repo), Node 20, the `genie` user, global npm tooling
++ the private `@genie/vps-stats` package, `npm install` for every package, the
+Postgres role/db, generated `admin/.env.local` + `.mcp.json`, Drizzle migrations,
+the production build (`.next-prod`), the systemd units, and the nginx site.
+Configure it with env vars (see the header of `deploy/install.sh`) — e.g. to skip
+the wizard for an unattended install, pass the host explicitly:
 
 ```bash
 sudo PUBLIC_HOST=my.host.example ADMIN_PASSWORD=... GENIE_VPS_TOKEN=... \
@@ -49,22 +54,26 @@ understand the topology, or to set things up manually.
 ## 1. Architecture at a glance
 
 ```
-                      https://ft.cloud.teleporthq.ai   (public)
+                      https://<public-host>            (public; set at setup)
                                    │
                           nginx  (:3000)               /etc/nginx/sites-available/ft-admin
                           ├── /               → 302 /admin
-                          ├── /admin          → 127.0.0.1:3001   (the admin app)
+                          ├── /admin          → 127.0.0.1:3001   (admin app, PROD: next start)
+                          ├── /admin-dev      → 127.0.0.1:3002   (admin app, DEV: next dev, on demand)
                           └── /projects/<p>/… → 127.0.0.1:<port> (supervised apps, per-project)
                                    │
         ┌──────────────────────────┴───────────────────────────┐
-        │ admin.service   (systemd)                             │
-        │   next dev -p 3001  ·  user genie  ·  Postgres        │
-        └───────────────────────────────────────────────────────┘
+        │ admin.service      next start -p 3001  (PROD, .next-prod)  │
+        │ admin-dev.service  next dev   -p 3002  (DEV, on demand)    │
+        │   user genie  ·  Postgres  ·  APP_PUBLIC_HOSTS from setup  │
+        └───────────────────────────────────────────────────────────┘
         genie-stats.service → /run/genie/stats.jsonl  (CPU/mem/disk/process feed)
 ```
 
-- **Everything runs as the `genie` user.** The admin app is a **`next dev`**
-  server (not a production build) managed by systemd.
+- **Everything runs as the `genie` user.** The admin app runs as a production
+  build (`admin.service`, `next start`); a hot-reload dev instance
+  (`admin-dev.service`, `next dev` at `/admin-dev`) can be started on demand.
+  Ship changes to prod with `sudo admin-ctl deploy`.
 - Auth is enforced **in-app** (Next 16 "Proxy", `admin/src/proxy.ts`) via a
   signed `admin_session` cookie — nginx does no auth.
 
@@ -171,15 +180,16 @@ ADMIN_PASSWORD=CHANGE_ME
 EOF
 ```
 
-`admin/next.config.ts` is already set for this topology and needs no edits:
-- `basePath: "/admin"`
-- `allowedDevOrigins: ["ft.cloud.teleporthq.ai"]` — **required**: `next dev`
-  behind a proxy on a different host 403s `/_next/*` without it (client hangs on
-  "loading…").
-- `experimental.serverActions.allowedOrigins` — the public host, or Server
+`admin/next.config.ts` is driven by env, so it adapts to any hostname with no edits:
+- `basePath` ← `APP_BASE_PATH` (`/admin` prod, `/admin-dev` dev)
+- `allowedDevOrigins` ← `APP_PUBLIC_HOSTS` — **required**: `next dev` behind a
+  proxy on a different host 403s `/_next/*` without it (client hangs on "loading…").
+- `experimental.serverActions.allowedOrigins` ← `APP_PUBLIC_HOSTS`, or Server
   Actions (notes/tasks/rescan) fail CSRF.
 
-> If you deploy under a different hostname, update those two values to match.
+> `APP_PUBLIC_HOSTS` (comma-separated) is set per systemd unit by the installer
+> from the setup wizard — no hostname is hardcoded. To serve additional domains,
+> add them to that env and restart the units.
 
 ---
 
@@ -294,24 +304,29 @@ journalctl -u admin.service -f     # watch it compile
 ## 8. nginx
 
 Public entry on **:3000** (the container/edge exposes this as
-`https://ft.cloud.teleporthq.ai`). Minimal site:
+`https://<public-host>`). `server_name _` serves whatever host the box is reached
+at — the domain is pinned by the app's `APP_PUBLIC_HOSTS`, not by nginx. Minimal site:
 
 ```nginx
 # /etc/nginx/sites-available/ft-admin
 server {
     listen 3000;
     listen [::]:3000;
-    server_name ft.cloud.teleporthq.ai _;
+    server_name _;
 
     location = / { return 302 /admin; }
 
-    location /admin {
+    location /admin {                                 # PROD (next start)
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header Upgrade $http_upgrade;      # HMR websocket
         proxy_set_header Connection "upgrade";
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    location /admin-dev {                             # DEV (next dev, on demand)
+        proxy_pass http://127.0.0.1:3002;            # longest-prefix wins over /admin
     }
 
     # Per-project app locations (e.g. /projects/<slug>/… → 127.0.0.1:<port>)
@@ -369,10 +384,12 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 ### Gotchas (see `admin/AGENTS.md` for the full list)
-- It's a **dev server** — source edits hot-reload; only `next.config.ts` /
-  `.env.local` changes need a restart.
-- `next dev` behind the proxy needs `allowedDevOrigins` **and**
-  `serverActions.allowedOrigins` set to the public host (both already set).
+- `/admin` is a **production build** — source edits don't show until you
+  `sudo admin-ctl deploy`. Preview live edits on `/admin-dev` (`next dev`,
+  hot-reload) via `sudo admin-ctl dev-start`.
+- Both instances behind the proxy need `allowedDevOrigins` **and**
+  `serverActions.allowedOrigins` to include the public host — both derive from
+  `APP_PUBLIC_HOSTS` (set per unit by the installer).
 - Server-only modules (`src/lib/signals.ts`, `runner.ts`, `terminals.ts`,
   `chrome.ts`, …) must never be imported from client components.
 - Terminals use tmux sessions prefixed `admin-`; the app **only** ever touches

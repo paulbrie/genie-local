@@ -12,6 +12,9 @@ User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
 Environment=PORT=3002
+# Public host(s) the app is reached at, comma-separated (see admin.service).
+# Required for /admin-dev's cross-origin /_next/* dev resources (else 403).
+Environment=APP_PUBLIC_HOSTS=
 Environment=APP_BASE_PATH=/admin-dev
 Environment=NEXT_PUBLIC_BASE_PATH=/admin-dev
 Environment=APP_DIST_DIR=.next-dev
