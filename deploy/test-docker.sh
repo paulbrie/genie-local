@@ -45,8 +45,10 @@ echo "==> Building systemd-enabled base image ($IMAGE)"
 docker build -t "$IMAGE" -f - "$STAGE" >/dev/null <<'DOCKERFILE'
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive container=docker
+# cron is installed so the installer's crontab step actually runs (a real Ubuntu
+# box has it). Without it that code path is skipped and bugs there go uncaught.
 RUN apt-get update -qq && \
-    apt-get install -y -qq systemd systemd-sysv dbus sudo && \
+    apt-get install -y -qq systemd systemd-sysv dbus sudo cron && \
     rm -rf /var/lib/apt/lists/* && \
     # Remove systemd units that make no sense (or hang) inside a container.
     find /etc/systemd/system /lib/systemd/system \
@@ -131,6 +133,8 @@ docker exec -e EXPECT_HOST="$EXPECT_HOST" "$NAME" bash -lc '
   echo "--- admin.service is PROD (next start) with APP_PUBLIC_HOSTS baked in ---"
   echo "ExecStart mode : $(systemctl show -p ExecStart --value admin.service | grep -oE "next (start|dev)" | head -1)"
   systemctl show -p Environment --value admin.service | tr " " "\n" | grep APP_PUBLIC_HOSTS || echo "APP_PUBLIC_HOSTS: MISSING"
+  echo "--- stats-history cron installed (installer ran the crontab step) ---"
+  crontab -u genie -l 2>/dev/null | grep -q stats-history.mjs && echo "cron: present" || echo "cron: MISSING"
   echo "--- HTTP: / (expect 302) ---"
   for i in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/ 2>/dev/null)
