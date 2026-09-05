@@ -4,6 +4,7 @@ import { desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
 import { apps, projects, statusSnapshots } from "@/db/schema";
+import { getArchivedSlugs } from "@/lib/data";
 import {
   collectAllProjects,
   collectProject,
@@ -79,11 +80,20 @@ async function persistProject(sig: ProjectSignals): Promise<void> {
   );
 }
 
-/** Scan all projects on disk, upsert the registry, snapshot each app. */
+/**
+ * Scan all projects on disk, upsert the registry, snapshot each app. Archived
+ * (soft-deleted) projects are skipped entirely — not persisted, not returned —
+ * so they vanish from the dashboard even though their directory is still on disk.
+ * Restoring one (see setProjectArchived) makes the next scan pick it up again.
+ */
 export async function scanAndPersist(): Promise<ProjectSignals[]> {
-  const signals = await collectAllProjects();
-  await Promise.all(signals.map(persistProject));
-  return signals;
+  const [signals, archived] = await Promise.all([
+    collectAllProjects(),
+    getArchivedSlugs(),
+  ]);
+  const visible = signals.filter((s) => !archived.has(s.slug));
+  await Promise.all(visible.map(persistProject));
+  return visible;
 }
 
 /** Re-scan a single project by slug. */
@@ -102,7 +112,11 @@ export type ProjectWithApps = { project: ProjectRow; apps: AppWithLatest[] };
 
 /** Load every project with its apps and each app's latest snapshot. */
 export async function getProjectsWithApps(): Promise<ProjectWithApps[]> {
-  const projectRows = await db.select().from(projects).orderBy(projects.slug);
+  const projectRows = await db
+    .select()
+    .from(projects)
+    .where(eq(projects.archived, false))
+    .orderBy(projects.slug);
   if (projectRows.length === 0) return [];
 
   const projectIds = projectRows.map((p) => p.id);

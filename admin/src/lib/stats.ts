@@ -1,11 +1,13 @@
 import "server-only";
 
 import { promises as fs } from "node:fs";
+import { cpus } from "node:os";
 
 const STATS_FILE = process.env.STATS_FILE ?? "/run/genie/stats.jsonl";
 
 export type SystemStats = {
   cpuPercent: number;
+  cpuCores: number;
   memPercent: number;
   memUsedBytes: number;
   memTotalBytes: number;
@@ -92,6 +94,9 @@ export async function readLatestStats(): Promise<SystemStats | null> {
   const s = rec.stats;
   return {
     cpuPercent: s.cpuPercent,
+    // The admin runs on the host it monitors, so the local core count matches
+    // the CPU% being reported. Falls back to 0 on the rare empty cpus() result.
+    cpuCores: cpus().length || 0,
     memPercent: s.memPercent,
     memUsedBytes: s.memUsedBytes,
     memTotalBytes: s.memTotalBytes,

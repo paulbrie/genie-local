@@ -981,9 +981,11 @@ function TerminalView({
     onStatusRef.current = onStatus;
   }, [onStatus]);
 
-  // Monotonic id for input POSTs. Lets us (a) ignore an out-of-order capture
-  // that would rewind fresher content, and (b) have the 1s poll stand down
-  // while keystrokes are in flight — their POST responses carry newer captures.
+  // Monotonic id for input POSTs, plus a count in flight. Each keystroke POST
+  // returns the freshly redrawn pane; `seq` lets us drop an out-of-order capture
+  // that would rewind fresher content, and while any POST is in flight the 1s
+  // poll stands down so it can't clobber those hot-path captures. Once nothing is
+  // in flight we pull one authoritative capture to reconcile the trailing prompt.
   const seq = useRef(0);
   const inflight = useRef(0);
 
@@ -1170,7 +1172,9 @@ function TerminalView({
           body: JSON.stringify(payload),
         });
         const json = await res.json().catch(() => null);
-        // The POST returns the fresh pane (one round-trip, no separate GET).
+        // The POST returns the freshly redrawn pane in the same round-trip, so
+        // the typed character lands in the REAL input (not a separate buffer).
+        // Ignore a capture that raced behind a newer keystroke's.
         if (res.ok && json?.content !== undefined && mySeq === seq.current) {
           applySnap(json);
         }
@@ -1179,7 +1183,7 @@ function TerminalView({
       } finally {
         inflight.current--;
         // After a burst settles, pull one authoritative capture to correct any
-        // mis-prediction (e.g. the trailing prompt space that capture strips).
+        // residual mis-prediction (e.g. the trailing prompt space capture strips).
         if (inflight.current === 0) setTimeout(() => void refresh(), 80);
       }
     },
@@ -1228,14 +1232,61 @@ function TerminalView({
     // Reachable two ways: Cmd/Ctrl+V, and the explicit Paste button (needed on
     // mobile and when the shortcut is awkward). Both are user gestures, so the
     // async Clipboard read is permitted; surface why nothing happened.
-    try {
+    //
+    // A screenshot is an IMAGE on the clipboard, which readText() can't see (it
+    // returns ""). An image also can't be streamed into tmux, so upload it and
+    // type the saved file's absolute path into the pane instead — a `claude`
+    // session there can read the screenshot from it.
+    const pasteImage = async (blob: Blob, mime: string) => {
+      const res = await fetch(`${base}/image`, {
+        method: "POST",
+        headers: { "Content-Type": mime },
+        body: blob,
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok && json?.path) {
+        void send({ text: `${json.path} ` }); // trailing space separates it
+        toast.success("Screenshot pasted");
+      } else {
+        toast.error(json?.error ?? "Couldn't paste image");
+      }
+    };
+    const pasteText = async () => {
       const text = await navigator.clipboard?.readText();
       if (text) void send({ text });
-      else if (text === "") toast.info("Clipboard is empty");
+      else toast.info("Clipboard is empty");
+    };
+    try {
+      // Prefer read() so image items are visible; readText() is the fallback.
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (imgType) {
+            await pasteImage(await item.getType(imgType), imgType);
+            return;
+          }
+        }
+        const textItem = items.find((i) => i.types.includes("text/plain"));
+        if (textItem) {
+          const text = await (await textItem.getType("text/plain")).text();
+          if (text) void send({ text });
+          else toast.info("Clipboard is empty");
+          return;
+        }
+        toast.info("Clipboard is empty");
+        return;
+      }
+      await pasteText();
     } catch {
-      toast.error("Clipboard is blocked — allow clipboard access to paste");
+      // read()/readText() can throw on permission/focus; try plain text once more.
+      try {
+        await pasteText();
+      } catch {
+        toast.error("Clipboard is blocked — allow clipboard access to paste");
+      }
     }
-  }, [send]);
+  }, [base, send]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1259,6 +1310,11 @@ function TerminalView({
         void send({ key: e.shiftKey ? "BTab" : "Tab" });
         return;
       }
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        void send({ key: "BSpace" });
+        return;
+      }
       const special = SPECIAL_KEYS[e.key];
       if (special) {
         e.preventDefault();
@@ -1267,6 +1323,9 @@ function TerminalView({
       }
       if (e.key.length === 1) {
         e.preventDefault();
+        // An idle shell echoes the char inline instantly (appended to content);
+        // a TUI can't be predicted that way, so it relies on the redrawn pane the
+        // POST returns — the char lands in the real input a round-trip later.
         void send({ text: e.key }, status === "idle" ? e.key : undefined);
       }
     },
@@ -1312,6 +1371,7 @@ function TerminalView({
         setCtrlArmed(false);
         return;
       }
+      // Idle shell echoes inline; a TUI relies on the redrawn pane the POST returns.
       void send({ text: data }, status === "idle" ? data : undefined);
     },
     [send, status, ctrlArmed],

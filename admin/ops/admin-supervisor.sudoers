@@ -1,11 +1,14 @@
 # Install as /etc/sudoers.d/admin-supervisor (mode 0440, root:root).
 #
-# The Projects Supervisor admin app runs as `genie` with no sudo. Grant it the
-# single, confined privilege of running the root-owned helper /usr/local/bin/admin-ctl
-# — and nothing else — so it can control the prod/dev services and ship builds.
+# The Projects Supervisor admin app runs as `genie` with no sudo. Grant it two
+# confined privileges — and nothing else — via fixed root-owned helpers:
+#   admin-ctl        control the prod/dev services and ship builds
+#   ft-nginx-reload  validate + reload nginx after a project port change
 #
 # The wildcard covers admin-ctl's subcommands/flags; because sudo passes them as
 # literal argv (no shell) to a fixed root-owned binary that whitelists its
-# subcommands, this cannot be used to run arbitrary commands.
+# subcommands, this cannot be used to run arbitrary commands. ft-nginx-reload
+# takes no arguments (see admin/src/lib/nginx.ts: `sudo -n <helper>`).
 Cmnd_Alias ADMIN_CTL = /usr/local/bin/admin-ctl, /usr/local/bin/admin-ctl *
-genie ALL=(root) NOPASSWD: ADMIN_CTL
+Cmnd_Alias NGINX_RELOAD = /usr/local/bin/ft-nginx-reload
+genie ALL=(root) NOPASSWD: ADMIN_CTL, NGINX_RELOAD

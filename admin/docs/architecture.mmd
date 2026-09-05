@@ -1,7 +1,7 @@
 flowchart TB
   %% ===== Edge / auth =====
   subgraph Edge["Edge / Auth"]
-    Browser["Browser<br/>ft.cloud.teleporthq.ai/admin"]
+    Browser["Browser<br/>$PUBLIC_HOST/admin"]
     Nginx["nginx :3000<br/>public TLS + /projects/&lt;slug&gt; proxy"]
     Proxy["proxy.ts (Next 16 Proxy)<br/>session-cookie auth gate"]
   end

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useSubject } from "subjecto/react";
 
-import { speak } from "@/lib/speech";
+import { say } from "@/lib/tts";
 import { liveTerminals, type TermStatus } from "@/store/terminals";
 import { hydrateVoice, voice } from "@/store/voice";
 
@@ -45,7 +45,12 @@ export function TerminalVoiceMonitor() {
   }, []);
 
   useEffect(() => {
-    const { enabled, rate, voiceURI } = cfgRef.current;
+    const cfgNow = cfgRef.current;
+    const { enabled, jarvis } = cfgNow;
+    // In Jarvis mode the LLM narrator (<TerminalNarrator>) does the talking, so
+    // the fixed-phrase alerts stand down — but we keep updating `mem` below so
+    // toggling Jarvis off doesn't replay a backlog of transitions.
+    const speakAlerts = enabled && !jarvis;
     const seen = new Set<string>();
 
     for (const t of list) {
@@ -60,11 +65,11 @@ export function TerminalVoiceMonitor() {
         continue;
       }
 
-      if (enabled && cat !== prev.cat) {
+      if (speakAlerts && cat !== prev.cat) {
         if (cat === "asking") {
-          speak(`${t.name} is asking a question`, { rate, voiceURI });
+          say(`${t.name} is asking a question`, cfgNow);
         } else if (cat === "rest" && prev.workingLatch) {
-          speak(`${t.name} finished`, { rate, voiceURI });
+          say(`${t.name} finished`, cfgNow);
         }
       }
 

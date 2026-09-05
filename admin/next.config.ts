@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
+// Public host(s) the app is reached through (comma-separated for more than one),
+// e.g. PUBLIC_HOST=admin.example.com. Set per environment — in .env.local (loaded
+// by Next before this config) or the systemd unit — never hardcoded here. Drives
+// the dev-origin allowlist and the Server Actions CSRF allowlist below. Empty when
+// unset (same-origin only), which is fine for local `next dev` on localhost.
+const publicHosts = (process.env.PUBLIC_HOST ?? "")
+  .split(",")
+  .map((h) => h.trim())
+  .filter(Boolean);
+
 const nextConfig: NextConfig = {
-  // Served behind Nginx at https://ft.cloud.teleporthq.ai/admin (prod) and
+  // Served behind Nginx at https://<PUBLIC_HOST>/admin (prod) and
   // /admin-dev (the hot-reload dev instance). Both run from THIS working copy;
   // they differ only by env, set per systemd unit:
   //   prod → APP_BASE_PATH=/admin      APP_DIST_DIR=.next-prod  (next start :3001)
@@ -16,12 +26,12 @@ const nextConfig: NextConfig = {
   // /_next/* dev resources with a 403 unless the public host is allowlisted —
   // without this, client chunks fail to load and every client component hangs
   // on "loading…". (Dev-only setting; ignored by `next start`.)
-  allowedDevOrigins: ["ft.cloud.teleporthq.ai"],
+  allowedDevOrigins: publicHosts,
   experimental: {
     // The app is reached via a proxy on a different host/port than the app's
     // own origin, so allow Server Actions from the public domain (CSRF guard).
     serverActions: {
-      allowedOrigins: ["ft.cloud.teleporthq.ai"],
+      allowedOrigins: publicHosts,
     },
   },
 };

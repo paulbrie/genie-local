@@ -4,7 +4,10 @@ import "./globals.css";
 import { AppSidebar } from "@/components/app-sidebar";
 import { RunDock } from "@/components/run-dock";
 import { StatsToolbar } from "@/components/stats-toolbar";
+import { JarvisConsole } from "@/components/jarvis-console";
+import { JarvisOrb } from "@/components/jarvis-orb";
 import { TerminalDock } from "@/components/terminal-dock";
+import { TerminalNarrator } from "@/components/terminal-narrator";
 import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
@@ -47,6 +50,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           </div>
           <TerminalDock />
           <TerminalVoiceMonitor />
+          <TerminalNarrator />
+          <JarvisOrb />
+          <JarvisConsole />
           <RunDock />
           <Toaster richColors position="top-right" />
         </ThemeProvider>

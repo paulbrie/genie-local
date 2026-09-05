@@ -124,7 +124,14 @@ export function stripAnsi(text: string): string {
   return text.replace(new RegExp(ANSI_PATTERN, "g"), "");
 }
 
-export function AnsiText({ text }: { text: string }) {
+// Memoized: parsing a full pane (up to ~1000 lines of ANSI) is O(n) and this
+// lives on the terminal's hot path. The terminal re-renders on every keystroke
+// (optimistic echo / pending buffer), every 1s poll, and every status/token
+// change — but the pane `text` is unchanged in most of those. React.memo skips
+// the re-parse whenever `text` is identical, so typing into a TUI (where the
+// char goes to the pending buffer and `content` doesn't move) no longer re-lexes
+// the whole screen per key. That re-parse was the felt input lag.
+export const AnsiText = React.memo(function AnsiText({ text }: { text: string }) {
   const nodes: React.ReactNode[] = [];
   const re = new RegExp(ANSI_PATTERN, "g");
   let style: Style = {};
@@ -158,4 +165,4 @@ export function AnsiText({ text }: { text: string }) {
   emit(text.slice(last));
 
   return <>{nodes}</>;
-}
+});

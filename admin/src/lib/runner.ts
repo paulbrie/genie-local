@@ -81,6 +81,31 @@ export async function statusFor(
   return statusForSlug(slug, await readPid(slug));
 }
 
+/**
+ * Like {@link statusFor}, but for the `dev` script also treats a listening app
+ * port as "running". A dev server started outside the runner — or one whose
+ * tracked pid died while a forked worker (e.g. Next's `next-server`) kept the
+ * port, leaving a STALE pid file — has no live pid file, so `statusFor` alone
+ * reports it stopped even though it serves traffic. This mirrors the dashboard's
+ * `getRunningInfo()` union (pid OR port), which reports a port-only server under
+ * the app's dev slug, so the per-script dot and the dashboard agree.
+ *
+ * Pass `portPids` to reuse a single `ss` snapshot when rendering many scripts.
+ */
+export async function statusForWithPort(
+  projectSlug: string,
+  appSlug: string,
+  script: string,
+  port: number | null,
+  portPids?: Map<number, number>,
+): Promise<RunStatus> {
+  const base = await statusFor(projectSlug, appSlug, script);
+  if (base.running || script !== "dev" || port == null) return base;
+  const map = portPids ?? (await listeningPortPids());
+  const pid = map.get(port);
+  return pid != null ? { ...base, running: true, pid } : base;
+}
+
 /** Alive (slug, pid) pairs — one per pid file whose process is still running. */
 export async function listRunningPids(): Promise<
   { slug: string; pid: number }[]
@@ -146,6 +171,70 @@ export async function rssBytesByProcessGroup(): Promise<Map<number, number>> {
     }),
   );
   return totals;
+}
+
+/**
+ * Sum resident memory (RSS) of the process SUBTREE rooted at each given pid — the
+ * process itself plus every descendant, following PPID links in /proc. Unlike
+ * {@link rssBytesByProcessGroup}, this is for tmux terminals: a pane's shell
+ * (`pane_pid`) puts each foreground job in its OWN process group (job control), so
+ * a pgid sum would miss the running command (claude/node) — walking the tree
+ * captures the shell + command + its children. Returns bytes keyed by root pid.
+ * One /proc scan serves every root passed in.
+ */
+export async function rssBytesByProcessTree(
+  rootPids: number[],
+): Promise<Map<number, number>> {
+  const rss = new Map<number, number>();
+  const children = new Map<number, number[]>();
+  let pids: string[];
+  try {
+    pids = await fs.readdir("/proc");
+  } catch {
+    return new Map();
+  }
+  await Promise.all(
+    pids.map(async (name) => {
+      if (!/^\d+$/.test(name)) return;
+      let stat: string;
+      try {
+        stat = await fs.readFile(`/proc/${name}/stat`, "utf8");
+      } catch {
+        return; // exited between readdir and read, or unreadable
+      }
+      // comm (field 2) is parenthesized and may contain spaces/parens; split the
+      // rest after the final ')'. Then fields[N-3] maps to /proc stat field N:
+      // ppid = field 4 → fields[1]; rss (pages) = field 24 → fields[21].
+      const rparen = stat.lastIndexOf(")");
+      if (rparen < 0) return;
+      const fields = stat.slice(rparen + 2).split(" ");
+      const ppid = Number(fields[1]);
+      const rssPages = Number(fields[21]);
+      const pid = Number(name);
+      if (!Number.isFinite(ppid) || !Number.isFinite(rssPages)) return;
+      rss.set(pid, rssPages * PAGE_SIZE);
+      const sibs = children.get(ppid);
+      if (sibs) sibs.push(pid);
+      else children.set(ppid, [pid]);
+    }),
+  );
+
+  const out = new Map<number, number>();
+  for (const root of rootPids) {
+    let total = 0;
+    const seen = new Set<number>();
+    const stack = [root];
+    while (stack.length) {
+      const pid = stack.pop()!;
+      if (seen.has(pid)) continue; // guard against cycles / repeated roots
+      seen.add(pid);
+      total += rss.get(pid) ?? 0;
+      const kids = children.get(pid);
+      if (kids) for (const k of kids) stack.push(k);
+    }
+    out.set(root, total);
+  }
+  return out;
 }
 
 /**
@@ -231,6 +320,25 @@ function childEnv(port: number | null): NodeJS.ProcessEnv {
     ) {
       delete env[key];
     }
+  }
+  // Don't leak the admin's own NODE_ENV into the child. admin.service runs with
+  // NODE_ENV=production; inherited by a spawned `next dev` it triggers the
+  // "non-standard NODE_ENV" path and breaks Babel-based apps (e.g. emotion:
+  // `jsxDEV is not a function`). Next sets NODE_ENV per command (dev→development,
+  // build/start→production), so drop the inherited value and let it decide.
+  // Cast to a plain record: `delete env.NODE_ENV` fails typecheck because
+  // NODE_ENV is a typed (non-optional) property on NodeJS.ProcessEnv.
+  delete (env as Record<string, string | undefined>).NODE_ENV;
+
+  // Don't leak the admin's OWN config/secrets into supervised apps. Critically,
+  // Next.js does NOT override an already-set process.env var with a value from
+  // the app's .env.local — so an inherited DATABASE_URL would silently point the
+  // app at the admin's database (admin_dashboard) instead of its own. Strip the
+  // admin-owned vars so each app loads its own from .env.local; also keeps the
+  // admin's credentials (ADMIN_USER/PASSWORD, APP_ENC_KEY) out of child apps.
+  // PUBLIC_HOST is intentionally kept — apps use it (basePath, allowedDevOrigins).
+  for (const key of ["DATABASE_URL", "PROJECTS_ROOT", "APP_ENC_KEY", "ADMIN_USER", "ADMIN_PASSWORD"]) {
+    delete env[key];
   }
   env.FORCE_COLOR = "0";
   if (port) env.PORT = String(port);

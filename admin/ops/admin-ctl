@@ -51,8 +51,12 @@ do_worker() {
       runuser -u "$RUN_USER" -- env "${PROD_ENV[@]}" "$NODE" "$DRIZZLE" migrate || ok=0
     fi
     if [ "$ok" = 1 ]; then
-      echo "--- next build (.next-prod) ---"
-      runuser -u "$RUN_USER" -- env "${PROD_ENV[@]}" NODE_ENV=production "$NODE" "$NEXT" build || ok=0
+      echo "--- next build (.next-prod, webpack) ---"
+      # Force the webpack builder: Next 16's default (Turbopack) production build
+      # fails to prerender /_global-error ("Cannot read properties of null
+      # (reading 'useContext')") and exits non-zero. `-u TURBOPACK` guards against
+      # an inherited TURBOPACK=1, which would otherwise collide with --webpack.
+      runuser -u "$RUN_USER" -- env -u TURBOPACK "${PROD_ENV[@]}" NODE_ENV=production "$NODE" "$NEXT" build --webpack || ok=0
     fi
     if [ "$ok" = 1 ]; then
       echo "--- systemctl restart admin.service ---"

@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
+import { formatBytes } from "@/lib/format";
 import { dock, openTerminal } from "@/store/terminals";
 
 const API = `${BASE_PATH}/api/terminals`;
@@ -29,6 +30,7 @@ type Terminal = {
   busy: boolean;
   status: import("@/store/terminals").TermStatus;
   cwd: string;
+  memBytes: number;
 };
 
 /**
@@ -98,20 +100,28 @@ export function TerminalsPanel() {
   }
 
   return (
-    <div className="max-w-md space-y-3">
-      <form onSubmit={create} className="flex gap-2">
-        <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="new terminal name"
-          aria-label="New terminal name"
-        />
-        <Button type="submit" size="sm" disabled={creating || !newName.trim()}>
-          <Plus /> New
-        </Button>
-      </form>
+    <div className="space-y-3">
+      {/* The create form + voice controls read better narrow; the terminal list
+          below fills the page width so each row has room to breathe. */}
+      <div className="max-w-md space-y-3">
+        <form onSubmit={create} className="flex gap-2">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="new terminal name"
+            aria-label="New terminal name"
+          />
+          <Button
+            type="submit"
+            size="sm"
+            disabled={creating || !newName.trim()}
+          >
+            <Plus /> New
+          </Button>
+        </form>
 
-      <TerminalVoiceControls />
+        <TerminalVoiceControls />
+      </div>
 
       <div className="space-y-1">
         {terminals.length === 0 ? (
@@ -130,7 +140,7 @@ export function TerminalsPanel() {
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium">{t.name}</span>
                 <span className="block truncate font-mono text-xs text-muted-foreground">
-                  {statusLabel(t.status)} · {t.size}
+                  {statusLabel(t.status)} · {t.size} · {formatBytes(t.memBytes)}
                 </span>
               </span>
               {open.includes(t.name) && (
@@ -158,7 +168,7 @@ export function TerminalsPanel() {
           ))
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-2xl text-xs text-muted-foreground">
         Terminals open as floating windows that stay put as you move between
         pages. Drag the title bar to move, drag the bottom-right corner to
         resize, and use the − button to collapse a window into the bottom bar.

@@ -67,7 +67,13 @@ export function StatsToolbar() {
           label="CPU"
           percent={stats?.cpuPercent ?? null}
           detail={
-            stats ? `${Math.round(stats.cpuPercent)}%` : error ? "—" : "…"
+            stats
+              ? `${Math.round(stats.cpuPercent)}% · ${stats.cpuCores} ${
+                  stats.cpuCores === 1 ? "core" : "cores"
+                }`
+              : error
+                ? "—"
+                : "…"
           }
         />
         <Metric

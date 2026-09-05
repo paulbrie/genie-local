@@ -14,6 +14,28 @@ export async function getProjectIdBySlug(slug: string): Promise<number | null> {
   return row?.id ?? null;
 }
 
+/**
+ * Archive (soft-delete) or restore a project. Archiving removes it from the
+ * dashboard without touching the files on disk — the scan skips archived slugs
+ * so it won't reappear, but the DB row and history are kept so it can be
+ * restored. See scanAndPersist() and the project detail page.
+ */
+export async function setProjectArchived(projectId: number, archived: boolean) {
+  await db
+    .update(projects)
+    .set({ archived, updatedAt: new Date() })
+    .where(eq(projects.id, projectId));
+}
+
+/** Slugs of every archived (hidden) project, for the scan to skip. */
+export async function getArchivedSlugs(): Promise<Set<string>> {
+  const rows = await db
+    .select({ slug: projects.slug })
+    .from(projects)
+    .where(eq(projects.archived, true));
+  return new Set(rows.map((r) => r.slug));
+}
+
 export async function getNotes(projectId: number) {
   return db
     .select()

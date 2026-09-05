@@ -46,6 +46,7 @@ import {
   getProjectIdBySlug,
   reorderNotes,
   reorderTasks,
+  setProjectArchived,
   setTaskDone,
   updateAppPort,
   updateNote,
@@ -60,7 +61,7 @@ import { applyNginx, type NginxApplyResult } from "@/lib/nginx";
 import {
   restartApp,
   startApp,
-  statusFor,
+  statusForWithPort,
   stopApp,
   type RunStatus,
 } from "@/lib/runner";
@@ -100,6 +101,26 @@ export async function rescanProjectAction(slug: string) {
   await rescanProject(parsed);
   revalidatePath(`/projects/${parsed}`);
   revalidatePath("/");
+}
+
+/**
+ * "Delete" a project = archive it: remove it from the dashboard/scan without
+ * touching the files on disk. The DB row + history are kept so it can be
+ * restored. Reversible via restoreProjectAction.
+ */
+export async function deleteProjectAction(slug: string) {
+  const id = await requireProjectId(slug);
+  await setProjectArchived(id, true);
+  revalidatePath("/");
+  revalidatePath(`/projects/${slug}`);
+}
+
+/** Restore a previously-archived project so the scan tracks it again. */
+export async function restoreProjectAction(slug: string) {
+  const id = await requireProjectId(slug);
+  await setProjectArchived(id, false);
+  revalidatePath("/");
+  revalidatePath(`/projects/${slug}`);
 }
 
 export async function addNoteAction(slug: string, formData: FormData) {
@@ -308,7 +329,9 @@ export async function appStatusAction(
 ): Promise<RunStatus> {
   const t = await requireAppTarget(slug, appId);
   const parsedScript = scriptNameSchema.parse(script);
-  return statusFor(t.projectSlug, t.appSlug, parsedScript);
+  // Port fallback (see statusForWithPort) so this dot agrees with the dashboard
+  // when the pid file is stale or the server was started outside the runner.
+  return statusForWithPort(t.projectSlug, t.appSlug, parsedScript, t.port);
 }
 
 // ---------------------------------------------------------------------------

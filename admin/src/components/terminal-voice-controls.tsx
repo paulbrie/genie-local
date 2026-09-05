@@ -1,34 +1,49 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { Sparkles, Volume2, VolumeX } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
 import { Button } from "@/components/ui/button";
-import { loadVoices, speak, speechSupported } from "@/lib/speech";
-import { hydrateVoice, setVoice, voice } from "@/store/voice";
+import { loadVoices, speechSupported } from "@/lib/speech";
+import { say } from "@/lib/tts";
+import { hydrateVoice, KOKORO_VOICES, setVoice, voice } from "@/store/voice";
 
 /**
- * Settings for the spoken terminal alerts: master toggle, which installed voice
- * to use, how fast, and a Test button. The actual announcing is done app-wide by
- * <TerminalVoiceMonitor>; this only edits the shared `voice` settings.
+ * Settings for the spoken terminal alerts: master toggle, which voice to use (the
+ * on-box neural "Jarvis" voices or the OS browser voices), how fast, and a Test
+ * button. The actual announcing is done app-wide by <TerminalVoiceMonitor> /
+ * <TerminalNarrator>; this only edits the shared `voice` settings.
+ *
+ * The voice dropdown encodes the engine in its value (`kokoro:<id>` /
+ * `browser:<uri>`) so a single control picks both engine and voice.
  */
 export function TerminalVoiceControls() {
   const [cfg] = useSubject(voice);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [hasBrowserVoices, setHasBrowserVoices] = useState(false);
   const [supported, setSupported] = useState(true);
 
   useEffect(() => {
     hydrateVoice();
-    setSupported(speechSupported());
+    const webAudio =
+      typeof window !== "undefined" &&
+      !!(
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext
+      );
+    setHasBrowserVoices(speechSupported());
+    // Kokoro needs only Web Audio; the browser voices need speechSynthesis.
+    setSupported(webAudio || speechSupported());
     void loadVoices().then(setVoices);
   }, []);
 
   if (!supported) {
     return (
       <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-        This browser has no speech synthesizer — spoken alerts need Chrome or
-        another Chromium-based browser.
+        This browser can’t play synthesized speech — voice needs Web Audio (any
+        modern browser) or a Chromium-based browser’s speech synthesizer.
       </p>
     );
   }
@@ -36,14 +51,34 @@ export function TerminalVoiceControls() {
   const toggle = () => {
     const next = !cfg.enabled;
     setVoice({ enabled: next });
-    // This click is the user gesture that unlocks speech in Chrome; confirm out
+    // This click is the user gesture that unlocks audio in Chrome; confirm out
     // loud so the first real alert isn't the one that gets silently blocked.
     if (next)
-      speak("Voice alerts on", {
-        rate: cfg.rate,
-        voiceURI: cfg.voiceURI,
+      say(cfg.jarvis ? "Jarvis online" : "Voice alerts on", cfg, {
         interrupt: true,
       });
+  };
+
+  const toggleJarvis = () => {
+    const next = !cfg.jarvis;
+    setVoice({ jarvis: next });
+    // Speaking here doubles as the audio-unlock gesture.
+    if (next && cfg.enabled) say("Jarvis online", cfg, { interrupt: true });
+  };
+
+  // Encode engine + voice in one select value; parse it back on change.
+  const selectValue =
+    cfg.engine === "kokoro"
+      ? `kokoro:${cfg.kokoroVoice}`
+      : `browser:${cfg.voiceURI ?? ""}`;
+
+  const onVoiceChange = (v: string) => {
+    if (v.startsWith("kokoro:")) {
+      setVoice({ engine: "kokoro", kokoroVoice: v.slice("kokoro:".length) });
+    } else {
+      const uri = v.slice("browser:".length);
+      setVoice({ engine: "browser", voiceURI: uri || null });
+    }
   };
 
   return (
@@ -60,20 +95,44 @@ export function TerminalVoiceControls() {
         {cfg.enabled ? "Voice alerts on" : "Voice alerts off"}
       </Button>
 
+      <Button
+        type="button"
+        size="sm"
+        variant={cfg.jarvis ? "default" : "outline"}
+        className="h-7"
+        onClick={toggleJarvis}
+        disabled={!cfg.enabled}
+        title="Jarvis mode: an LLM watches every terminal and narrates progress in natural language, instead of fixed alerts"
+      >
+        <Sparkles />
+        {cfg.jarvis ? "Jarvis on" : "Jarvis"}
+      </Button>
+
       <select
         aria-label="Alert voice"
         title="Voice used for terminal alerts"
-        value={cfg.voiceURI ?? ""}
-        onChange={(e) => setVoice({ voiceURI: e.target.value || null })}
+        value={selectValue}
+        onChange={(e) => onVoiceChange(e.target.value)}
         disabled={!cfg.enabled}
-        className="h-7 max-w-[12rem] rounded-md border bg-background px-1 text-xs text-foreground disabled:opacity-50"
+        className="h-7 max-w-[14rem] rounded-md border bg-background px-1 text-xs text-foreground disabled:opacity-50"
       >
-        <option value="">Automatic voice</option>
-        {voices.map((v) => (
-          <option key={v.voiceURI} value={v.voiceURI}>
-            {v.name} ({v.lang})
-          </option>
-        ))}
+        <optgroup label="Jarvis voice — on-box, natural">
+          {KOKORO_VOICES.map((v) => (
+            <option key={v.id} value={`kokoro:${v.id}`}>
+              {v.label}
+            </option>
+          ))}
+        </optgroup>
+        {hasBrowserVoices && (
+          <optgroup label="Browser voices — robotic">
+            <option value="browser:">Automatic voice</option>
+            {voices.map((v) => (
+              <option key={v.voiceURI} value={`browser:${v.voiceURI}`}>
+                {v.name} ({v.lang})
+              </option>
+            ))}
+          </optgroup>
+        )}
       </select>
 
       <label className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -96,13 +155,7 @@ export function TerminalVoiceControls() {
         variant="ghost"
         className="h-7"
         disabled={!cfg.enabled}
-        onClick={() =>
-          speak("Terminal finished", {
-            rate: cfg.rate,
-            voiceURI: cfg.voiceURI,
-            interrupt: true,
-          })
-        }
+        onClick={() => say("Terminal finished", cfg, { interrupt: true })}
       >
         Test
       </Button>

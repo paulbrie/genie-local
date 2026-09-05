@@ -2,8 +2,11 @@ import "server-only";
 
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+
+import { rssBytesByProcessTree } from "@/lib/runner";
 
 const exec = promisify(execFile);
 
@@ -45,6 +48,7 @@ export type Terminal = {
   status: TermStatus;
   cwd: string; // pane current path
   tokens: ClaudeTokens | null; // cumulative session tokens (Claude sessions only)
+  memBytes: number; // resident memory of the pane's process tree (shell + command)
 };
 
 // Login/interactive shells that mean "sitting at a prompt" (idle). A pane whose
@@ -309,6 +313,7 @@ export async function listTerminals(): Promise<Terminal[]> {
         "#{window_width}x#{window_height}",
         "#{pane_current_command}",
         "#{pane_current_path}",
+        "#{pane_pid}",
       ].join("\t"),
     ]);
   } catch (err) {
@@ -329,8 +334,13 @@ export async function listTerminals(): Promise<Terminal[]> {
       command: f[4] ?? "",
       busy: isBusy(f[4] ?? ""),
       cwd: f[5] ?? "",
+      panePid: Number(f[6]) || 0,
     }))
     .sort((a, b) => a.createdAt - b.createdAt);
+
+  // Resident memory of each session's active-pane process tree (shell + whatever
+  // it's running + children). One /proc scan covers all sessions.
+  const memByPid = await rssBytesByProcessTree(base.map((t) => t.panePid));
 
   // A Claude pane's "working vs waiting" state only shows in its output, so
   // capture the visible pane for those (cheap: no scrollback/escapes) and
@@ -339,9 +349,11 @@ export async function listTerminals(): Promise<Terminal[]> {
   // so the sidebar's cumulative count stays live. Non-Claude panes are
   // classified from the command alone and carry no token tally.
   const terminals = await Promise.all(
-    base.map(async (t): Promise<Terminal> => {
+    base.map(async (bt): Promise<Terminal> => {
+      const { panePid, ...t } = bt;
+      const memBytes = memByPid.get(panePid) ?? 0;
       if (normalizeCmd(t.command) !== "claude") {
-        return { ...t, status: classify(t.command), tokens: null };
+        return { ...t, status: classify(t.command), tokens: null, memBytes };
       }
       let content: string | undefined;
       try {
@@ -355,7 +367,7 @@ export async function listTerminals(): Promise<Terminal[]> {
         parseClaudeTokens(content),
         status === "claude-working",
       );
-      return { ...t, status, tokens };
+      return { ...t, status, tokens, memBytes };
     }),
   );
   // Drop tallies for sessions that no longer exist so the map can't grow without
@@ -547,6 +559,40 @@ export async function sendText(name: string, text: string): Promise<void> {
   const target = toTarget(name);
   // `-l` = literal, `--` stops option parsing so text starting with `-` is safe.
   await tmux(["send-keys", "-t", target, "-l", "--", text]);
+}
+
+// Pasted screenshots land here (shared temp dir, absolute paths). Kept out of
+// any project tree so pastes never clutter a repo. Wiped naturally on reboot.
+const PASTE_DIR = "/tmp/admin-terminal-pastes";
+const IMAGE_EXT: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+/**
+ * Persist a clipboard image pasted into a terminal and return its ABSOLUTE path.
+ * A web terminal can't stream binary into tmux, so the client uploads the image
+ * here and then types this path into the pane — a `claude` session there reads
+ * the screenshot from it. `mime` must be a supported image type; the filename is
+ * derived from the (format-validated) session name so pastes from different
+ * terminals don't collide.
+ */
+export async function saveTerminalImage(
+  name: string,
+  bytes: Buffer,
+  mime: string,
+): Promise<string> {
+  toTarget(name); // reuse the session-name validation (throws on bad input)
+  const ext = IMAGE_EXT[mime];
+  if (!ext) throw new Error(`unsupported image type: ${mime}`);
+  await mkdir(PASTE_DIR, { recursive: true });
+  const safe =
+    name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "term";
+  const file = join(PASTE_DIR, `${safe}-${Date.now()}.${ext}`);
+  await writeFile(file, bytes);
+  return file;
 }
 
 /** Send a named key (Enter, C-c, arrows, …). */

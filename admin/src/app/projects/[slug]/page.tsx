@@ -2,9 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AppPortForm } from "@/components/app-port-form";
+import { DeleteProjectButton } from "@/components/delete-project-button";
 import { NotesPanel } from "@/components/notes-panel";
 import { appLabel } from "@/components/project-card";
 import { RescanProjectButton } from "@/components/rescan-project-button";
+import { RestoreProjectButton } from "@/components/restore-project-button";
 import { ScriptRow } from "@/components/script-row";
 import { TaskList } from "@/components/task-list";
 import { Badge } from "@/components/ui/badge";
@@ -28,7 +30,7 @@ import type { AppRow, SnapshotRow } from "@/lib/scan";
 import { getNotes, getTasks } from "@/lib/data";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { mountPath } from "@/lib/nginx";
-import { statusFor } from "@/lib/runner";
+import { listeningPortPids, statusForWithPort } from "@/lib/runner";
 import { getProjectDetail } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
 import type { AppSignals } from "@/lib/types";
@@ -67,8 +69,21 @@ export default async function ProjectPage({
             {project.path} · {apps.length} {apps.length === 1 ? "app" : "apps"}
           </p>
         </div>
-        <RescanProjectButton slug={project.slug} />
+        <div className="flex items-center gap-2">
+          <RescanProjectButton slug={project.slug} />
+          {!project.archived && <DeleteProjectButton slug={project.slug} />}
+        </div>
       </div>
+
+      {project.archived && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+          <span className="text-amber-900 dark:text-amber-200">
+            This project is removed from the dashboard. Its files on disk are
+            untouched.
+          </span>
+          <RestoreProjectButton slug={project.slug} />
+        </div>
+      )}
 
       {/* One card per app (sub-project) */}
       <section className="space-y-4">
@@ -124,8 +139,13 @@ async function AppCard({
     : (app.name ?? (app.slug === "" ? "(root)" : app.slug));
   const scripts = await readScripts(app.path);
   const scriptEntries = Object.entries(scripts);
+  // One `ss` snapshot shared across every script's port fallback (see
+  // statusForWithPort) so the dots match the dashboard even on the first paint.
+  const portPids = await listeningPortPids();
   const scriptStatuses = await Promise.all(
-    scriptEntries.map(([name]) => statusFor(projectSlug, app.slug, name)),
+    scriptEntries.map(([name]) =>
+      statusForWithPort(projectSlug, app.slug, name, app.port, portPids),
+    ),
   );
   const anyRunning = scriptStatuses.some((s) => s.running);
 

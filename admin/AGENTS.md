@@ -15,18 +15,27 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 
 ## How it runs
 
-- Served publicly at **`https://ft.cloud.teleporthq.ai/admin`** via nginx.
+- Served publicly at **`https://$PUBLIC_HOST/admin`** via nginx (the host is the
+  `PUBLIC_HOST` env var, set per environment — not hardcoded).
   Public traffic → container **:3000** (nginx) → this app on **:3001**.
 - `basePath: '/admin'` (see `next.config.ts`) — `next/link`/router/static assets
   are auto-prefixed. Raw `<a href>` is **not** prefixed: use it only to link to
   the live project apps at `/projects/<slug>` (outside this app).
-- Runs under systemd as `admin.service` (`next dev -p 3001 -H 0.0.0.0`, user
-  `genie`). It's a **dev server**, so source edits hot-reload with no rebuild.
-  Only `next.config.ts` / `.env.local` changes need
-  `sudo systemctl restart admin.service`. Logs: `journalctl -u admin.service -f`.
-  (A production build would be `npm run build && next start`, but that's not how
-  it currently runs.) The unit sets **`KillMode=process`** so a restart does not
-  kill project dev servers launched from the UI (see `src/lib/runner.ts`).
+- Runs under systemd as `admin.service` — the **PROD** instance: `next start
+  -p 3001 -H 0.0.0.0` (user `genie`), serving the compiled build from
+  `APP_DIST_DIR=.next-prod`. It is **NOT** a dev server: source edits do **not**
+  hot-reload — they only go live after a **rebuild**. Deploy via the confined
+  root helper `sudo admin-ctl deploy` (`admin/ops/admin-ctl`), which runs
+  `next build --webpack` into `.next-prod` then `systemctl restart admin.service`,
+  detached, logging to `/tmp/projects/admin-deploy.log` (add `--migrate` to run
+  Drizzle first). The unit sets **`KillMode=process`** so that restart does not
+  kill project dev servers launched from the UI (see `src/lib/runner.ts`). Logs:
+  `journalctl -u admin.service -f`.
+- For hot-reload development there is a **separate** `admin-dev.service` — `next
+  dev` on **:3002**, served at **`/admin-dev`**, `APP_DIST_DIR=.next-dev` (kept
+  distinct so dev and prod builds never clobber each other). Control it with
+  `sudo admin-ctl dev-start|dev-stop|dev-restart`. Edit → see it on `/admin-dev`;
+  when happy, `admin-ctl deploy` promotes it to prod at `/admin`.
 - nginx config: `/etc/nginx/sites-available/ft-admin` (`sudo nginx -t &&
   sudo systemctl reload nginx` after edits). It also proxies each project at
   `/projects/<name>/` → a per-project port (roa 4111, godmother 4102, hmetal 4103).
@@ -45,7 +54,8 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   notes/tasks/rescan with a CSRF error.
 - Because we run **`next dev`** behind the proxy on a different host than the dev
   server's own origin, `next.config.ts` must also set
-  `allowedDevOrigins: ["ft.cloud.teleporthq.ai"]`. Without it, Next 16 blocks
+  `allowedDevOrigins` to the public host (read from the `PUBLIC_HOST` env var).
+  Without it, Next 16 blocks
   cross-origin `/_next/*` dev-resource requests with **403**, client chunks fail
   to load, and every client component hangs on "loading…" (the process table and
   the CPU/MEM/DISK toolbar). `curl` won't reveal this — it sends no Origin/Referer;
@@ -97,6 +107,24 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   Keep runner + run-slug in sync.
 - `src/store/ui.ts` — `subjecto` `Subject`s for **UI state only** (search, view
   mode). Server data stays in RSC/DB; use `useSubject` from `subjecto/react`.
+- **Voice / TTS pipeline.** Spoken output (alerts, Jarvis narration, Q&A answers)
+  goes through **one** entry point: `say(text, cfg, opts)` in `src/lib/tts.ts`.
+  Two engines, chosen in settings (`src/store/voice.ts` — `engine: 'kokoro' |
+  'browser'`, persisted to localStorage):
+  · **kokoro** (default) — POST `/api/tts` (`src/app/api/tts/route.ts`) proxies to
+    the **on-box Kokoro-FastAPI** container (Docker, `127.0.0.1:8880`, OpenAI-compat
+    `/v1/audio/speech`; override with `KOKORO_URL`). No API key, no per-use cost,
+    terminal text never leaves the box. The client decodes the MP3 and plays it
+    through a shared Web Audio graph (source → **AnalyserNode** → destination);
+    that analyser is handed to the orb's `reactor.setSpeakingSource()` so the
+    Jarvis cloud reacts to a **real** spectrum while speaking (not the synthetic
+    fallback in `jarvis-audio.ts`). A FIFO serializes utterances; `interrupt`
+    clears it. If the service is down the route returns 503 and `say()` falls back
+    to the browser voice — voice never hard-fails.
+  · **browser** — the OS Web Speech synthesizer (`src/lib/speech.ts`).
+  The Kokoro container is provisioned by `deploy/install.sh` (§11b, `INSTALL_TTS`,
+  Docker `--restart unless-stopped` — no systemd unit). Curated voice list +
+  picker: `KOKORO_VOICES` in `src/store/voice.ts`, `terminal-voice-controls.tsx`.
 - Dashboard (`src/app/page.tsx`) and detail (`src/app/projects/[slug]/page.tsx`)
   are `dynamic = 'force-dynamic'` (they read live signals every load). `params`
   is a `Promise` — `await` it.
