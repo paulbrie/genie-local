@@ -22,6 +22,9 @@ import fs from "node:fs";
 const PORT = Number(process.env.SETUP_PORT || 3001);
 const HOST_FILE = process.env.SETUP_HOST_FILE || "/tmp/genie-setup/host";
 const PROGRESS_FILE = process.env.SETUP_PROGRESS_FILE || "/tmp/genie-setup/progress";
+const USER_FILE = process.env.SETUP_USER_FILE || "/tmp/genie-setup/admin-user";
+const PASS_FILE = process.env.SETUP_PASS_FILE || "/tmp/genie-setup/admin-pass";
+const DEV_FILE = process.env.SETUP_DEV_FILE || "/tmp/genie-setup/start-dev";
 
 // Canonical ordered stages. install.sh emits "key|state" (running|done|failed);
 // stages not yet seen render as pending. Labels live here (not in bash).
@@ -38,6 +41,12 @@ const STAGES = [
 
 // A conservative hostname check (letters/digits/dots/hyphens, has a dot).
 const HOST_RE = /^(?=.{1,253}$)([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z0-9-]{1,63}$/;
+const USER_RE = /^[A-Za-z0-9._-]{1,32}$/;
+// Ample but shell/dotenv-safe password set — deliberately excludes quotes, $,
+// backtick, backslash, #, ; and whitespace so the value can be written verbatim
+// into .env.local without escaping. 8–64 chars.
+const PASS_ALLOWED = "!@%^&*()_+-=[]{}.,:?";
+const PASS_RE = /^[A-Za-z0-9!@%^&*()_+\-=[\]{}.,:?]{8,64}$/;
 
 function detectHost(req) {
   const raw = (req.headers["x-forwarded-host"] || req.headers["host"] || "")
@@ -124,25 +133,39 @@ const STYLE = `
   .banner.bad { background: #3b1d1d; border: 1px solid #5b2626; color: #fca5a5; }
 `;
 
-function wizardPage({ host, error }) {
+function wizardPage({ host, username, startdev, error }) {
   const detected = host && HOST_RE.test(host);
+  const user = username && USER_RE.test(username) ? username : "admin";
+  const devChecked = startdev ? " checked" : "";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Genie Server Setup</title><style>${STYLE}</style></head>
 <body>
-  <form class="card" method="POST" action="/setup/confirm">
+  <form class="card" method="POST" action="/setup/confirm" autocomplete="off">
     <h1>Genie Server Setup</h1>
-    <p class="sub">Confirm the public address this server is reached at. Setup then
+    <p class="sub">Confirm the public address and choose the admin login. Setup then
       runs to completion on this page.</p>
     ${error ? `<div class="err">${esc(error)}</div>` : ""}
     <div>Detected public host:</div>
     <div class="host">${detected ? esc(host) : "could not detect — enter it below"}</div>
     <label for="host">Public hostname (no scheme, no path)</label>
     <input id="host" name="host" value="${detected ? esc(host) : ""}" placeholder="app.example.com" autocomplete="off" spellcheck="false" required />
+    <label for="username">Admin username</label>
+    <input id="username" name="username" value="${esc(user)}" autocomplete="off" spellcheck="false" required />
+    <label for="password">Admin password</label>
+    <input id="password" name="password" type="password" minlength="8" maxlength="64" autocomplete="new-password" required />
+    <label for="password2">Confirm admin password</label>
+    <input id="password2" name="password2" type="password" minlength="8" maxlength="64" autocomplete="new-password" required />
+    <p class="hint" style="color:#6b7280;font-size:12px;margin:8px 0 0">8–64 characters — letters, digits, and <code>${esc(PASS_ALLOWED)}</code></p>
+    <label style="display:flex;align-items:flex-start;gap:10px;margin:22px 0 0;cursor:pointer;color:#e6e6e6">
+      <input type="checkbox" name="startdev" value="1"${devChecked} style="width:auto;margin-top:3px" />
+      <span>Keep the dev instance (<code>/admin-dev</code>) always running — start it now and on boot.
+        <span style="display:block;color:#6b7280;font-size:12px">Off by default: it stays on-demand (start it later from the admin UI).</span></span>
+    </label>
     <button type="submit">Confirm &amp; start setup →</button>
     <ul class="info">
       <li>Admin dashboard will be served at <code>https://${detected ? esc(host) : "&lt;host&gt;"}/admin</code></li>
-      <li>You'll see live progress here until it's ready</li>
+      <li>You'll sign in with these credentials once setup finishes</li>
     </ul>
   </form>
 </body></html>`;
@@ -221,15 +244,32 @@ const server = http.createServer((req, res) => {
       if (body.length > 4096) req.destroy();
     });
     req.on("end", () => {
-      const host = (new URLSearchParams(body).get("host") || "").trim().toLowerCase();
-      if (!HOST_RE.test(host)) {
-        return send(res, 400, wizardPage({ host, error: `"${esc(host)}" is not a valid hostname.` }));
-      }
+      const p = new URLSearchParams(body);
+      const host = (p.get("host") || "").trim().toLowerCase();
+      const username = (p.get("username") || "").trim();
+      const password = p.get("password") || "";
+      const password2 = p.get("password2") || "";
+      const startdev = p.get("startdev") === "1";
+      const fail = (msg) => send(res, 400, wizardPage({ host, username, startdev, error: msg }));
+
+      if (!HOST_RE.test(host)) return fail(`"${esc(host)}" is not a valid hostname.`);
+      if (!USER_RE.test(username)) return fail("Username: 1–32 chars (letters, digits, . _ -).");
+      if (!PASS_RE.test(password))
+        return fail(`Password must be 8–64 chars using letters, digits, and ${esc(PASS_ALLOWED)}.`);
+      if (password !== password2) return fail("Passwords do not match.");
+
       try {
-        fs.mkdirSync(HOST_FILE.replace(/\/[^/]*$/, ""), { recursive: true });
+        const dir = HOST_FILE.replace(/\/[^/]*$/, "");
+        fs.mkdirSync(dir, { recursive: true });
+        // Write everything else first, then the host LAST — install.sh waits on
+        // the host file, so this guarantees the other values are present when it
+        // proceeds. install.sh reads then deletes the password file.
+        fs.writeFileSync(USER_FILE, username + "\n", { mode: 0o600 });
+        fs.writeFileSync(PASS_FILE, password + "\n", { mode: 0o600 });
+        fs.writeFileSync(DEV_FILE, (startdev ? "1" : "0") + "\n", { mode: 0o644 });
         fs.writeFileSync(HOST_FILE, host + "\n", { mode: 0o644 });
       } catch (e) {
-        return send(res, 500, wizardPage({ host, error: "Could not persist host: " + e.message }));
+        return fail("Could not persist setup values: " + e.message);
       }
       // Do NOT exit — we stay up to stream progress. Send the operator to the
       // progress view (GET / renders progress once the host is confirmed).

@@ -87,6 +87,8 @@ if [[ -n "${PUBLIC_HOST:-}" ]]; then
     "$NAME" bash /srv/genie-src/deploy/install.sh
 else
   EXPECT_HOST="${WIZARD_HOST:-genie.test.local}"
+  EXPECT_USER="${WIZARD_USER:-admin}"
+  EXPECT_PASS="${WIZARD_PASS:-Testpass123}"
   echo "==> Running install.sh WITH the setup wizard (will confirm host='$EXPECT_HOST')"
   # Run the installer in the background; it blocks on the wizard at :3000 until
   # we POST the confirm, exactly as a browser would.
@@ -114,7 +116,12 @@ else
   docker exec "$NAME" curl -s -H "Host: $EXPECT_HOST" http://127.0.0.1:3000/setup \
     | grep -q "$EXPECT_HOST" && echo "    /setup shows detected host: $EXPECT_HOST"
   docker exec "$NAME" curl -s -o /dev/null -w '    POST /setup/confirm -> %{http_code}\n' \
-    -X POST http://127.0.0.1:3000/setup/confirm --data "host=$EXPECT_HOST"
+    -X POST http://127.0.0.1:3000/setup/confirm \
+    --data-urlencode "host=$EXPECT_HOST" \
+    --data-urlencode "username=$EXPECT_USER" \
+    --data-urlencode "password=$EXPECT_PASS" \
+    --data-urlencode "password2=$EXPECT_PASS" \
+    --data-urlencode "startdev=1"
 
   echo "    install continuing (npm install + prod build) — waiting for completion ..."
   done_ok=0
@@ -129,7 +136,7 @@ fi
 
 echo
 echo "==> VERIFICATION (expected public host: $EXPECT_HOST)"
-docker exec -e EXPECT_HOST="$EXPECT_HOST" "$NAME" bash -lc '
+docker exec -e EXPECT_HOST="$EXPECT_HOST" -e EXPECT_USER="${EXPECT_USER:-}" -e EXPECT_PASS="${EXPECT_PASS:-}" "$NAME" bash -lc '
   set +e
   echo "--- service states ---"
   systemctl is-active postgresql nginx admin.service genie-stats.service
@@ -150,8 +157,17 @@ docker exec -e EXPECT_HOST="$EXPECT_HOST" "$NAME" bash -lc '
     [ "$code" = "200" ] && break; sleep 2
   done
   echo "GET /admin/login      -> $code"
-  echo "--- DEV instance: admin-ctl dev-start, then /admin-dev/login ---"
-  sudo -u genie sudo -n /usr/local/bin/admin-ctl dev-start
+  if [ -n "$EXPECT_PASS" ]; then
+    echo "--- login with the password chosen in the setup UI ---"
+    good=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:3000/admin/api/login \
+      -H "Content-Type: application/json" --data "{\"username\":\"$EXPECT_USER\",\"password\":\"$EXPECT_PASS\"}")
+    bad=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:3000/admin/api/login \
+      -H "Content-Type: application/json" --data "{\"username\":\"$EXPECT_USER\",\"password\":\"wrong-pw\"}")
+    echo "POST login (chosen pw) -> $good   (wrong pw) -> $bad"
+  fi
+  echo "--- DEV instance: daemonised (startdev=1) → enabled + serving /admin-dev ---"
+  echo "admin-dev enabled: $(systemctl is-enabled admin-dev.service 2>/dev/null || echo no)"
+  echo "admin-dev active : $(systemctl is-active admin-dev.service 2>/dev/null || echo no)"
   for i in $(seq 1 60); do
     code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/admin-dev/login 2>/dev/null)
     [ "$code" = "200" ] && break; sleep 2

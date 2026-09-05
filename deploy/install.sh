@@ -60,6 +60,10 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+# Run the on-demand dev instance (/admin-dev) as a persistent daemon (start now
+# + enable on boot)? Off by default (stays on-demand via admin-ctl). The setup
+# UI can turn this on; unattended installs can set START_DEV=1.
+START_DEV="${START_DEV:-0}"
 
 GENIE_VPS_TOKEN="${GENIE_VPS_TOKEN:-REPLACE_WITH_GENIE_VPS_TOKEN}"
 
@@ -175,6 +179,9 @@ fi
 # ready — at which point nginx flips the root to /admin and the setup server is
 # retired. Skipped entirely when PUBLIC_HOST is supplied (unattended installs).
 HOST_FILE="$SETUP_DIR/host"
+ADMIN_USER_FILE="$SETUP_DIR/admin-user"
+ADMIN_PASS_FILE="$SETUP_DIR/admin-pass"
+DEV_FILE="$SETUP_DIR/start-dev"
 if [[ -z "$PUBLIC_HOST" ]]; then
   SETUP_UI=1
   log "Bringing up the setup UI (nginx :$SETUP_PORT_PUBLIC → setup server :$SETUP_PORT)"
@@ -206,6 +213,7 @@ EOF
 
   # Start the setup server (stays up for the whole install; retired at the end).
   SETUP_HOST_FILE="$HOST_FILE" SETUP_PROGRESS_FILE="$SETUP_PROGRESS" SETUP_PORT="$SETUP_PORT" \
+    SETUP_USER_FILE="$ADMIN_USER_FILE" SETUP_PASS_FILE="$ADMIN_PASS_FILE" SETUP_DEV_FILE="$DEV_FILE" \
     node "$SCRIPT_DIR/setup-server.mjs" &
   WIZ_PID=$!
   sleep 1
@@ -223,8 +231,14 @@ EOF
   done
   PUBLIC_HOST="$(tr -d '[:space:]' < "$HOST_FILE" 2>/dev/null || true)"
   [[ -n "$PUBLIC_HOST" ]] || die "Setup UI did not capture a public host (timed out?)."
+  # Adopt the admin credentials chosen in the setup UI, then wipe the plaintext
+  # password from disk (it lands in admin/.env.local, chmod 600, in section 8).
+  [[ -s "$ADMIN_USER_FILE" ]] && ADMIN_USER="$(cat "$ADMIN_USER_FILE")"
+  [[ -s "$ADMIN_PASS_FILE" ]] && ADMIN_PASSWORD="$(cat "$ADMIN_PASS_FILE")"
+  [[ -s "$DEV_FILE" ]] && START_DEV="$(tr -dc 01 < "$DEV_FILE")"
+  rm -f "$ADMIN_USER_FILE" "$ADMIN_PASS_FILE" "$DEV_FILE"
   stage host done
-  ok "public host confirmed: $PUBLIC_HOST"
+  ok "public host confirmed: $PUBLIC_HOST (admin user: $ADMIN_USER)"
 else
   ok "public host provided: $PUBLIC_HOST (setup UI skipped)"
 fi
@@ -495,7 +509,12 @@ KillMode=process
 Restart=on-failure
 RestartSec=3
 EOF
-ok "genie-stats.service, admin.service (prod :3002), admin-dev.service (dev :3003)"
+# Daemonise the dev instance only when requested: an [Install] section makes it
+# enable-able (start on boot). Without it, admin-dev stays on-demand (admin-ctl).
+if [[ "$START_DEV" == "1" ]]; then
+  printf '\n[Install]\nWantedBy=multi-user.target\n' >> /etc/systemd/system/admin-dev.service
+fi
+ok "genie-stats.service, admin.service (prod :3002), admin-dev.service (dev :3003$([[ "$START_DEV" == "1" ]] && echo ', daemonised'))"
 
 # admin-ctl — root-owned privileged helper the admin UI runs via a scoped
 # NOPASSWD sudoers rule to control the prod/dev services and ship builds. The
@@ -690,9 +709,10 @@ fi
 if [[ "$START_SERVICES" == "1" ]]; then
   log "Enabling and starting services"
   begin_stage start
-  # admin-dev.service is intentionally NOT enabled/started here: it has no
-  # [Install] section and is launched on demand from the admin UI (admin-ctl).
+  # admin-dev.service is on-demand by default (launched via admin-ctl). It joins
+  # the enabled/started set only when daemonisation was requested (START_DEV=1).
   UNITS=(admin.service)
+  [[ "$START_DEV" == "1" ]] && UNITS+=(admin-dev.service)
   [[ -f "$STATS_GLOBAL/dist/daemon.js" ]] && UNITS+=(genie-stats.service)
   [[ -f /etc/systemd/system/code-server.service ]] && UNITS+=(code-server.service)
   systemctl enable "${UNITS[@]}" >/dev/null 2>&1 || true
@@ -753,7 +773,7 @@ cat <<EOF
   Admin login : $ADMIN_USER / (see admin/.env.local)
 
   Admin URLs  : /admin      → PROD (next start, :3002, .next-prod)
-                /admin-dev  → DEV  (next dev,  :3003) — start via the UI/admin-ctl
+                /admin-dev  → DEV  (next dev,  :3003) — $([[ "$START_DEV" == "1" ]] && echo 'daemonised (on boot)' || echo 'on-demand via the UI/admin-ctl')
 
   Verify:
     systemctl is-active admin.service genie-stats.service postgresql nginx
