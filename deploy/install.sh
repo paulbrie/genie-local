@@ -460,7 +460,9 @@ fi
 # Installed as the genie user's crontab, idempotently (drop any prior copy first).
 STATS_CRON="* * * * * /usr/bin/node $INSTALL_DIR/admin/scripts/stats-history.mjs >/dev/null 2>&1"
 if command -v crontab >/dev/null; then
-  ( crontab -u "$GENIE_USER" -l 2>/dev/null | grep -v -F "admin/scripts/stats-history.mjs"; \
+  # `|| true`: on a box with no existing crontab, grep matches nothing and exits
+  # 1, which under `set -euo pipefail` would abort the whole installer.
+  ( crontab -u "$GENIE_USER" -l 2>/dev/null | grep -v -F "admin/scripts/stats-history.mjs" || true; \
     echo "$STATS_CRON" ) | crontab -u "$GENIE_USER" -
   ok "stats-history sampler cron (every minute, user $GENIE_USER)"
 else
