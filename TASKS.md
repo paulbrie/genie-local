@@ -31,7 +31,7 @@ by priority; section numbers refer to install.sh.
 ### P1 — security
 
 - [ ] **Bind the admin app to loopback.** `admin.service` runs
-      `next dev -H 0.0.0.0 -p 3001` but nginx proxies to `127.0.0.1:3001` —
+      `-H 0.0.0.0` (prod `-p 3002`, dev `-p 3003`) but nginx proxies to loopback —
       `-H 127.0.0.1` loses nothing and stops raw-VM installs from exposing the
       dev server (verbose errors, spoofable `X-Forwarded-Proto`) directly.
 - [ ] **Own the genie user's sudo.** §3 creates `genie` with

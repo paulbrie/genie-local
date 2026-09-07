@@ -15,30 +15,38 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 
 ## How it runs
 
-- Served publicly at **`https://$PUBLIC_HOST/admin`** via nginx (the host is the
-  `PUBLIC_HOST` env var, set per environment — not hardcoded).
-  Public traffic → container **:3000** (nginx) → this app on **:3001**.
-- `basePath: '/admin'` (see `next.config.ts`) — `next/link`/router/static assets
-  are auto-prefixed. Raw `<a href>` is **not** prefixed: use it only to link to
-  the live project apps at `/projects/<slug>` (outside this app).
-- Runs under systemd as `admin.service` — the **PROD** instance: `next start
-  -p 3001 -H 0.0.0.0` (user `genie`), serving the compiled build from
-  `APP_DIST_DIR=.next-prod`. It is **NOT** a dev server: source edits do **not**
-  hot-reload — they only go live after a **rebuild**. Deploy via the confined
-  root helper `sudo admin-ctl deploy` (`admin/ops/admin-ctl`), which runs
-  `next build --webpack` into `.next-prod` then `systemctl restart admin.service`,
-  detached, logging to `/tmp/projects/admin-deploy.log` (add `--migrate` to run
-  Drizzle first). The unit sets **`KillMode=process`** so that restart does not
-  kill project dev servers launched from the UI (see `src/lib/runner.ts`). Logs:
-  `journalctl -u admin.service -f`.
-- For hot-reload development there is a **separate** `admin-dev.service` — `next
-  dev` on **:3002**, served at **`/admin-dev`**, `APP_DIST_DIR=.next-dev` (kept
-  distinct so dev and prod builds never clobber each other). Control it with
-  `sudo admin-ctl dev-start|dev-stop|dev-restart`. Edit → see it on `/admin-dev`;
-  when happy, `admin-ctl deploy` promotes it to prod at `/admin`.
+- Served publicly at **`https://<public-host>/admin`** via nginx. The public
+  host is **not hardcoded** — the setup wizard (`deploy/setup-server.mjs`)
+  captures it at install time and the installer bakes it into the systemd units
+  as `APP_PUBLIC_HOSTS` (read by `next.config.ts`). Public traffic → box
+  **:3000** (nginx) → the app on **:3002** (prod) or **:3003** (dev).
+- Both units launch the **custom `server.mjs`** (not `next start`/`next dev`
+  directly): it wraps Next and hosts the `/<basePath>/pty` WebSocket in the SAME
+  process/port, so xterm terminals get a real PTY (see `server.mjs` +
+  `server/pty.mjs`). NODE_ENV decides the mode — set on prod, unset on dev.
+- **Two instances from this one working copy**, differing only by per-unit env
+  (`APP_BASE_PATH` / `NEXT_PUBLIC_BASE_PATH` / `APP_DIST_DIR`, see `next.config.ts`):
+  - **`admin.service`** — PROD at **`/admin`** on **:3002**: serves the
+    `.next-prod` build. This is the live site. Source edits do **not** show up
+    until you rebuild — ship with **`sudo admin-ctl deploy`** (builds `.next-prod`
+    then restarts `admin.service`; add `--migrate` to run drizzle first).
+  - **`admin-dev.service`** — on-demand DEV at **`/admin-dev`** on **:3003**:
+    Next dev mode (`.next-dev` distDir) with hot-reload, for previewing changes on
+    the live box before deploying. Not started at boot; control it via
+    **`sudo admin-ctl dev-start|dev-stop|dev-restart`** (or the admin UI).
+- `basePath` comes from `APP_BASE_PATH` (`/admin` prod, `/admin-dev` dev) —
+  `next/link`/router/static assets are auto-prefixed. Raw `<a href>` is **not**
+  prefixed: use it only to link to the live project apps at `/projects/<slug>`.
+- Both units set **`KillMode=process`** so restarting them does not kill project
+  dev servers launched from the UI (see `src/lib/runner.ts`). Logs:
+  `journalctl -u admin.service -f` (or `-u admin-dev.service`). `admin-ctl` is a
+  root-owned helper the app runs via a scoped NOPASSWD sudoers rule
+  (`ops/admin-supervisor.sudoers`); deploy progress streams to
+  `/tmp/projects/admin-deploy.log` (the Logs page).
 - nginx config: `/etc/nginx/sites-available/ft-admin` (`sudo nginx -t &&
-  sudo systemctl reload nginx` after edits). It also proxies each project at
-  `/projects/<name>/` → a per-project port (roa 4111, godmother 4102, hmetal 4103).
+  sudo systemctl reload nginx` after edits) — routes `/admin`→:3002 and
+  `/admin-dev`→:3003 (longest-prefix, so they never collide). It also proxies each
+  project at `/projects/<name>/` → a per-port app (generated in `nginx/projects.conf`).
 - **Auth is enforced in-app by `src/proxy.ts`** — Next 16's "Proxy" (the renamed
   Middleware; `middleware.ts` is deprecated). It gates every route behind a signed
   session cookie (`admin_session`, HMAC-SHA256 via `src/lib/session.ts`, key =
@@ -51,15 +59,16 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   the login page). NOTE: proxy sees the basePath-STRIPPED path (`/admin/db` → `/db`).
 - Server Actions require `experimental.serverActions.allowedOrigins` to include
   the public domain — the proxy changes the origin, so dropping this breaks
-  notes/tasks/rescan with a CSRF error.
-- Because we run **`next dev`** behind the proxy on a different host than the dev
-  server's own origin, `next.config.ts` must also set
-  `allowedDevOrigins` to the public host (read from the `PUBLIC_HOST` env var).
-  Without it, Next 16 blocks
-  cross-origin `/_next/*` dev-resource requests with **403**, client chunks fail
-  to load, and every client component hangs on "loading…" (the process table and
-  the CPU/MEM/DISK toolbar). `curl` won't reveal this — it sends no Origin/Referer;
-  reproduce with a real browser. `next start` doesn't have this restriction.
+  notes/tasks/rescan with a CSRF error. Both this and `allowedDevOrigins` derive
+  from **`APP_PUBLIC_HOSTS`** (comma-separated, set per unit); there is no
+  hardcoded host. If `APP_PUBLIC_HOSTS` is empty/wrong, Server Actions 403.
+- The **`/admin-dev`** instance runs `next dev` behind the proxy on a different
+  host than the dev server's own origin, so its host must be in `allowedDevOrigins`
+  (i.e. in `APP_PUBLIC_HOSTS`). Without it, Next 16 blocks cross-origin `/_next/*`
+  dev-resource requests with **403**, client chunks fail to load, and every client
+  component hangs on "loading…". `curl` won't reveal this — it sends no
+  Origin/Referer; reproduce with a real browser. Prod (`next start` on `/admin`)
+  has no such dev-origin restriction.
 
 ## Data & config
 

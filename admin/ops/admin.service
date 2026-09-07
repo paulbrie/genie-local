@@ -1,8 +1,9 @@
 # Install as /etc/systemd/system/admin.service (the PROD instance).
-# Applied at the "prod flip": serves the built app at /admin on :3001 via
-# `next start`. Until the flip, the live admin.service still runs `next dev`.
+# Serves the built app (.next-prod) at /admin on :3002 via the custom server.mjs
+# (next start + the /admin/pty WebSocket in one process).
+# Ship changes with `sudo admin-ctl deploy` (rebuild + restart).
 [Unit]
-Description=Projects Supervisor — admin (Next.js PROD, /admin on :3001)
+Description=Projects Supervisor — admin (Next.js PROD, /admin on :3002)
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -12,12 +13,17 @@ User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
 Environment=NODE_ENV=production
-Environment=PORT=3001
+Environment=PORT=3002
+# Public host(s) the app is reached at, comma-separated. next.config.ts reads
+# this for allowedDevOrigins + Server Actions CSRF — MUST be set or Server
+# Actions 403. deploy/install.sh fills it in from the setup wizard.
+Environment=APP_PUBLIC_HOSTS=
 Environment=APP_BASE_PATH=/admin
 Environment=NEXT_PUBLIC_BASE_PATH=/admin
 Environment=APP_DIST_DIR=.next-prod
 # Custom server (server.mjs) = `next start` + the /admin/pty WebSocket in one
-# process/port, so xterm terminals get a real PTY instead of HTTP polling.
+# process/port (PORT from the env above), so xterm terminals get a real PTY
+# instead of HTTP polling.
 ExecStart=/usr/bin/node /opt/project/admin/server.mjs
 # KillMode=process so restarting admin (e.g. on deploy) does NOT kill the
 # project dev servers launched from the UI (they live in this unit's cgroup).

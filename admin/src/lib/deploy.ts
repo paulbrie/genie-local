@@ -19,9 +19,9 @@ export const DEPLOY_LOG = "projects/admin-deploy.log";
 export type DeployState = "none" | "running" | "success" | "failed";
 
 export type DeployStatus = {
-  /** systemd `is-active` for the prod (/admin :3001) unit. */
+  /** systemd `is-active` for the prod (/admin :3002) unit. */
   prod: string;
-  /** systemd `is-active` for the dev (/admin-dev :3002) unit. */
+  /** systemd `is-active` for the dev (/admin-dev :3003) unit. */
   dev: string;
   /** Outcome of the most recent deploy. */
   deploy: DeployState;

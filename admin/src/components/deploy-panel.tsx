@@ -45,7 +45,7 @@ function deployLabel(s: DeployStatus): { text: string; dot: string; pulse: boole
 }
 
 /**
- * Build the prod bundle from the current source and restart the /admin (:3001)
+ * Build the prod bundle from the current source and restart the /admin (:3002)
  * server. This is how dev edits (validated on /admin-dev) reach production.
  * Dev start/stop is on this same page via the admin-dev.service row.
  */
@@ -112,7 +112,7 @@ export function DeployPanel() {
         </CardTitle>
         <CardDescription>
           Builds the current source into the prod bundle and restarts{" "}
-          <code>/admin</code> (:3001). Iterate on{" "}
+          <code>/admin</code> (:3002). Iterate on{" "}
           <a
             href="/admin-dev"
             className="underline underline-offset-2"
@@ -121,7 +121,7 @@ export function DeployPanel() {
           >
             /admin-dev
           </a>{" "}
-          (:3002), then ship it here.
+          (:3003), then ship it here.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
