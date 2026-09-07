@@ -11,11 +11,13 @@ Type=simple
 User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
+# NODE_ENV unset → server.mjs runs Next in dev mode (HMR); the dev HMR upgrade
+# is forwarded to Next, while /admin-dev/pty is handled by the PTY bridge.
 Environment=PORT=3002
 Environment=APP_BASE_PATH=/admin-dev
 Environment=NEXT_PUBLIC_BASE_PATH=/admin-dev
 Environment=APP_DIST_DIR=.next-dev
-ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next dev -p 3002 -H 0.0.0.0
+ExecStart=/usr/bin/node /opt/project/admin/server.mjs
 # Don't kill project dev servers launched from the UI on stop/restart.
 KillMode=process
 Restart=on-failure

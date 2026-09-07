@@ -11,11 +11,14 @@ Type=simple
 User=genie
 Group=genie
 WorkingDirectory=/opt/project/admin
+Environment=NODE_ENV=production
 Environment=PORT=3001
 Environment=APP_BASE_PATH=/admin
 Environment=NEXT_PUBLIC_BASE_PATH=/admin
 Environment=APP_DIST_DIR=.next-prod
-ExecStart=/usr/bin/node /opt/project/admin/node_modules/next/dist/bin/next start -p 3001 -H 0.0.0.0
+# Custom server (server.mjs) = `next start` + the /admin/pty WebSocket in one
+# process/port, so xterm terminals get a real PTY instead of HTTP polling.
+ExecStart=/usr/bin/node /opt/project/admin/server.mjs
 # KillMode=process so restarting admin (e.g. on deploy) does NOT kill the
 # project dev servers launched from the UI (they live in this unit's cgroup).
 KillMode=process

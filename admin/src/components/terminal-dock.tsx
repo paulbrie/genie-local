@@ -19,7 +19,8 @@ import {
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
-import { AnsiText } from "@/components/ansi-text";
+import "@xterm/xterm/css/xterm.css";
+
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,13 +42,22 @@ import {
   termStatus,
   type TermStatus,
 } from "@/store/terminals";
+import {
+  type ConnState,
+  createTerminal,
+  disposeTerminal,
+  focusTerminal,
+  hasTerminal,
+  reattachTerminal,
+  refitTerminal,
+  setTerminalFontSize,
+  writeToPty,
+} from "@/lib/terminal-bridge";
 
 const API = `${BASE_PATH}/api/terminals`;
-const POLL_MS = 1000;
-// Approximate monospace metrics for text-xs / leading-relaxed, used to map a
-// window's pixel size onto tmux columns/rows.
-const CHAR_W = 7.2;
-const LINE_H = 19.5;
+// Status dot / token meter refresh. Metadata only now — the live pane streams
+// over the PTY WebSocket — so it can poll lazily instead of every second.
+const STATUS_POLL_MS = 2500;
 
 // A palette of deep, dark tones for the window bars — all dark enough that the
 // white bar text stays legible on top. For anything else there's a colour
@@ -918,31 +928,39 @@ export function TermStatusDot({ status }: { status: TermStatus }) {
 
 /* ------------------------------ terminal I/O ---------------------------- */
 
-const CTRL_KEYS: Record<string, string> = {
-  c: "C-c",
-  d: "C-d",
-  z: "C-z",
-  l: "C-l",
-  a: "C-a",
-  e: "C-e",
-  u: "C-u",
-  k: "C-k",
-  r: "C-r",
+// tmux font-size class → xterm px.
+const FONT_PX: Record<FontSizeCls, number> = {
+  "text-xs": 12,
+  "text-sm": 14,
+  "text-base": 16,
 };
 
-const SPECIAL_KEYS: Record<string, string> = {
-  Enter: "Enter",
-  Backspace: "BSpace",
-  Tab: "Tab",
-  Escape: "Escape",
-  ArrowUp: "Up",
-  ArrowDown: "Down",
-  ArrowLeft: "Left",
-  ArrowRight: "Right",
-  Home: "Home",
-  End: "End",
-  PageUp: "PageUp",
-  PageDown: "PageDown",
+// Named control keys (used by the footer buttons + mobile bar) → the raw byte
+// sequence written into the PTY. Replaces the old tmux `send-keys` names now
+// that input goes straight to a real terminal over the WebSocket.
+const KEY_SEQ: Record<string, string> = {
+  Enter: "\r",
+  Backspace: "\x7f",
+  Tab: "\t",
+  BTab: "\x1b[Z",
+  Escape: "\x1b",
+  Up: "\x1b[A",
+  Down: "\x1b[B",
+  Right: "\x1b[C",
+  Left: "\x1b[D",
+  Home: "\x1b[H",
+  End: "\x1b[F",
+  PageUp: "\x1b[5~",
+  PageDown: "\x1b[6~",
+  "C-c": "\x03",
+  "C-d": "\x04",
+  "C-l": "\x0c",
+  "C-z": "\x1a",
+  "C-a": "\x01",
+  "C-e": "\x05",
+  "C-u": "\x15",
+  "C-k": "\x0b",
+  "C-r": "\x12",
 };
 
 function TerminalView({
@@ -962,7 +980,6 @@ function TerminalView({
   mobile?: boolean;
   onStatus?: (status: TermStatus) => void;
 }) {
-  const [content, setContent] = useState("");
   const [size, setSize] = useState("");
   const [status, setStatus] = useState<TermStatus>("idle");
   // Cumulative token total for this Claude session (summed across turns on the
@@ -970,273 +987,111 @@ function TerminalView({
   // stays visible after a turn finishes (the CLI only prints its meter while
   // working).
   const [tokens, setTokens] = useState<TokenMeter | null>(null);
-  const [focused, setFocused] = useState(false);
-  const screenRef = useRef<HTMLPreElement>(null);
-  const measureRef = useRef<HTMLSpanElement>(null);
+  const [conn, setConn] = useState<ConnState>("connecting");
+  const containerRef = useRef<HTMLDivElement>(null);
   const base = `${API}/${encodeURIComponent(name)}`;
 
-  // Keep the latest onStatus without re-creating `refresh` on every render.
+  // Keep the latest onStatus without re-creating the poll on every render.
   const onStatusRef = useRef(onStatus);
   useEffect(() => {
     onStatusRef.current = onStatus;
   }, [onStatus]);
 
-  // Monotonic id for input POSTs, plus a count in flight. Each keystroke POST
-  // returns the freshly redrawn pane; `seq` lets us drop an out-of-order capture
-  // that would rewind fresher content, and while any POST is in flight the 1s
-  // poll stands down so it can't clobber those hot-path captures. Once nothing is
-  // in flight we pull one authoritative capture to reconcile the trailing prompt.
-  const seq = useRef(0);
-  const inflight = useRef(0);
-
-  const applySnap = useCallback(
-    (json: {
-      content?: string;
-      size?: string;
-      status?: TermStatus;
-      tokens?: TokenMeter | null;
-    }) => {
-      const s: TermStatus = json.status ?? "idle";
-      setContent(json.content ?? "");
-      setSize(json.size ?? "");
-      setStatus(s);
-      // Hold the last meter through a whole Claude session; drop it once the
-      // pane goes back to a plain shell (idle/busy).
-      if (claudeGlyphState(s)) {
-        if (json.tokens) setTokens(json.tokens);
-      } else {
-        setTokens(null);
-      }
-      onStatusRef.current?.(s);
-    },
-    [],
-  );
-
-  const refresh = useCallback(async () => {
-    if (inflight.current > 0) return; // don't clobber in-flight keystrokes
-    try {
-      const res = await fetch(base, { cache: "no-store" });
-      const json = await res.json();
-      if (res.ok) applySnap(json);
-    } catch {
-      /* transient */
-    }
-  }, [base, applySnap]);
-
+  // xterm lifecycle: create on mount, dispose on unmount (window close).
+  // Minimizing only hides the window (this component stays mounted), so the live
+  // session, scrollback, and WebSocket all persist across minimize/restore.
   useEffect(() => {
-    let active = true;
-    const tick = () => {
-      if (active) void refresh();
-    };
-    tick();
-    const id = setInterval(tick, POLL_MS);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, [refresh]);
-
-  // Reshape the tmux window to match the on-screen size (debounced) so the
-  // captured pane exactly fills the viewport — no wrapping, no scrollbars.
-  useEffect(() => {
-    const el = screenRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    let last = "";
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const metrics = () => {
-      const meas = measureRef.current;
-      if (meas) {
-        const r = meas.getBoundingClientRect();
-        // measurer holds 50 chars on line 1 and a 2nd line, so:
-        return { charW: r.width / 50 || CHAR_W, lineH: r.height / 2 || LINE_H };
-      }
-      return { charW: CHAR_W, lineH: LINE_H };
-    };
-
-    const compute = () => {
-      const cs = getComputedStyle(el);
-      const padX =
-        parseFloat(cs.paddingLeft || "0") + parseFloat(cs.paddingRight || "0");
-      const padY =
-        parseFloat(cs.paddingTop || "0") + parseFloat(cs.paddingBottom || "0");
-      const { charW, lineH } = metrics();
-      const cols = Math.max(20, Math.floor((el.clientWidth - padX) / charW));
-      const rows = Math.max(5, Math.floor((el.clientHeight - padY) / lineH));
-      return { cols, rows };
-    };
-
-    const ro = new ResizeObserver(() => {
-      // While the window is minimized (display:none) the pane measures 0×0 —
-      // skip, or we'd shrink the tmux window to its minimum for no reason.
-      if (el.clientWidth === 0 || el.clientHeight === 0) return;
-      const { cols, rows } = compute();
-      const key = `${cols}x${rows}`;
-      if (key === last) return;
-      last = key;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        void fetch(base, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ resize: { cols, rows } }),
-        })
-          .then(() => refresh())
-          .catch(() => {});
-      }, 200);
-    });
-    ro.observe(el);
-    return () => {
-      clearTimeout(timer);
-      ro.disconnect();
-    };
-    // fontSize is a dep so changing it re-measures and reshapes tmux: the pane's
-    // pixel box is unchanged, so only the char metrics (not a resize event) shift.
-  }, [base, refresh, fontSize]);
-
-  // Stick to the newest output, but only while the user is already at (or near)
-  // the bottom. Once they scroll up to read scrollback, leave their position
-  // alone so incoming output every poll doesn't yank them back down.
-  //
-  // Re-rendering the whole pane each poll can make the browser reset scrollTop,
-  // which fires a `scroll` event; if we treated that as a user scroll we'd flip
-  // `stick` off and the view would freeze mid-stream. So we guard our own
-  // programmatic scrolls with `applying` and ignore scroll events during them —
-  // only genuine user scrolls update `stick`.
-  const stick = useRef(true);
-  const applying = useRef(false);
-  const pinToBottom = useCallback(() => {
-    const el = screenRef.current;
+    const el = containerRef.current;
     if (!el) return;
-    applying.current = true;
-    el.scrollTop = el.scrollHeight;
-    requestAnimationFrame(() => {
-      applying.current = false;
-    });
-  }, []);
-  const onScroll = useCallback(() => {
-    if (applying.current) return; // ignore programmatic / re-render resets
-    const el = screenRef.current;
-    if (!el) return;
-    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  }, []);
-  useEffect(() => {
-    if (stick.current) pinToBottom();
-  }, [content, pinToBottom]);
+    if (hasTerminal(name)) reattachTerminal(name, el);
+    else createTerminal(el, name, FONT_PX[fontSize], setConn);
+    return () => {
+      disposeTerminal(name);
+    };
+    // `name` identifies the window; font size is handled by its own effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name]);
 
-  // When the window is opened or restored (becomes visible), focus the screen
-  // so keystrokes go to the terminal immediately — no click needed. (A hidden
-  // element can't hold focus, so this only fires once it's actually shown.)
+  // Font-size change → resize xterm + refit (which re-sizes the attached PTY).
+  useEffect(() => {
+    if (hasTerminal(name)) setTerminalFontSize(name, FONT_PX[fontSize]);
+  }, [name, fontSize]);
+
+  // Refit + focus when the window is shown or becomes the active one.
   useEffect(() => {
     if (minimized) return;
-    const el = screenRef.current;
-    if (!el) return;
     const id = setTimeout(() => {
-      // On mobile, don't auto-focus the pane: focus belongs to the hidden
-      // textarea (raised on tap), and focusing the pane here would hide the
-      // "tap to type" hint without actually opening the keyboard.
-      if (!mobile) el.focus();
-      stick.current = true;
-      pinToBottom();
+      refitTerminal(name);
+      if (!mobile && active) focusTerminal(name);
     }, 30);
     return () => clearTimeout(id);
-  }, [minimized, mobile, pinToBottom]);
+  }, [name, minimized, active, mobile]);
 
-  // Whenever this window becomes the active (frontmost) one — e.g. clicking a
-  // background window's header to bring it forward — focus its pane so it's
-  // ready to type with no second click into the pane. (Desktop only; on mobile,
-  // focus lives on the hidden textarea, raised by tapping the pane.)
+  // Status dot / token meter: metadata only now, polled lazily from the tmux
+  // capture endpoint (the live pane streams over the PTY WS). Paused while
+  // minimized. Its `content` is ignored — we only read status/size/tokens.
   useEffect(() => {
-    if (mobile || minimized || !active) return;
-    const el = screenRef.current;
-    if (!el) return;
-    const id = setTimeout(() => el.focus(), 0);
-    return () => clearTimeout(id);
-  }, [active, minimized, mobile]);
-
-  // One POST at a time, in order: without this, fast typing raced (each key was
-  // its own request) and tmux received characters transposed. A single pump
-  // drains a queue and coalesces adjacent text ops, so a burst of keys is still
-  // just one or two requests — ordered, not raced.
-  const queue = useRef<Array<{ text?: string; key?: string }>>([]);
-  const pumping = useRef(false);
-
-  const postSend = useCallback(
-    async (payload: { text?: string; key?: string }) => {
-      const mySeq = ++seq.current;
-      inflight.current++;
+    if (minimized) return;
+    let alive = true;
+    const tick = async () => {
       try {
-        const res = await fetch(base, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        const json = await res.json().catch(() => null);
-        // The POST returns the freshly redrawn pane in the same round-trip, so
-        // the typed character lands in the REAL input (not a separate buffer).
-        // Ignore a capture that raced behind a newer keystroke's.
-        if (res.ok && json?.content !== undefined && mySeq === seq.current) {
-          applySnap(json);
+        const res = await fetch(base, { cache: "no-store" });
+        const json = await res.json();
+        if (!alive || !res.ok) return;
+        const s: TermStatus = json.status ?? "idle";
+        setStatus(s);
+        setSize(json.size ?? "");
+        if (claudeGlyphState(s)) {
+          if (json.tokens) setTokens(json.tokens);
+        } else {
+          setTokens(null);
         }
+        onStatusRef.current?.(s);
       } catch {
-        /* ignore */
-      } finally {
-        inflight.current--;
-        // After a burst settles, pull one authoritative capture to correct any
-        // residual mis-prediction (e.g. the trailing prompt space capture strips).
-        if (inflight.current === 0) setTimeout(() => void refresh(), 80);
+        /* transient */
       }
+    };
+    void tick();
+    const id = setInterval(tick, STATUS_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [base, name, minimized]);
+
+  // Named control keys and literal text both go straight to the PTY. xterm sizes
+  // itself via the FitAddon (see terminal-bridge), so there's no tmux reshape or
+  // pixel↔cols math here anymore.
+  const sendKey = useCallback(
+    (key: string) => {
+      const seq = KEY_SEQ[key];
+      if (seq !== undefined) writeToPty(name, seq);
+      focusTerminal(name);
     },
-    [base, applySnap, refresh],
+    [name],
   );
 
-  const pump = useCallback(async () => {
-    if (pumping.current) return;
-    pumping.current = true;
-    try {
-      while (queue.current.length) {
-        // Coalesce a run of literal-text ops into a single send.
-        let text = "";
-        while (queue.current.length && queue.current[0].text !== undefined) {
-          text += queue.current.shift()!.text;
-        }
-        if (text) {
-          await postSend({ text });
-          continue;
-        }
-        const op = queue.current.shift();
-        if (op?.key) await postSend({ key: op.key });
-      }
-    } finally {
-      pumping.current = false;
-    }
-  }, [postSend]);
-
-  const send = useCallback(
-    (payload: { text?: string; key?: string }, echo?: string) => {
-      // Optimistic local echo: paint the typed char immediately (idle shell
-      // only — a TUI redraw can't be predicted by appending). Applied in call
-      // order so the echoed text never transposes either.
-      if (echo) setContent((c) => c + echo);
-      queue.current.push(payload);
-      void pump();
+  const sendText = useCallback(
+    (text: string) => {
+      writeToPty(name, text);
+      focusTerminal(name);
     },
-    [pump],
+    [name],
   );
 
-  // Paste: a non-editable <pre> never receives a `paste` event, so Cmd/Ctrl+V
-  // does nothing on its own. Intercept it and pull the text via the async
-  // Clipboard API (the keypress is a user gesture; the site is HTTPS), then send
-  // it literally to tmux — same as fast typing.
+  // Scroll-stick, focus-on-show/active, and ordered keystroke delivery are all
+  // xterm's job now (the FitAddon + the terminal's own scrollback + the ordered
+  // WebSocket stream), so the old ResizeObserver metrics, scroll bookkeeping, and
+  // POST queue/pump are gone.
+
+  // Paste: xterm handles a plain Cmd/Ctrl+V into the focused pane natively (it
+  // fires onData with the text). This handler backs the explicit Paste button
+  // (needed on mobile / when the shortcut is awkward) and, crucially, IMAGE
+  // paste: a screenshot can't stream into a shell, so it's uploaded and its saved
+  // absolute path is typed into the pane instead — a `claude` session there can
+  // read it. Both entry points are user gestures, so the async Clipboard read is
+  // permitted; surface why nothing happened.
   const pasteFromClipboard = useCallback(async () => {
-    // Reachable two ways: Cmd/Ctrl+V, and the explicit Paste button (needed on
-    // mobile and when the shortcut is awkward). Both are user gestures, so the
-    // async Clipboard read is permitted; surface why nothing happened.
-    //
-    // A screenshot is an IMAGE on the clipboard, which readText() can't see (it
-    // returns ""). An image also can't be streamed into tmux, so upload it and
-    // type the saved file's absolute path into the pane instead — a `claude`
-    // session there can read the screenshot from it.
     const pasteImage = async (blob: Blob, mime: string) => {
       const res = await fetch(`${base}/image`, {
         method: "POST",
@@ -1245,7 +1100,7 @@ function TerminalView({
       });
       const json = await res.json().catch(() => null);
       if (res.ok && json?.path) {
-        void send({ text: `${json.path} ` }); // trailing space separates it
+        writeToPty(name, `${json.path} `); // trailing space separates it
         toast.success("Screenshot pasted");
       } else {
         toast.error(json?.error ?? "Couldn't paste image");
@@ -1253,7 +1108,7 @@ function TerminalView({
     };
     const pasteText = async () => {
       const text = await navigator.clipboard?.readText();
-      if (text) void send({ text });
+      if (text) writeToPty(name, text);
       else toast.info("Clipboard is empty");
     };
     try {
@@ -1270,7 +1125,7 @@ function TerminalView({
         const textItem = items.find((i) => i.types.includes("text/plain"));
         if (textItem) {
           const text = await (await textItem.getType("text/plain")).text();
-          if (text) void send({ text });
+          if (text) writeToPty(name, text);
           else toast.info("Clipboard is empty");
           return;
         }
@@ -1286,151 +1141,32 @@ function TerminalView({
         toast.error("Clipboard is blocked — allow clipboard access to paste");
       }
     }
-  }, [base, send]);
+  }, [base, name]);
 
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      // Paste (Cmd+V / Ctrl+V) — handle before the meta/ctrl early-returns.
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "v") {
-        e.preventDefault();
-        void pasteFromClipboard();
-        return;
-      }
-      if (e.metaKey) return;
-      if (e.ctrlKey && !e.altKey) {
-        const mapped = CTRL_KEYS[e.key.toLowerCase()];
-        if (mapped) {
-          e.preventDefault();
-          void send({ key: mapped });
-        }
-        return;
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        void send({ key: e.shiftKey ? "BTab" : "Tab" });
-        return;
-      }
-      if (e.key === "Backspace") {
-        e.preventDefault();
-        void send({ key: "BSpace" });
-        return;
-      }
-      const special = SPECIAL_KEYS[e.key];
-      if (special) {
-        e.preventDefault();
-        void send({ key: special });
-        return;
-      }
-      if (e.key.length === 1) {
-        e.preventDefault();
-        // An idle shell echoes the char inline instantly (appended to content);
-        // a TUI can't be predicted that way, so it relies on the redrawn pane the
-        // POST returns — the char lands in the real input a round-trip later.
-        void send({ text: e.key }, status === "idle" ? e.key : undefined);
-      }
-    },
-    [send, status, pasteFromClipboard],
-  );
+  // xterm owns key input (hardware + soft keyboards, IME, paste) and streams it
+  // over the WebSocket, so the old onKeyDown / hidden-textarea handlers are gone.
+  // The mobile control bar + footer buttons drive sendKey/sendText directly.
 
-  // --- Mobile input --------------------------------------------------------
-  // A <pre> can't summon the soft keyboard, so on mobile a hidden <textarea>
-  // owns focus. Soft keyboards fire `beforeinput`/`input` rather than reliable
-  // keydowns, so we split: beforeinput handles Enter/Backspace (which don't
-  // change the field once we cancel them), and input handles inserted text and
-  // paste (read the value, forward it, clear). Hardware keyboards are covered by
-  // the shared onKeyDown, which preventDefaults and thus suppresses these.
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [ctrlArmed, setCtrlArmed] = useState(false);
-
-  const onBeforeInput = useCallback(
-    (e: React.FormEvent<HTMLTextAreaElement>) => {
-      const type = (e.nativeEvent as InputEvent).inputType;
-      if (type === "insertLineBreak" || type === "insertParagraph") {
-        e.preventDefault();
-        void send({ key: "Enter" });
-      } else if (
-        type === "deleteContentBackward" ||
-        type === "deleteContent"
-      ) {
-        e.preventDefault();
-        void send({ key: "BSpace" });
-      }
-      // insertText / paste fall through to onInput below.
-    },
-    [send],
-  );
-
-  const onInput = useCallback(
-    (e: React.FormEvent<HTMLTextAreaElement>) => {
-      const el = e.currentTarget;
-      const data = el.value;
-      el.value = ""; // consume: forward to tmux, keep the field empty
-      if (!data) return;
-      if (ctrlArmed && /^[a-z]$/i.test(data)) {
-        void send({ key: `C-${data.toLowerCase()}` });
-        setCtrlArmed(false);
-        return;
-      }
-      // Idle shell echoes inline; a TUI relies on the redrawn pane the POST returns.
-      void send({ text: data }, status === "idle" ? data : undefined);
-    },
-    [send, status, ctrlArmed],
-  );
-
-  const tapKey = useCallback(
-    (key: string) => {
-      void send({ key });
-      inputRef.current?.focus();
-    },
-    [send],
-  );
-
-  const tapText = useCallback(
-    (text: string) => {
-      void send({ text });
-      inputRef.current?.focus();
-    },
-    [send],
-  );
-
-  // Voice input: dictate straight into tmux. Each finalized phrase is sent as
-  // literal text (no auto-Enter — the user reviews and runs it). Gated on
+  // Voice input: dictate straight into the terminal. Each finalized phrase is
+  // sent as literal text (no auto-Enter — the user reviews and runs it). Gated on
   // `supported` so the mic UI only shows in browsers that have the Web Speech API.
   const speech = useSpeechInput({
-    onText: (text) => send({ text }),
+    onText: (text) => writeToPty(name, text),
     onError: (msg) => toast.error(msg),
   });
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* Hidden metrics probe: 50 chars wide, 2 lines tall, same font as the
-          screen — lets us map pixels → tmux cols/rows precisely. */}
-      <span
-        ref={measureRef}
-        aria-hidden
-        className={`pointer-events-none invisible absolute font-mono ${fontSize} leading-relaxed whitespace-pre`}
-      >
-        {"0".repeat(50) + "\n0"}
-      </span>
-      {/* On mobile the control bar sits ABOVE the pane, so the keyboard ends up
-          directly under the terminal output — nothing between the prompt and the
-          keys. Covers what a soft keyboard lacks (Esc, Ctrl, Tab/Shift-Tab,
-          arrows) plus a standalone Enter so commands run with the keyboard down. */}
+      {/* On mobile the control bar sits ABOVE the pane, so the soft keyboard ends
+          up directly under the terminal output. Covers what a soft keyboard lacks
+          (Esc, Tab/Shift-Tab, arrows) plus a standalone Enter. */}
       {mobile && (
         <div className="shrink-0 border-b bg-background">
           <div className="flex items-center gap-1 overflow-x-auto px-2 py-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <BarKey label="Esc" onTap={() => tapKey("Escape")} />
-            <BarKey label="Tab" onTap={() => tapKey("Tab")} />
-            <BarKey label="⇧Tab" onTap={() => tapKey("BTab")} />
-            <BarKey label="⏎" onTap={() => tapKey("Enter")} />
-            <BarKey
-              label="Ctrl"
-              active={ctrlArmed}
-              onTap={() => {
-                setCtrlArmed((v) => !v);
-                inputRef.current?.focus();
-              }}
-            />
+            <BarKey label="Esc" onTap={() => sendKey("Escape")} />
+            <BarKey label="Tab" onTap={() => sendKey("Tab")} />
+            <BarKey label="⇧Tab" onTap={() => sendKey("BTab")} />
+            <BarKey label="⏎" onTap={() => sendKey("Enter")} />
             <BarKey label="Paste" onTap={() => void pasteFromClipboard()} />
             {speech.supported && (
               <>
@@ -1439,7 +1175,7 @@ function TerminalView({
                   active={speech.listening}
                   onTap={() => {
                     speech.toggle();
-                    inputRef.current?.focus();
+                    focusTerminal(name);
                   }}
                 />
                 <select
@@ -1460,65 +1196,32 @@ function TerminalView({
                 </select>
               </>
             )}
-            <BarKey label="^C" onTap={() => tapKey("C-c")} />
-            <BarKey label="^D" onTap={() => tapKey("C-d")} />
-            <BarKey label="←" onTap={() => tapKey("Left")} />
-            <BarKey label="↓" onTap={() => tapKey("Down")} />
-            <BarKey label="↑" onTap={() => tapKey("Up")} />
-            <BarKey label="→" onTap={() => tapKey("Right")} />
-            <BarKey label="Clear" onTap={() => tapKey("C-l")} />
-            <BarKey label="|" onTap={() => tapText("|")} />
-            <BarKey label="~" onTap={() => tapText("~")} />
-            <BarKey label="/" onTap={() => tapText("/")} />
+            <BarKey label="^C" onTap={() => sendKey("C-c")} />
+            <BarKey label="^D" onTap={() => sendKey("C-d")} />
+            <BarKey label="←" onTap={() => sendKey("Left")} />
+            <BarKey label="↓" onTap={() => sendKey("Down")} />
+            <BarKey label="↑" onTap={() => sendKey("Up")} />
+            <BarKey label="→" onTap={() => sendKey("Right")} />
+            <BarKey label="Clear" onTap={() => sendKey("C-l")} />
+            <BarKey label="|" onTap={() => sendText("|")} />
+            <BarKey label="~" onTap={() => sendText("~")} />
+            <BarKey label="/" onTap={() => sendText("/")} />
           </div>
         </div>
       )}
-      <pre
-        ref={screenRef}
-        tabIndex={0}
-        onKeyDown={mobile ? undefined : onKeyDown}
-        onScroll={onScroll}
-        onFocus={() => setFocused(true)}
-        onBlur={() => setFocused(false)}
-        onClick={mobile ? () => inputRef.current?.focus() : undefined}
-        className={`min-h-0 flex-1 overflow-x-hidden overflow-y-auto bg-zinc-950 p-3 font-mono ${fontSize} leading-relaxed whitespace-pre text-zinc-100 outline-none ${
-          focused && !mobile ? "ring-2 ring-ring ring-inset" : ""
-        }`}
-      >
-        {content ? <AnsiText text={content} /> : "…"}
-      </pre>
-
-      {mobile && (
-        <>
-          {/* Invisible, focusable input — a <pre> can't raise the soft keyboard,
-              so this does. Tapping the pane (or a control key) focuses it; typed
-              text goes straight to tmux and the field stays empty. */}
-          <textarea
-            ref={inputRef}
-            rows={1}
-            defaultValue=""
-            onKeyDown={onKeyDown}
-            onBeforeInput={onBeforeInput}
-            onInput={onInput}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            inputMode="text"
-            autoCapitalize="off"
-            autoCorrect="off"
-            autoComplete="off"
-            spellCheck={false}
-            aria-label="Terminal input"
-            className="pointer-events-none absolute bottom-0 left-0 size-px resize-none border-0 bg-transparent p-0 text-transparent opacity-0 outline-none"
-          />
-          {/* Faint hint until the keyboard is up (reappears when it's dismissed). */}
-          {!focused && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
-              <span className="rounded-full bg-background/85 px-3 py-1 text-xs text-muted-foreground shadow ring-1 ring-foreground/10 backdrop-blur">
-                {ctrlArmed ? "Ctrl armed — tap a key" : "Tap the terminal to type"}
-              </span>
-            </div>
-          )}
-        </>
+      {/* Live xterm pane. On mobile, tapping it focuses xterm's own hidden
+          textarea, which raises the soft keyboard. */}
+      <div
+        ref={containerRef}
+        onClick={mobile ? () => focusTerminal(name) : undefined}
+        className="min-h-0 flex-1 overflow-hidden bg-zinc-950 p-2"
+      />
+      {conn !== "open" && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
+          <span className="rounded-full bg-background/85 px-3 py-1 text-xs text-muted-foreground shadow ring-1 ring-foreground/10 backdrop-blur">
+            {conn === "connecting" ? "Connecting…" : "Reconnecting…"}
+          </span>
+        </div>
       )}
       {!mobile && (
         <div
@@ -1597,7 +1300,7 @@ function TerminalView({
                   }
                   onClick={() => {
                     speech.toggle();
-                    screenRef.current?.focus();
+                    focusTerminal(name);
                   }}
                 >
                   <Mic
@@ -1614,7 +1317,7 @@ function TerminalView({
               title="Paste clipboard into the terminal (⌘/Ctrl+V)"
               onClick={() => {
                 void pasteFromClipboard();
-                screenRef.current?.focus();
+                focusTerminal(name);
               }}
             >
               <ClipboardPaste className="size-3" />
@@ -1638,8 +1341,8 @@ function TerminalView({
                 variant="outline"
                 className="h-6 px-2 font-mono text-xs"
                 onClick={() => {
-                  void send({ key });
-                  screenRef.current?.focus();
+                  sendKey(key);
+                  focusTerminal(name);
                 }}
               >
                 {label}
