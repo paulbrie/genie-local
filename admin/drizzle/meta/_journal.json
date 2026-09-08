@@ -57,6 +57,13 @@
       "when": 1787136259338,
       "tag": "0007_many_the_watchers",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788889382647,
+      "tag": "0008_flawless_exodus",
+      "breakpoints": true
     }
   ]
 }

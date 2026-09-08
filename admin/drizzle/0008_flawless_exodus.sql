@@ -1,0 +1,1 @@
+ALTER TABLE "status_snapshots" ALTER COLUMN "size_bytes" SET DATA TYPE bigint;

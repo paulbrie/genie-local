@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   integer,
   jsonb,
@@ -80,7 +81,9 @@ export const statusSnapshots = pgTable("status_snapshots", {
   lastCommitAt: timestamp("last_commit_at", { withTimezone: true }),
   lastCommitHash: text("last_commit_hash"),
   dirMtime: timestamp("dir_mtime", { withTimezone: true }),
-  sizeBytes: integer("size_bytes"),
+  // bigint (mode: number): a project dir can exceed 2^31 bytes (~2.15 GB) — with
+  // node_modules etc. — which overflows int4 and fails the snapshot insert.
+  sizeBytes: bigint("size_bytes", { mode: "number" }),
   // Full app signal blob (package.json scripts, file presence flags, errors…)
   raw: jsonb("raw"),
 });
