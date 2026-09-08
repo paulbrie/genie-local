@@ -218,6 +218,17 @@ export function writeToPty(name: string, data: string): void {
   }
 }
 
+/** Paste clipboard text the way a real terminal does: via xterm's paste(), which
+ *  wraps it in bracketed-paste markers when the focused app (shell, tmux, Claude)
+ *  has that mode on. Sending raw text (writeToPty) instead makes every newline
+ *  submit, so multi-line pastes execute line-by-line. Goes out over the WS through
+ *  the same onData path as typing. */
+export function pasteToTerminal(name: string, data: string): void {
+  const inst = instances.get(name);
+  if (!inst || !data) return;
+  try { inst.terminal.paste(data); inst.terminal.focus(); } catch { /* disposed */ }
+}
+
 export function focusTerminal(name: string): void {
   instances.get(name)?.terminal.focus();
 }

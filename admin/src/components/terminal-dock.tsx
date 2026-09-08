@@ -48,6 +48,7 @@ import {
   disposeTerminal,
   focusTerminal,
   hasTerminal,
+  pasteToTerminal,
   reattachTerminal,
   refitTerminal,
   setTerminalFontSize,
@@ -1108,7 +1109,7 @@ function TerminalView({
     };
     const pasteText = async () => {
       const text = await navigator.clipboard?.readText();
-      if (text) writeToPty(name, text);
+      if (text) pasteToTerminal(name, text);
       else toast.info("Clipboard is empty");
     };
     try {
@@ -1125,7 +1126,7 @@ function TerminalView({
         const textItem = items.find((i) => i.types.includes("text/plain"));
         if (textItem) {
           const text = await (await textItem.getType("text/plain")).text();
-          if (text) writeToPty(name, text);
+          if (text) pasteToTerminal(name, text);
           else toast.info("Clipboard is empty");
           return;
         }
