@@ -1144,6 +1144,27 @@ function TerminalView({
     }
   }, [base, name]);
 
+  // Route Ctrl/Cmd+V through our unified paste. Capture phase pre-empts xterm's
+  // own textarea handler; preventDefault stops both the browser's native
+  // text-only paste AND the bare ^V keystroke that would otherwise reach the
+  // pane — a `claude` session reads ^V as "paste image", looks at the SERVER
+  // clipboard (empty), and answers "no image found in clipboard". Now a
+  // screenshot is uploaded and its saved path typed instead, and text pastes
+  // bracketed. (Trade-off: Ctrl+V no longer does shell verbatim-insert here.)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void pasteFromClipboard();
+      }
+    };
+    el.addEventListener("keydown", onKeyDown, true);
+    return () => el.removeEventListener("keydown", onKeyDown, true);
+  }, [pasteFromClipboard]);
+
   // xterm owns key input (hardware + soft keyboards, IME, paste) and streams it
   // over the WebSocket, so the old onKeyDown / hidden-textarea handlers are gone.
   // The mobile control bar + footer buttons drive sendKey/sendText directly.
