@@ -407,6 +407,16 @@ export async function createTerminal(
     "-c",
     DEFAULT_CWD,
   ]);
+  // The xterm pane attaches to this session, so scrolling is tmux's job, not the
+  // browser's (the old capture-pane renderer scrolled a DOM div; xterm on tmux's
+  // alternate screen can't). Enable mouse so the wheel scrolls history via
+  // copy-mode. Scoped to this session — the global default stays off, so any
+  // other tmux the user runs on this server is untouched. Non-fatal.
+  try {
+    await tmux(["set-option", "-t", target, "mouse", "on"]);
+  } catch {
+    /* older tmux / race — scrolling just falls back to the keyboard copy-mode */
+  }
   const list = await listTerminals();
   const created = list.find((t) => t.target === target);
   if (!created) throw new Error("session created but not found");
