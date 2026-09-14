@@ -9,6 +9,7 @@ import {
   Code2,
   Container,
   Database,
+  ExternalLink,
   Globe,
   LayoutDashboard,
   LogOut,
@@ -309,6 +310,8 @@ export function AppSidebar() {
             session cookie in nginx. */}
         <a
           href="/vscode/"
+          target="_blank"
+          rel="noreferrer"
           onClick={closeMobile}
           title={rail ? "VS Code" : undefined}
           className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
@@ -316,7 +319,12 @@ export function AppSidebar() {
           } text-muted-foreground hover:bg-accent/50 hover:text-foreground`}
         >
           <Code2 className="size-4 shrink-0" />
-          {!rail && <span className="truncate">VS Code</span>}
+          {!rail && (
+            <>
+              <span className="truncate">VS Code</span>
+              <ExternalLink className="ml-auto size-3.5 shrink-0 opacity-50" />
+            </>
+          )}
         </a>
       </nav>
 
