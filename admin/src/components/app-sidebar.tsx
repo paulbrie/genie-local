@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Bot,
+  Code2,
   Container,
   Database,
   Globe,
@@ -302,6 +303,21 @@ export function AppSidebar() {
             </div>
           );
         })}
+
+        {/* VS Code (code-server) — lives outside the /admin basePath, so a raw
+            <a> (Next <Link> would prefix it with basePath). Gated by the admin
+            session cookie in nginx. */}
+        <a
+          href="/vscode/"
+          onClick={closeMobile}
+          title={rail ? "VS Code" : undefined}
+          className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+            rail ? "justify-center" : ""
+          } text-muted-foreground hover:bg-accent/50 hover:text-foreground`}
+        >
+          <Code2 className="size-4 shrink-0" />
+          {!rail && <span className="truncate">VS Code</span>}
+        </a>
       </nav>
 
         <div
