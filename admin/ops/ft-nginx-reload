@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#
+# ft-nginx-reload — confined privileged helper for the Projects Supervisor UI.
+#
+# Install as /usr/local/bin/ft-nginx-reload (root-owned, mode 0755, NOT group/
+# other-writable). The admin app runs as `genie` and invokes this via
+#   sudo -n /usr/local/bin/ft-nginx-reload
+# (see admin/src/lib/nginx.ts) after regenerating the per-project include at
+# /opt/project/admin/nginx/projects.conf. It takes NO arguments and does exactly
+# two things — validate config, then reload — so the scoped sudoers rule granting
+# it cannot be leveraged to run anything else.
+#
+# `nginx -t` first: a bad generated projects.conf fails the test and we skip the
+# reload, so a malformed include can never take the running server down.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+nginx -t
+systemctl reload nginx
+echo "nginx reloaded"

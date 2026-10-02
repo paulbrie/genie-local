@@ -1,0 +1,30 @@
+# User projects (excluded per request — they live in their own repos)
+/projects/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.mcp.json
+
+# Dependencies & build output
+node_modules/
+.next/
+*.tsbuildinfo
+dist/
+build/
+out/
+# ...but the vendored @genie/vps-stats (private, not on npm) must be committed.
+!deploy/vendor/vps-stats/dist/
+!deploy/vendor/vps-stats/dist/**
+
+# Runtime logs / pids / caches
+.run-logs/
+.stats-history/
+*.log
+*.pid
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
