@@ -13,6 +13,7 @@ import {
   Globe,
   LayoutDashboard,
   LogOut,
+  MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -59,6 +60,7 @@ const NAV: NavItem[] = [
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/claude", label: "Claude", icon: Sparkles },
+  { href: "/comms", label: "Comms", icon: MessagesSquare },
 ];
 
 const STORAGE_KEY = "admin.sidebar.collapsed";
