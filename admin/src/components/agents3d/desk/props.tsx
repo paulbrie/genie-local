@@ -29,9 +29,9 @@ function Clay({ color, ...rest }: { color: string } & Partial<THREE.MeshPhysical
   return <meshPhysicalMaterial color={color} roughness={0.58} clearcoat={0.12} clearcoatRoughness={0.5} {...rest} />;
 }
 
-/** The desktop, with a soft rug of shadow under it. */
+/** The round tabletop on one pedestal, over a floor. */
 export function DeskTop() {
-  const geo = useMemo(() => new RoundedBoxGeometry(TABLE.w, 0.6, TABLE.d, 4, 0.12), []);
+  const geo = useMemo(() => new THREE.CylinderGeometry(TABLE.r, TABLE.r, 0.6, 96), []);
   const grain = useMemo(() => {
     const c = document.createElement("canvas");
     c.width = 512;
@@ -51,7 +51,7 @@ export function DeskTop() {
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.repeat.set(2, 1);
+    t.repeat.set(1.5, 1.5);
     return t;
   }, []);
   return (
@@ -64,14 +64,15 @@ export function DeskTop() {
         <circleGeometry args={[60, 48]} />
         <meshStandardMaterial color="#2a2522" roughness={1} />
       </mesh>
-      {[-1, 1].flatMap((sx) =>
-        [-1, 1].map((sz) => (
-          <mesh key={`${sx}${sz}`} position={[sx * (TABLE.w / 2 - 0.8), -TABLE.h / 2 - 0.3, sz * (TABLE.d / 2 - 0.8)]} castShadow>
-            <boxGeometry args={[0.7, TABLE.h - 0.6, 0.7]} />
-            <Clay color="#8a5f3a" />
-          </mesh>
-        )),
-      )}
+      {/* the pedestal: a column and a round foot */}
+      <mesh position={[0, -TABLE.h / 2 - 0.3, 0]} castShadow>
+        <cylinderGeometry args={[1.1, 1.4, TABLE.h - 0.6, 32]} />
+        <Clay color="#8a5f3a" />
+      </mesh>
+      <mesh position={[0, -TABLE.h + 0.25, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[4.2, 4.6, 0.5, 48]} />
+        <Clay color="#7a5232" />
+      </mesh>
     </group>
   );
 }

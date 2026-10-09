@@ -7,13 +7,16 @@ import {
   Activity,
   Bot,
   Box,
+  ChevronDown,
   Code2,
   Container,
   Database,
   ExternalLink,
   Globe,
+  KanbanSquare,
   LayoutDashboard,
   LogOut,
+  UsersRound,
   MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -46,6 +49,8 @@ type NavItem = {
   label: string;
   icon: typeof LayoutDashboard;
   exact?: boolean;
+  /** A collapsible group: the item itself links to its own page, these under it. */
+  children?: NavItem[];
 };
 
 const NAV: NavItem[] = [
@@ -61,11 +66,27 @@ const NAV: NavItem[] = [
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/claude", label: "Claude", icon: Sparkles },
-  { href: "/comms", label: "Comms", icon: MessagesSquare },
-  { href: "/agents3d", label: "Agents City", icon: Box },
+  {
+    href: "/teams",
+    label: "Team",
+    icon: UsersRound,
+    exact: true,
+    children: [
+      { href: "/comms", label: "Comms", icon: MessagesSquare },
+      { href: "/agents3d", label: "Agents City", icon: Box },
+      { href: "/tasks", label: "Tasks", icon: KanbanSquare },
+    ],
+  },
 ];
 
 const STORAGE_KEY = "admin.sidebar.collapsed";
+/** The nav groups folded shut (by href); open by default. */
+const GROUPS_KEY = "admin.sidebar.closedGroups";
+
+const isActive = (item: NavItem, pathname: string) =>
+  item.exact
+    ? pathname === item.href
+    : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
 /**
  * Collapsible left navigation rail. Holds every top-level route plus the global
@@ -90,14 +111,29 @@ export function AppSidebar() {
   // "Currently working" = anything not sitting idle at a shell prompt.
   const workingTerms = terms.filter((t) => t.status !== "idle");
 
+  const [closedGroups, setClosedGroups] = useState<string[]>([]);
+
   // Restore persisted state after mount (avoids SSR/client mismatch).
   useEffect(() => {
     try {
       setCollapsed(localStorage.getItem(STORAGE_KEY) === "1");
+      const g = JSON.parse(localStorage.getItem(GROUPS_KEY) ?? "[]");
+      if (Array.isArray(g)) setClosedGroups(g.filter((x): x is string => typeof x === "string"));
     } catch {
       /* private mode / no storage — keep default */
     }
   }, []);
+
+  const toggleGroup = (href: string) =>
+    setClosedGroups((cur) => {
+      const next = cur.includes(href) ? cur.filter((h) => h !== href) : [...cur, href];
+      try {
+        localStorage.setItem(GROUPS_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
 
   // Live count of running Chrome instances, shown as a badge on the nav item.
   useEffect(() => {
@@ -193,9 +229,20 @@ export function AppSidebar() {
 
       <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
         {NAV.map((item) => {
-          const active = item.exact
-            ? pathname === item.href
-            : pathname === item.href || pathname.startsWith(`${item.href}/`);
+          if (item.children)
+            return (
+              <NavGroup
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                rail={rail}
+                // a group with the page you're on stays open
+                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, pathname))}
+                onToggle={() => toggleGroup(item.href)}
+                onNavigate={closeMobile}
+              />
+            );
+          const active = isActive(item, pathname);
           const Icon = item.icon;
           const badge =
             item.href === "/chrome" && chromeCount
@@ -402,5 +449,89 @@ function TermDot({ status }: { status: TermStatus }) {
   const { dot, ping } = status === "busy" ? TERM_DOT.busy : TERM_DOT.idle;
   return (
     <StatusDot color={dot} pulse={ping !== null} size="sm" label={termLabel(status)} />
+  );
+}
+
+/**
+ * A collapsible nav group: its row links to the group's own page (Team → the
+ * Teams page), the chevron folds it, and its sub-items sit under it, the one
+ * you're on highlighted. On the icon rail the sub-items show as icons.
+ */
+function NavGroup({
+  item,
+  pathname,
+  rail,
+  open,
+  onToggle,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string;
+  rail: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onNavigate: () => void;
+}) {
+  const Icon = item.icon;
+  const active = isActive(item, pathname);
+  const row = (it: NavItem, sub: boolean) => {
+    const on = isActive(it, pathname);
+    const ItIcon = it.icon;
+    return (
+      <Link
+        key={it.href}
+        href={it.href}
+        onClick={onNavigate}
+        aria-current={on ? "page" : undefined}
+        title={rail ? it.label : undefined}
+        className={`flex items-center gap-3 rounded-md py-2 text-sm transition-colors ${
+          rail ? "justify-center px-3" : sub ? "pr-3 pl-8" : "px-3"
+        } ${
+          on
+            ? "bg-accent font-medium text-accent-foreground"
+            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+        }`}
+      >
+        <ItIcon className={`shrink-0 ${sub && !rail ? "size-3.5" : "size-4"}`} />
+        {!rail && <span className="truncate">{it.label}</span>}
+      </Link>
+    );
+  };
+  if (rail)
+    return (
+      <div className="flex flex-col gap-1">
+        {row(item, false)}
+        {item.children!.map((c) => row(c, true))}
+      </div>
+    );
+  return (
+    <div>
+      <div
+        className={`flex items-center rounded-md transition-colors ${
+          active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+        }`}
+      >
+        <Link
+          href={item.href}
+          onClick={onNavigate}
+          aria-current={active ? "page" : undefined}
+          className={`flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-sm ${active ? "font-medium" : ""}`}
+        >
+          <Icon className="size-4 shrink-0" />
+          <span className="truncate">{item.label}</span>
+        </Link>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
+          title={open ? "Fold" : "Unfold"}
+          className="mr-1 rounded p-1 opacity-70 hover:bg-accent hover:opacity-100"
+        >
+          <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+        </button>
+      </div>
+      {open && <div className="mt-0.5 flex flex-col gap-0.5">{item.children!.map((c) => row(c, true))}</div>}
+    </div>
   );
 }

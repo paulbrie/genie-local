@@ -26,6 +26,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
+import {
+  clampGeom,
+  DEFAULT_SIZE,
+  type Geom,
+  parseGeom,
+  sameGeom,
+} from "@/lib/term-geometry";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { SPEECH_LANGS, useSpeechInput } from "@/lib/use-speech-input";
 import {
@@ -146,6 +153,50 @@ function nextFontSize(cls: FontSizeCls): FontSizeCls {
   return FONT_SIZES[(i + 1) % FONT_SIZES.length].cls;
 }
 
+// Each window's position and size, saved when a drag or a resize ends. A new
+// terminal takes the size any window was last given (the shared default) and
+// the usual cascade position.
+function geomKey(name: string) {
+  return `admin-term-geom:${name}`;
+}
+const GEOM_DEFAULT_KEY = "admin-term-geom-default";
+const GEOM_SAVE_MS = 300;
+
+function cascade(index: number) {
+  return { x: 120 + index * 32, y: 90 + index * 32 };
+}
+function loadGeom(name: string, index: number): Geom {
+  try {
+    const own = parseGeom(localStorage.getItem(geomKey(name)));
+    const size =
+      own.size ?? parseGeom(localStorage.getItem(GEOM_DEFAULT_KEY)).size;
+    return { ...(own.pos ?? cascade(index)), ...(size ?? DEFAULT_SIZE) };
+  } catch {
+    return { ...cascade(index), ...DEFAULT_SIZE };
+  }
+}
+function saveGeom(name: string, g: Geom) {
+  try {
+    localStorage.setItem(geomKey(name), JSON.stringify(g));
+    localStorage.setItem(GEOM_DEFAULT_KEY, JSON.stringify({ w: g.w, h: g.h }));
+  } catch {
+    /* ignore */
+  }
+}
+function moveGeom(oldName: string, next: string) {
+  try {
+    const raw = localStorage.getItem(geomKey(oldName));
+    if (raw) localStorage.setItem(geomKey(next), raw);
+    localStorage.removeItem(geomKey(oldName));
+  } catch {
+    /* ignore */
+  }
+}
+
+function viewport() {
+  return { w: window.innerWidth, h: window.innerHeight };
+}
+
 /** The Claude token meter parsed server-side from a session's status line. */
 type TokenMeter = { input: number; output: number; total: number };
 
@@ -198,6 +249,7 @@ async function renameSession(oldName: string, next: string): Promise<boolean> {
     const json = await res.json();
     if (!res.ok) throw new Error(json.error ?? "failed to rename");
     saveBarColor(to, loadBarColor(oldName)); // carry bar colour over
+    moveGeom(oldName, to); // and position + size
     renameTerminal(oldName, to);
     toast.success(`Renamed to "${to}"`);
     return true;
@@ -380,10 +432,15 @@ function TerminalWindow({
   onKill: () => void;
   onRename: (next: string) => Promise<boolean>;
 }) {
-  const [pos, setPos] = useState(() => ({
-    x: 120 + index * 32,
-    y: 90 + index * 32,
-  }));
+  // `wanted` is where the user last put the window; it is drawn fitted to the
+  // viewport (`geom`), except while being dragged. Windows only mount on the
+  // client (the dock starts empty), so localStorage can be read right away.
+  const [wanted, setWanted] = useState<Geom>(() => loadGeom(name, index));
+  const [vp, setVp] = useState(viewport);
+  const [dragging, setDragging] = useState(false);
+  const geom = dragging ? wanted : clampGeom(wanted, vp.w, vp.h);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const pendingSave = useRef<{ g: Geom; timer: number } | null>(null);
   const [z, setZ] = useState(() => bringToFront());
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(name);
@@ -391,7 +448,12 @@ function TerminalWindow({
   const [color, setColor] = useState<string | null>(null);
   const [fontSize, setFontSize] = useState<FontSizeCls>(DEFAULT_FONT);
   const [status, setStatus] = useState<TermStatus>("idle");
-  const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const drag = useRef<{
+    dx: number;
+    dy: number;
+    start: Geom;
+    last: Geom | null;
+  } | null>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
   const paletteBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -402,6 +464,62 @@ function TerminalWindow({
     setColor(loadBarColor(name));
     setFontSize(loadFontSize(name));
   }, [name]);
+
+  // Refit to the viewport when the browser window is resized (the clamp is
+  // applied at render time, so a minimized window is refitted on restore too).
+  useEffect(() => {
+    const onResize = () => setVp(viewport());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // A pending save is written straight away if the window closes first.
+  useEffect(
+    () => () => {
+      const p = pendingSave.current;
+      if (!p) return;
+      clearTimeout(p.timer);
+      saveGeom(name, p.g);
+    },
+    [name],
+  );
+
+  const scheduleSave = useCallback(
+    (g: Geom) => {
+      if (pendingSave.current) clearTimeout(pendingSave.current.timer);
+      const timer = window.setTimeout(() => {
+        pendingSave.current = null;
+        saveGeom(name, g);
+      }, GEOM_SAVE_MS);
+      pendingSave.current = { g, timer };
+    },
+    [name],
+  );
+
+  // The native resize handle (CSS `resize`) has no events of its own, so watch
+  // the window's size: one that differs from what was drawn, in the same
+  // viewport (not the CSS caps reacting to a browser resize), is the user's.
+  const drawn = useRef({ geom, vp });
+  useEffect(() => {
+    drawn.current = { geom, vp };
+  });
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const { geom: d, vp: dvp } = drawn.current;
+      const v = viewport();
+      if (!w || !h || drag.current || (w === d.w && h === d.h)) return;
+      if (v.w !== dvp.w || v.h !== dvp.h) return;
+      const g = clampGeom({ ...d, w, h }, v.w, v.h);
+      setWanted(g);
+      scheduleSave(g);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scheduleSave]);
 
   // A freshly opened (or restored) window is the one you want to type into, so
   // claim focus/glow on mount. Interactions below keep it in sync thereafter.
@@ -453,16 +571,35 @@ function TerminalWindow({
     // Ignore drags that start on a control (buttons, the rename input).
     if ((e.target as HTMLElement).closest("button, input")) return;
     raise();
-    drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+    drag.current = {
+      dx: e.clientX - geom.x,
+      dy: e.clientY - geom.y,
+      start: geom,
+      last: null,
+    };
+    setWanted(geom);
+    setDragging(true);
     const move = (ev: PointerEvent) => {
-      if (!drag.current) return;
-      setPos({
-        x: Math.max(0, ev.clientX - drag.current.dx),
-        y: Math.max(0, ev.clientY - drag.current.dy),
-      });
+      const d = drag.current;
+      if (!d) return;
+      d.last = {
+        ...d.start,
+        x: Math.max(0, ev.clientX - d.dx),
+        y: Math.max(0, ev.clientY - d.dy),
+      };
+      setWanted(d.last);
     };
     const up = () => {
+      const d = drag.current;
       drag.current = null;
+      setDragging(false);
+      // Dropped partly off-screen: settle back inside, and keep that.
+      if (d?.last) {
+        const v = viewport();
+        const g = clampGeom(d.last, v.w, v.h);
+        setWanted(g);
+        if (!sameGeom(g, d.start)) scheduleSave(g);
+      }
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
     };
@@ -490,8 +627,15 @@ function TerminalWindow({
     <div
       role="dialog"
       aria-label={`Terminal ${name}`}
+      ref={rootRef}
       onPointerDown={raise}
-      style={{ left: pos.x, top: pos.y, zIndex: z }}
+      style={{
+        left: geom.x,
+        top: geom.y,
+        width: geom.w,
+        height: geom.h,
+        zIndex: z,
+      }}
       // Kept mounted while minimized (hidden) so its position, size and live
       // output survive a minimize → restore round-trip. The active window gets a
       // purple drop shadow + subtle border so it's obvious which one has focus.

@@ -1,0 +1,15 @@
+{
+  "name": "trafficsim",
+  "description": "The trafficsim team: a manager (Alice) and developers and a tester working on trafficsim, the admin's Comms / Agents City, and genie when asked. Recipe source: docs/team.md.",
+  "rulesDoc": "/opt/project/projects/trafficsim/docs/team.md",
+  "lead": "Alice",
+  "projects": ["trafficsim", "project", "genie"],
+  "members": [
+    { "name": "Alice", "role": "Manager: dispatches, reviews, keeps the task log; does no task herself", "cwd": "/opt/project/projects/trafficsim", "model": "opus", "effort": "high", "permissionMode": "auto", "prompt": "Alice.md" },
+    { "name": "Bob", "role": "Simulation and editor", "cwd": "/opt/project/projects/trafficsim", "model": "opus", "effort": "high", "permissionMode": "auto", "prompt": "Bob.md" },
+    { "name": "Tatiana", "role": "Editor features (V2)", "cwd": "/opt/project/projects/trafficsim", "model": "opus", "effort": "high", "permissionMode": "auto", "prompt": "Tatiana.md" },
+    { "name": "Ramona", "role": "Tests", "cwd": "/opt/project/projects/trafficsim", "model": "sonnet", "effort": "medium", "permissionMode": "auto", "prompt": "Ramona.md" },
+    { "name": "Alex", "role": "Admin (Comms, Agents City); dependency upgrades; genie when asked", "cwd": "/opt/project/admin", "model": "opus", "effort": "high", "permissionMode": "auto", "prompt": "Alex.md" },
+    { "name": "Tom", "role": "Agents City's Table (Desk) mode", "cwd": "/opt/project/admin", "model": "opus", "effort": "high", "permissionMode": "auto", "prompt": "Tom.md" }
+  ]
+}

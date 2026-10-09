@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
-import type { Snapshot } from "@/lib/agents3d-timeline";
+import type { Snapshot, TLTask } from "@/lib/agents3d-timeline";
 
 import type { Selection } from "../scene";
 import { BOARD, TABLE } from "./world";
@@ -103,7 +103,42 @@ export function noteTitle(title: string): string {
   return t || title.trim();
 }
 
-function noteTexture(task: Task, color: string): THREE.CanvasTexture {
+type Elapsed = { text: string; color: string };
+
+function duration(ms: number): string {
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return "<1 min";
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  if (h >= 48) return `${Math.floor(h / 24)} d ${h % 24} h`;
+  return `${h} h ${String(min % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The time on a post-it at t: in Doing, how long since it started (its ACK, else
+ * the TASK), amber after 1 h and red after 3 h; in Done, how long it took.
+ */
+export function elapsedFor(task: Task, events: TLTask["events"] | undefined, t: number): Elapsed | null {
+  if (!events) return null;
+  const upTo = events.filter((e) => e.ms <= t);
+  const dispatched = upTo.find((e) => e.state === "dispatched")?.ms;
+  const acked = upTo.find((e) => e.state === "in_progress" || e.state === "blocked")?.ms;
+  if (task.state === "in_progress" || task.state === "blocked") {
+    const start = acked ?? dispatched;
+    if (start === undefined) return null;
+    const ms = t - start;
+    return { text: duration(ms), color: ms > 3 * 3_600_000 ? "#dc2626" : ms > 3_600_000 ? "#d97706" : "#475569" };
+  }
+  if (task.state === "done") {
+    const start = dispatched ?? acked;
+    const done = [...upTo].reverse().find((e) => e.state === "done")?.ms;
+    if (start === undefined || done === undefined) return null;
+    return { text: `took ${duration(done - start)}`, color: "#475569" };
+  }
+  return null;
+}
+
+function noteTexture(task: Task, color: string, elapsed: Elapsed | null): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = c.height = 256;
   const g = c.getContext("2d")!;
@@ -113,14 +148,22 @@ function noteTexture(task: Task, color: string): THREE.CanvasTexture {
   g.fillStyle = color;
   g.fillRect(0, 0, 256, 26);
   g.fillStyle = "#1f2937";
-  g.font = "bold 46px ui-sans-serif, system-ui, sans-serif";
-  g.fillText(task.id ?? "task", 16, 82);
-  g.font = "28px ui-sans-serif, system-ui, sans-serif";
-  wrap(g, noteTitle(task.title), 224, 2).forEach((l, i) => g.fillText(l, 16, 132 + i * 36));
+  g.font = "bold 40px ui-sans-serif, system-ui, sans-serif";
+  g.fillText(task.id ?? "task", 16, 70);
+  // Up to four lines of title, ellipsised after that; the elapsed time keeps the bottom line.
+  g.font = "23px ui-sans-serif, system-ui, sans-serif";
+  wrap(g, noteTitle(task.title), 228, 4).forEach((l, i) => g.fillText(l, 16, 104 + i * 28));
+  if (elapsed) {
+    g.fillStyle = elapsed.color;
+    g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
+    g.textAlign = "right";
+    g.fillText(elapsed.text, 242, 240);
+    g.textAlign = "left";
+  }
   if (task.state === "blocked") {
     g.fillStyle = "#ef4444";
-    g.font = "bold 26px ui-sans-serif, system-ui, sans-serif";
-    g.fillText("BLOCKED", 16, 236);
+    g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
+    g.fillText("BLOCKED", 16, 240);
   }
   if (task.state === "cancelled") {
     g.strokeStyle = "#374151";
@@ -179,10 +222,25 @@ function boardTexture(more: [number, number, number]): THREE.CanvasTexture {
 
 const noteGeo = new THREE.PlaneGeometry(NOTE, NOTE);
 
-function PostIt({ p, color, reduced, onSelect }: { p: Placed; color: string; reduced: boolean; onSelect: (s: Selection) => void }) {
+function PostIt({
+  p,
+  color,
+  elapsed,
+  reduced,
+  onSelect,
+}: {
+  p: Placed;
+  color: string;
+  elapsed: Elapsed | null;
+  reduced: boolean;
+  onSelect: (s: Selection) => void;
+}) {
   const ref = useRef<THREE.Mesh>(null);
   const flight = useRef<{ from: THREE.Vector3; to: THREE.Vector3; t0: number } | null>(null);
-  const tex = useMemo(() => noteTexture(p.task, color), [p.task, color]);
+  // Redrawn when the elapsed text changes (about once a minute live; faster in replay).
+  const eText = elapsed?.text ?? "";
+  const eColor = elapsed?.color ?? "";
+  const tex = useMemo(() => noteTexture(p.task, color, eText ? { text: eText, color: eColor } : null), [p.task, color, eText, eColor]);
   useEffect(() => () => tex.dispose(), [tex]);
 
   // A new target: fly there (in an arc out from the board), or jump under reduced motion.
@@ -229,17 +287,24 @@ function PostIt({ p, color, reduced, onSelect }: { p: Placed; color: string; red
 
 export function Whiteboard({
   snap,
+  tasks,
   colorOf,
   reduced,
   onSelect,
   onBoardClick,
+  onColumnClick,
 }: {
   snap: Snapshot;
+  /** The timeline's tasks, for their start/done times. */
+  tasks: TLTask[];
   colorOf: (key: string) => string;
   reduced: boolean;
   onSelect: (s: Selection) => void;
   onBoardClick: () => void;
+  /** A column heading was clicked (0 To do, 1 Doing, 2 Done). */
+  onColumnClick: (col: number) => void;
 }) {
+  const events = useMemo(() => new Map(tasks.map((t) => [t.key, t.events])), [tasks]);
   // Recomputed only when a task's column or text changes, not on every snapshot.
   const sig = snap.tasks.map((t) => `${t.key}:${t.state}:${t.since}`).join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,14 +331,25 @@ export function Whiteboard({
         receiveShadow
         onClick={(e: ThreeEvent<MouseEvent>) => {
           e.stopPropagation();
-          onBoardClick();
+          // A heading flies to its column; anywhere else on the board, to the whole board.
+          const uv = e.uv;
+          if (uv && uv.y > 1 - HEADER_H / BOARD.h) onColumnClick(Math.min(2, Math.floor(uv.x * 3)));
+          else onBoardClick();
         }}
       >
         <planeGeometry args={[BOARD.w, BOARD.h]} />
-        <meshStandardMaterial map={boardTex} roughness={0.35} />
+        {/* Matte, so the lamp and the room don't wash out the headings up close. */}
+        <meshStandardMaterial map={boardTex} roughness={0.85} />
       </mesh>
       {placed.map((p) => (
-        <PostIt key={p.task.key} p={p} color={colorOf(p.task.worker)} reduced={reduced} onSelect={onSelect} />
+        <PostIt
+          key={p.task.key}
+          p={p}
+          color={colorOf(p.task.worker)}
+          elapsed={elapsedFor(p.task, events.get(p.task.key), snap.t)}
+          reduced={reduced}
+          onSelect={onSelect}
+        />
       ))}
     </group>
   );

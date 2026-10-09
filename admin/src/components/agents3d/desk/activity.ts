@@ -36,7 +36,7 @@ export const BEAT_MS: Record<BeatKind, number> = {
   unplant: 2200,
   stack: 3200,
   wave: 3000,
-  cheer: 2400,
+  cheer: 3000, // a happy dance
   blocked: 4000,
 };
 const MAX_BACKLOG = 3;

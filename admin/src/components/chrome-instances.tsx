@@ -38,6 +38,10 @@ type ChromeInstance = {
   procCount: number;
   memMB: number;
   ageSeconds: number;
+  debug: "port" | "pipe" | "none";
+  devtoolsPort: number | null;
+  notViewable: string | null;
+  owner: string | null;
 };
 
 type ListResponse = {
@@ -195,6 +199,7 @@ export function ChromeInstances() {
           <TableHeader>
             <TableRow>
               <TableHead>Instance</TableHead>
+              <TableHead>Owner</TableHead>
               <TableHead>Root PID</TableHead>
               <TableHead className="text-right">Procs</TableHead>
               <TableHead className="text-right">Memory</TableHead>
@@ -206,7 +211,7 @@ export function ChromeInstances() {
             {instances.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={7}
                   className="text-center text-muted-foreground"
                 >
                   {data
@@ -234,7 +239,26 @@ export function ChromeInstances() {
                             agent-browser
                           </Badge>
                         )}
+                        {inst.notViewable ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 border-amber-500/40 text-amber-700 dark:text-amber-400"
+                            title={inst.notViewable}
+                          >
+                            {inst.debug === "pipe" ? "pipe: can't view" : "can't view"}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="shrink-0" title={`DevTools on port ${inst.devtoolsPort}`}>
+                            viewable
+                          </Badge>
+                        )}
                       </div>
+                      {inst.notViewable && (
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">{inst.notViewable}</div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {inst.owner ?? <span className="text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {inst.rootPid}

@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 
-import {
-  devtoolsPort,
-  isValidInstanceDir,
-  listChromePages,
-} from "@/lib/chrome";
+import { findInstance, listChromePages } from "@/lib/chrome";
 
 export const dynamic = "force-dynamic";
 
@@ -19,19 +15,19 @@ export async function GET(req: Request) {
       { status: 400, headers: noStore },
     );
   }
-  if (!isValidInstanceDir(dir)) {
+  const inst = await findInstance(dir);
+  if (!inst) {
     return NextResponse.json(
-      { error: "invalid instance dir" },
-      { status: 400, headers: noStore },
+      { error: "the instance is no longer running", pages: [] },
+      { status: 404, headers: noStore },
     );
   }
-  const port = await devtoolsPort(dir);
-  if (port == null) {
+  if (inst.devtoolsPort == null) {
     return NextResponse.json(
-      { error: "instance has no DevTools port (not debuggable)", pages: [] },
+      { error: inst.notViewable, pages: [] },
       { status: 200, headers: noStore },
     );
   }
-  const pages = await listChromePages(port);
-  return NextResponse.json({ port, pages }, { headers: noStore });
+  const pages = await listChromePages(inst.devtoolsPort);
+  return NextResponse.json({ port: inst.devtoolsPort, pages }, { headers: noStore });
 }

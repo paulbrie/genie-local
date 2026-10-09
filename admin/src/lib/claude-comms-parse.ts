@@ -15,6 +15,15 @@
  *   RELEASE: <path>[, …]      the sender no longer holds them
  *   COMMIT: <hash>[, <hash>…] commits the sender made
  *   PUSHED: <hash>            the branch is on the remote up to this hash
+ * As we actually write them, also:
+ *   - "TASK T12 <title>" (no colon), and a TASK after a short lead-in on its
+ *     line ("Queued after T68: TASK T72 <title>"); the title is the rest of
+ *     that line;
+ *   - several ids in a report's first clause ("DONE: T53 and T54 (…)",
+ *     "ACK: T53, T54"): it applies to each;
+ *   - a report with no ACK before it (STATUS → in progress, DONE → done);
+ *   - from a task's worker to its manager, an untagged message whose first
+ *     line starts with the task's id ("T56 interim …") is progress on it.
  * Messages with no tag fall back to keyword guesses, marked `guessed`, but
  * only between two sessions that haven't used tags yet: once a pair sends its
  * first tagged message, prose no longer makes claims or tasks, and the
@@ -190,20 +199,41 @@ export function redact(text: string): string {
 
 // ── Tags ─────────────────────────────────────────────────────────────────────
 
-const TAG_RE = new RegExp(`^[ \\t>*_-]*(${TAG_NAMES.join("|")}):[ \\t]*(.*)$`, "gm");
+const TAG_RE = new RegExp(`^[ \\t>*_-]*(${TAG_NAMES.join("|")}):[ \\t]*(.*)$`);
+const ID = "[A-Za-z]{1,6}-?\\d+[a-z]?";
+/** "TASK T72 …" / "TASK: T72 …", at the line's start or after a short lead-in ("Queued after T68: TASK T72 …"). */
+const LOOSE_TASK_RE = new RegExp(`^(.{0,80}?)(?<![A-Za-z])TASK:?[ \\t]+(${ID})(?![\\w-])[:,.]?[ \\t]*(.*)$`);
 
 export function parseTags(body: string): CommsTag[] {
   const tags: CommsTag[] = [];
-  for (const m of body.matchAll(TAG_RE)) {
-    const arg = m[2].trim();
-    // "TASK: <id> <title>" spells out the protocol; it isn't a task.
-    if (/^<[^>]+>/.test(arg)) continue;
-    tags.push({ tag: m[1] as TagName, arg });
+  for (const line of body.split("\n")) {
+    const m = line.match(TAG_RE);
+    if (m) {
+      const arg = m[2].trim();
+      // "TASK: <id> <title>" spells out the protocol; it isn't a task.
+      if (/^<[^>]+>/.test(arg)) continue;
+      tags.push({ tag: m[1] as TagName, arg });
+      continue;
+    }
+    const t = line.match(LOOSE_TASK_RE);
+    if (t) tags.push({ tag: "TASK", arg: `${t[2]} ${t[3]}`.trim() });
   }
   return tags;
 }
 
-const TASK_ID_RE = /^[A-Za-z]{1,6}-?\d+[a-z]?$/;
+const TASK_ID_RE = new RegExp(`^${ID}$`);
+const IDS_RE = new RegExp(`^(${ID}(?:\\s*(?:,|&|\\+|/|\\band\\b)\\s*${ID})*)(?![\\w-])[:,.]?(?:\\s+([\\s\\S]*))?$`);
+
+/**
+ * Every id in a report's first clause and the rest: "T53 and T54 (both …)" →
+ * ["T53", "T54"]; "T53, T54: done" → both. Empty if it doesn't start with one.
+ */
+export function splitTaskIds(arg: string): { ids: string[]; rest: string } {
+  const m = arg.trim().match(IDS_RE);
+  if (!m) return { ids: [], rest: arg.trim() };
+  const ids = [...new Set(m[1].split(/\s*(?:,|&|\+|\/|\band\b)\s*/).map((x) => x.toUpperCase()))];
+  return { ids, rest: (m[2] ?? "").trim() };
+}
 
 /** Split "T12 rest of text" into an id and the rest; id null if it isn't one. */
 export function splitTaskId(arg: string): { id: string | null; rest: string } {
@@ -448,7 +478,8 @@ export function deriveState(messages: CommsMessage[]): {
           case "BLOCKED":
           case "DONE":
           case "CANCELLED": {
-            const { id, rest } = splitTaskId(arg);
+            const { ids, rest } = splitTaskIds(arg);
+            for (const id of ids.length ? ids : [null]) {
             // Without an id: the latest open task the sender works on for the receiver.
             const t = id ? findTask(id, m.from, m.to) : openTask(m.to, m.from);
             if (!t && id) {
@@ -481,6 +512,7 @@ export function deriveState(messages: CommsMessage[]): {
                     : tagState(tag);
               move(t, next, m, rest || null);
             }
+            }
             break;
           }
           case "CLAIM":
@@ -507,6 +539,16 @@ export function deriveState(messages: CommsMessage[]): {
 
     for (const h of findHashes(m.body))
       mentions.push({ hash: h, kind: "mention", node: m.from, msgId: m.id, at });
+    // "T56 interim …" from the task's worker to its manager: progress on it,
+    // even once the pair uses tags (it only starts a task, never closes one).
+    {
+      const lead = splitTaskIds(firstLine(m.body));
+      for (const id of lead.ids) {
+        const t = findTask(id, m.from, m.to);
+        if (t && t.worker === m.from && t.manager === m.to && t.state === "dispatched")
+          move(t, "in_progress", m, firstLine(m.body));
+      }
+    }
     // Untagged: keyword fallbacks, all marked as guesses, only while this pair
     // hasn't started using tags.
     const since = tagsSince.get(pairKey(m.from, m.to));

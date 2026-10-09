@@ -49,6 +49,7 @@ export type Terminal = {
   cwd: string; // pane current path
   tokens: ClaudeTokens | null; // cumulative session tokens (Claude sessions only)
   memBytes: number; // resident memory of the pane's process tree (shell + command)
+  dead: boolean; // the pane's program exited and tmux kept it (remain-on-exit)
 };
 
 // Login/interactive shells that mean "sitting at a prompt" (idle). A pane whose
@@ -85,9 +86,11 @@ const CLAUDE_WORKING_RE = /esc to interrupt/i;
 // multiple-choice prompt) it draws a selection list — the `❯` arrow pointing at
 // a numbered option, or an explicit "do you want to proceed" confirmation. That
 // distinguishes "needs your input" from just idling at the ready prompt (whose
-// `❯` is followed by the input cursor, not a numbered choice).
+// `❯` is followed by the input cursor, not a numbered choice). The first-launch
+// "trust this folder" dialog in a new cwd lists its options unnumbered, so it
+// is matched by its own text and its "Enter to confirm · Esc to cancel" footer.
 const CLAUDE_INPUT_RE =
-  /❯\s+\d+\.\s|Do you want to proceed|Would you like to proceed/i;
+  /❯\s+\d+\.\s|Do you want to proceed|Would you like to proceed|I trust this folder|Enter to confirm · Esc to cancel/i;
 
 /**
  * Classify a pane. `content` (a capture of the pane) is needed to tell a Claude
@@ -324,6 +327,7 @@ export async function listTerminals(): Promise<Terminal[]> {
         "#{pane_current_command}",
         "#{pane_current_path}",
         "#{pane_pid}",
+        "#{pane_dead}",
       ].join("\t"),
     ]);
   } catch (err) {
@@ -345,6 +349,7 @@ export async function listTerminals(): Promise<Terminal[]> {
       busy: isBusy(f[4] ?? ""),
       cwd: f[5] ?? "",
       panePid: Number(f[6]) || 0,
+      dead: f[7] === "1",
     }))
     .sort((a, b) => a.createdAt - b.createdAt);
 
@@ -431,6 +436,35 @@ export async function createTerminal(
   const created = list.find((t) => t.target === target);
   if (!created) throw new Error("session created but not found");
   return created;
+}
+
+/**
+ * Create a session that runs a program directly (no shell): `buildArgs(target)`
+ * returns the full tmux argument array (e.g. teams-core's buildNewSessionArgs).
+ * The name is validated like any other; an existing session is never touched.
+ */
+export async function createTerminalRunning(
+  name: string,
+  buildArgs: (target: string) => string[],
+): Promise<void> {
+  const target = toTarget(name);
+  if (await sessionExists(target)) {
+    throw new Error(`a terminal named "${name}" already exists`);
+  }
+  const args = buildArgs(target);
+  if (args[0] !== "new-session") throw new Error("expected a new-session command");
+  await tmux(args);
+}
+
+/** Restart the program in an existing session's pane (`respawn-pane -k …`). */
+export async function respawnTerminal(
+  name: string,
+  buildArgs: (target: string) => string[],
+): Promise<void> {
+  const target = toTarget(name);
+  const args = buildArgs(target);
+  if (args[0] !== "respawn-pane") throw new Error("expected a respawn-pane command");
+  await tmux(args);
 }
 
 export async function killTerminal(name: string): Promise<void> {

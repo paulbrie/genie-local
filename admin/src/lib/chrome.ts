@@ -6,10 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { readRegistry } from "@/lib/claude-comms";
+
 const execFileAsync = promisify(execFile);
 
 /**
- * Chrome/Chromium piles up on a server because each agent-browser session
+ * Chrome/Chromium piles up on this box because each agent-browser session
  * spawns a headless instance (~12 processes, ~1.3 GB) under its own
  * `--user-data-dir=/tmp/agent-browser-chrome-<uuid>`, and idle ones are rarely
  * closed. The vps-stats daemon only reports process *names* (not full argv), so
@@ -41,6 +43,14 @@ export type ChromeInstance = {
   procCount: number;
   memMB: number; // summed resident memory across the instance
   ageSeconds: number; // age of the root process
+  /** How DevTools was enabled: a port (viewable), a pipe (Playwright's default: not), or not at all. */
+  debug: "port" | "pipe" | "none";
+  /** The DevTools port, when it can be viewed. */
+  devtoolsPort: number | null;
+  /** Why it can't be viewed, or null if it can. */
+  notViewable: string | null;
+  /** Who started it: the Claude session (agent name) or tmux session it runs under, if any. */
+  owner: string | null;
 };
 
 type RawProc = {
@@ -50,6 +60,9 @@ type RawProc = {
   type: string;
   userDataDir: string;
   startTicks: number;
+  pipe: boolean;
+  /** --remote-debugging-port's value (0: Chrome picks one and writes DevToolsActivePort), null if absent */
+  portArg: number | null;
 };
 
 function argOf(argv: string[], flag: string): string | null {
@@ -116,7 +129,81 @@ async function readProc(pid: number): Promise<RawProc | null> {
     type: argOf(argv, "--type") ?? "",
     userDataDir,
     startTicks,
+    pipe: argv.includes("--remote-debugging-pipe"),
+    portArg: argOf(argv, "--remote-debugging-port") === null ? null : Number(argOf(argv, "--remote-debugging-port")),
   };
+}
+
+export const NOT_VIEWABLE = {
+  pipe: "launched with a pipe (Playwright default), no DevTools port: can't be viewed",
+  none: "launched without remote debugging, no DevTools port: can't be viewed",
+  unpublished: "DevTools port not published (no DevToolsActivePort yet)",
+} as const;
+
+async function parentOf(pid: number): Promise<number> {
+  try {
+    return parseStat(await fs.readFile(`/proc/${pid}/stat`, "utf8"))?.ppid ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** agent-browser's daemons: `~/.agent-browser/<session>.pid` → pid → the session's name. */
+async function agentBrowserSessions(): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const dir = path.join(os.homedir(), ".agent-browser");
+  let names: string[];
+  try {
+    names = (await fs.readdir(dir)).filter((f) => f.endsWith(".pid"));
+  } catch {
+    return out;
+  }
+  for (const f of names) {
+    try {
+      const pid = Number((await fs.readFile(path.join(dir, f), "utf8")).trim());
+      if (Number.isInteger(pid) && pid > 1) out.set(pid, f.slice(0, -4));
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  return out;
+}
+
+/**
+ * Who started each root process: walk up its parents to a Claude session in the
+ * session registry (its name, as Agents City shows it), to an agent-browser
+ * daemon (its --session name; the team uses the agent's name), else to a tmux
+ * pane's shell (its session name).
+ */
+async function ownersOf(rootPids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (!rootPids.length) return out;
+  const agents = new Map<number, string>();
+  try {
+    for (const e of (await readRegistry()).entries) if (e.name) agents.set(e.pid, e.name);
+  } catch {
+    /* no registry */
+  }
+  const panes = new Map<number, string>();
+  try {
+    const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", "#{pane_pid}\t#{session_name}"], { timeout: 3000 });
+    for (const line of stdout.split("\n")) {
+      const [pid, session] = line.split("\t");
+      if (pid && session) panes.set(Number(pid), session);
+    }
+  } catch {
+    /* no tmux server */
+  }
+  const daemons = await agentBrowserSessions();
+  for (const root of rootPids) {
+    let pid = root;
+    for (let i = 0; i < 40 && pid > 1; i++) {
+      const name = agents.get(pid) ?? daemons.get(pid) ?? panes.get(pid);
+      if (name) { out.set(root, name); break; }
+      pid = await parentOf(pid);
+    }
+  }
+  return out;
 }
 
 async function systemUptimeSeconds(): Promise<number> {
@@ -155,6 +242,8 @@ export async function listChromeInstances(): Promise<ChromeInstance[]> {
   }
 
   const instances: ChromeInstance[] = [];
+  const roots = [...byDir.values()].map((g) => (g.find((p) => p.type === "") ?? [...g].sort((a, b) => a.pid - b.pid)[0]).pid);
+  const owners = await ownersOf(roots);
   for (const [userDataDir, group] of byDir) {
     // Root = the process with no --type= (the browser process). Fall back to
     // the lowest pid if every process somehow has a type.
@@ -167,6 +256,8 @@ export async function listChromeInstances(): Promise<ChromeInstance[]> {
         ? Math.max(0, Math.round(uptime - root.startTicks / CLK_TCK))
         : 0;
     const agentBrowser = userDataDir.startsWith(AGENT_BROWSER_PREFIX);
+    const debug = root.portArg !== null && Number.isInteger(root.portArg) && root.portArg >= 0 ? "port" : root.pipe ? "pipe" : "none";
+    const port = debug === "port" ? (root.portArg! > 0 ? root.portArg! : await devtoolsPort(userDataDir)) : null;
 
     instances.push({
       userDataDir,
@@ -179,6 +270,10 @@ export async function listChromeInstances(): Promise<ChromeInstance[]> {
       procCount: group.length,
       memMB: Math.round(memMB),
       ageSeconds,
+      debug,
+      devtoolsPort: port,
+      notViewable: debug === "pipe" ? NOT_VIEWABLE.pipe : debug === "none" ? NOT_VIEWABLE.none : port == null ? NOT_VIEWABLE.unpublished : null,
+      owner: owners.get(root.pid) ?? null,
     });
   }
 
@@ -272,13 +367,17 @@ export async function killAllChromeInstances(
 
 export type ChromePage = { id: string; url: string; title: string };
 
+let cache: { at: number; list: Promise<ChromeInstance[]> } | null = null;
+
 /**
- * Strict allowlist for a viewable instance dir: an agent-browser user-data-dir
- * and nothing else (no traversal). Lets the view/screenshot routes validate a
- * client-supplied dir WITHOUT a full /proc scan on every polled frame.
+ * The live instance with this user-data-dir, or null. Any running instance can
+ * be viewed if it has a DevTools port (not only agent-browser ones), so a
+ * client-supplied dir is checked against the scan; the scan is shared for a
+ * moment so polled frames don't each walk /proc.
  */
-export function isValidInstanceDir(dir: string): boolean {
-  return /^\/tmp\/agent-browser-chrome-[A-Za-z0-9-]+$/.test(dir);
+export async function findInstance(dir: string): Promise<ChromeInstance | null> {
+  if (!cache || Date.now() - cache.at > 2000) cache = { at: Date.now(), list: listChromeInstances() };
+  return (await cache.list).find((i) => i.userDataDir === dir) ?? null;
 }
 
 /** The instance's DevTools port, or null if it isn't exposing one. */
@@ -328,35 +427,56 @@ export function currentPage(pages: ChromePage[]): ChromePage | null {
   );
 }
 
-// Screenshots need the DevTools WebSocket protocol, which Node 20 ships no
-// client for — so we shell out to the globally-installed Playwright to attach
-// over CDP and capture. The helper NEVER calls browser.close(): it attaches,
-// screenshots, and exits, leaving the agent's browser completely untouched.
-const PLAYWRIGHT = "/usr/lib/node_modules/@playwright/test/index.js";
-const SHOT_SCRIPT = `
-import pw from ${JSON.stringify(PLAYWRIGHT)};
-const [port, wantUrl] = [process.argv[1], process.argv[2]];
-const browser = await pw.chromium.connectOverCDP('http://127.0.0.1:' + port);
-const pages = browser.contexts().flatMap((c) => c.pages());
-const page =
-  (wantUrl && pages.find((p) => p.url() === wantUrl)) ||
-  pages.find((p) => !/^(chrome|about|devtools):/.test(p.url())) ||
-  pages[0];
-if (!page) { process.stderr.write('no page'); process.exit(2); }
-const buf = await page.screenshot({ type: 'jpeg', quality: 55 });
-process.stdout.write(buf.toString('base64'));
-process.exit(0);
-`;
+// Screenshots go over the DevTools WebSocket protocol, with Node's own
+// WebSocket client: attach to the page's target, ask for one JPEG, detach. The
+// browser and its pages are left exactly as they were (nothing is closed or
+// navigated). (This used to shell out to a global Playwright, which is no
+// longer installed.)
+type CdpTarget = { type: string; url: string; webSocketDebuggerUrl?: string };
+
+function cdpScreenshot(wsUrl: string, timeoutMs = 10000): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    const done = (err: Error | null, buf?: Buffer) => {
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        /* already closed */
+      }
+      if (err) reject(err);
+      else resolve(buf!);
+    };
+    const timer = setTimeout(() => done(new Error("timed out")), timeoutMs);
+    ws.onopen = () =>
+      ws.send(JSON.stringify({ id: 1, method: "Page.captureScreenshot", params: { format: "jpeg", quality: 55 } }));
+    ws.onmessage = (ev) => {
+      let msg: { id?: number; result?: { data?: string }; error?: { message?: string } };
+      try {
+        msg = JSON.parse(String(ev.data));
+      } catch {
+        return;
+      }
+      if (msg.id !== 1) return;
+      if (msg.result?.data) done(null, Buffer.from(msg.result.data, "base64"));
+      else done(new Error(msg.error?.message ?? "no screenshot"));
+    };
+    ws.onerror = () => done(new Error("DevTools connection failed"));
+  });
+}
 
 /** JPEG screenshot of a page on the instance at `port` (defaults to current). */
 export async function captureChromePage(
   port: number,
   url?: string,
 ): Promise<Buffer> {
-  const { stdout } = await execFileAsync(
-    "node",
-    ["--input-type=module", "-e", SHOT_SCRIPT, String(port), url ?? ""],
-    { timeout: 15000, maxBuffer: 32 * 1024 * 1024 },
+  const targets = ((await cdpJson<CdpTarget[]>(port, "/json/list")) ?? []).filter(
+    (t) => t.type === "page" && t.webSocketDebuggerUrl,
   );
-  return Buffer.from(stdout.trim(), "base64");
+  const target =
+    (url && targets.find((t) => t.url === url)) ||
+    targets.find((t) => !/^(chrome|about|devtools):/.test(t.url)) ||
+    targets[0];
+  if (!target?.webSocketDebuggerUrl) throw new Error("no open page");
+  return cdpScreenshot(target.webSocketDebuggerUrl);
 }

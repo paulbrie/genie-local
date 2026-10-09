@@ -32,6 +32,9 @@ export type Props = {
   flagMat: THREE.MeshStandardMaterial;
   block: THREE.Group;
   blockMat: THREE.MeshStandardMaterial;
+  /** Idle props, right hand: a coffee mug, and a pencil to twirl. */
+  mug: THREE.Group;
+  pencil: THREE.Group;
 };
 
 export type Avatar = { root: THREE.Group; joints: Joints; props: Props };
@@ -308,7 +311,25 @@ export function makeAvatar(look: Look, seed: string): Avatar {
   block.add(part(new RoundedBoxGeometry(0.4, 0.22, 0.4, 2, 0.04), blockMat));
   block.position.set(-0.25, -0.16, 0);
 
-  for (const p of [envelope, scroll, flag, block]) {
+  // Upright when the forearm is raised to the chest (arm ≈ -1.2 rad); tips when lifted to drink.
+  const mug = new THREE.Group();
+  mug.add(part(new THREE.CylinderGeometry(0.1, 0.09, 0.2, 16), clay(look.trim), [0, 0, 0]));
+  mug.add(part(new THREE.TorusGeometry(0.06, 0.018, 8, 16), clay(look.trim), [0.11, 0, 0], [1, 1, 1], [0, 0, Math.PI / 2]));
+  mug.add(part(new THREE.CylinderGeometry(0.085, 0.085, 0.01, 16), clay("#3b2414"), [0, 0.09, 0]));
+  mug.position.set(0, -0.06, 0.1);
+  mug.rotation.x = 1.2;
+
+  const pencil = new THREE.Group();
+  const lead = new THREE.Group();
+  lead.add(part(new THREE.CylinderGeometry(0.016, 0.016, 0.34, 6), clay("#facc15")));
+  lead.add(part(new THREE.ConeGeometry(0.016, 0.06, 6), clay("#f1c7a5"), [0, 0.2, 0]));
+  lead.add(part(new THREE.CylinderGeometry(0.017, 0.017, 0.04, 6), clay("#f472b6"), [0, -0.19, 0]));
+  lead.rotation.x = Math.PI / 2; // lies across the fingers; the group spins it
+  pencil.add(lead);
+  pencil.scale.setScalar(1.6); // reads at desk distance
+  pencil.position.set(0, -0.05, 0.08);
+
+  for (const p of [envelope, scroll, flag, block, mug, pencil]) {
     p.visible = false;
     hands[1].add(p);
   }
@@ -318,7 +339,7 @@ export function makeAvatar(look: Look, seed: string): Avatar {
   return {
     root,
     joints: { body, head, armL: arms[0], armR: arms[1], handL: hands[0], handR: hands[1], legL: legs[0], legR: legs[1], eyes },
-    props: { accessory, envelope, envelopeMat, scroll, flag, flagMat, block, blockMat },
+    props: { accessory, envelope, envelopeMat, scroll, flag, flagMat, block, blockMat, mug, pencil },
   };
 }
 

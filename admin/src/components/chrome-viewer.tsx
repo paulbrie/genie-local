@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Globe, MonitorPlay, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ type Instance = {
   userDataDir: string;
   label: string;
   agentBrowser: boolean;
+  owner: string | null;
+  notViewable: string | null;
 };
 type Page = { id: string; url: string; title: string };
 
@@ -48,10 +50,12 @@ export function ChromeViewer() {
         if (!active) return;
         const list: Instance[] = json.instances ?? [];
         setInstances(list);
+        // Keep the chosen one while it lives; else the first that can be viewed.
         setDir((cur) =>
           cur && list.some((i) => i.userDataDir === cur)
             ? cur
-            : (list.find((i) => i.agentBrowser) ?? list[0])?.userDataDir ?? null,
+            : (list.find((i) => !i.notViewable) ?? list[0])?.userDataDir ??
+              null,
         );
       } catch {
         /* transient */
@@ -65,9 +69,12 @@ export function ChromeViewer() {
     };
   }, []);
 
+  const inst = instances.find((i) => i.userDataDir === dir) ?? null;
+  const blocked = inst?.notViewable ?? null;
+
   // When the instance changes, load its pages and pick the current one.
   useEffect(() => {
-    if (!dir) {
+    if (!dir || blocked) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setPages([]);
       setUrl(null);
@@ -99,33 +106,62 @@ export function ChromeViewer() {
     return () => {
       active = false;
     };
-  }, [dir]);
+  }, [dir, blocked]);
 
-  // Self-paced snapshot loop: request the next frame only after the current one
-  // finishes loading, so slow (Playwright-backed) captures never pile up.
-  const shoot = useCallback(() => {
-    if (!dir || paused) return;
-    const params = new URLSearchParams({ dir });
-    if (url) params.set("url", url);
-    params.set("t", String(performance.now()));
-    setSrc(`${BASE_PATH}/api/chrome/screenshot?${params}`);
-  }, [dir, url, paused]);
-
+  // Self-paced snapshot loop: the next frame is asked for only after the
+  // current one arrived, so slow (Playwright-backed) captures never pile up.
+  // Frames are fetched (not an <img src>) so a refusal shows its message: on
+  // 404 (gone) or 409 (no DevTools port) the loop stops; a failed capture
+  // (502) is retried, while the instance is still in the list.
+  const viewable = !!dir && !blocked && pages.length > 0;
   useEffect(() => {
-    clearTimeout(timer.current);
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (dir && !paused) shoot();
-    return () => clearTimeout(timer.current);
-  }, [dir, url, paused, shoot]);
+    if (!dir || !viewable || paused) return;
+    let alive = true;
+    const shoot = async () => {
+      const params = new URLSearchParams({ dir });
+      if (url) params.set("url", url);
+      let again = true;
+      try {
+        const res = await fetch(`${BASE_PATH}/api/chrome/screenshot?${params}`, {
+          cache: "no-store",
+        });
+        if (!alive) return;
+        if (res.ok) {
+          const next = URL.createObjectURL(await res.blob());
+          if (!alive) return URL.revokeObjectURL(next);
+          setSrc((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return next;
+          });
+          setError(null);
+        } else {
+          const json = await res.json().catch(() => ({}));
+          setError(json.error ?? `HTTP ${res.status}`);
+          if (res.status === 404 || res.status === 409) again = false;
+        }
+      } catch {
+        if (alive) setError("could not reach the server");
+      }
+      if (alive && again) timer.current = setTimeout(shoot, POLL_MS);
+    };
+    void shoot();
+    return () => {
+      alive = false;
+      clearTimeout(timer.current);
+    };
+  }, [dir, url, viewable, paused]);
 
-  const scheduleNext = useCallback(() => {
-    clearTimeout(timer.current);
-    if (paused) return;
-    timer.current = setTimeout(shoot, POLL_MS);
-  }, [paused, shoot]);
+  // A new instance or tab starts with an empty view (no stale frame).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSrc((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setError(null);
+  }, [dir, url]);
 
   const current = pages.find((p) => p.url === url);
-  const viewable = dir && pages.length > 0;
 
   return (
     <div className="space-y-3">
@@ -138,8 +174,10 @@ export function ChromeViewer() {
             <SelectContent>
               {instances.map((i) => (
                 <SelectItem key={i.userDataDir} value={i.userDataDir}>
+                  {i.owner ? `${i.owner} · ` : ""}
                   {i.label}
                   {i.agentBrowser ? " · agent" : ""}
+                  {i.notViewable ? " · can't view" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -178,6 +216,8 @@ export function ChromeViewer() {
             </span>
           ) : instances.length === 0 ? (
             "no Chrome instances running"
+          ) : blocked && inst ? (
+            `${inst.owner ? `${inst.owner} · ` : ""}${inst.label}: can't view`
           ) : (
             "select an instance"
           )}
@@ -188,26 +228,29 @@ export function ChromeViewer() {
         {src && viewable ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            key={dir + (url ?? "")}
             src={src}
             alt={current ? `Live view of ${current.title || current.url}` : "Live view"}
             className="h-full w-full object-contain"
-            onLoad={() => {
-              setError(null);
-              scheduleNext();
-            }}
-            onError={() => {
-              setError("could not capture (instance busy or closed)");
-              scheduleNext();
-            }}
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            {instances.length === 0
-              ? "No Chrome instances to view."
-              : viewable
-                ? "Loading…"
-                : error ?? "Nothing to display."}
+          <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center text-sm text-muted-foreground">
+            {instances.length === 0 ? (
+              "No Chrome instances to view."
+            ) : blocked ? (
+              <>
+                <span className="font-medium text-zinc-200">
+                  {inst?.owner ? `${inst.owner}'s browser` : "This instance"} can&rsquo;t be shown
+                </span>
+                <span>{blocked}.</span>
+                <span className="text-xs">
+                  Launch it with <code>--remote-debugging-port=0</code> (or a fixed port) to view it here.
+                </span>
+              </>
+            ) : viewable ? (
+              error ?? "Loading…"
+            ) : (
+              error ?? "Nothing to display."
+            )}
           </div>
         )}
         {current && (
@@ -217,7 +260,7 @@ export function ChromeViewer() {
         )}
       </div>
 
-      {error && viewable && (
+      {error && viewable && src && (
         <p className="text-xs text-amber-600 dark:text-amber-500">{error}</p>
       )}
       <p className="text-xs text-muted-foreground">

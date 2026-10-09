@@ -12,6 +12,7 @@ import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles } from "./agents";
 import { CommitTower, DeskTop, Lamp, MiniCityView, Mug, OriginBeacon, Papers } from "./props";
+import { DeskLinks } from "./links";
 import { Whiteboard } from "./whiteboard";
 import { BOARD, miniCities } from "./world";
 
@@ -23,6 +24,18 @@ import { BOARD, miniCities } from "./world";
 export default function DeskScene(props: SceneProps) {
   const { bloom, onSelect } = props;
   const small = typeof window !== "undefined" && window.innerWidth < 800;
+  // The whiteboard close-ups: the whole board (col -1) or one column; `n` starts a new flight.
+  const [board, setBoard] = useState<BoardFocus>({ n: 0, col: -1 });
+  const onBoard = (col: number) => setBoard((b) => ({ n: b.n + 1, col }));
+  // Esc (or a click on the background) from a column close-up goes back to the whole board.
+  useEffect(() => {
+    if (board.col < 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setBoard((b) => ({ n: b.n + 1, col: -1 }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [board.col]);
   return (
     <Canvas
       key={props.frameKey ?? ""}
@@ -31,7 +44,10 @@ export default function DeskScene(props: SceneProps) {
       gl={{ antialias: true }}
       dpr={[1, 1.5]}
       scene={{ environmentIntensity: 0.3 }}
-      onPointerMissed={() => onSelect(null)}
+      onPointerMissed={() => {
+        onSelect(null);
+        if (board.col >= 0) onBoard(-1);
+      }}
     >
       <color attach="background" args={["#1d1a17"]} />
       <Room />
@@ -52,7 +68,7 @@ export default function DeskScene(props: SceneProps) {
         shadow-camera-far={70}
       />
       <directionalLight position={[8, 6, -10]} intensity={0.8} color="#bcd4ff" />
-      <Stage {...props} />
+      <Stage {...props} board={board} onBoard={onBoard} />
       <OrbitControls makeDefault target={[0, 6, -6]} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
       {bloom && (
         <EffectComposer>
@@ -76,8 +92,10 @@ function Room() {
   return <primitive object={env} attach="environment" />;
 }
 
-function Stage(props: SceneProps) {
-  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo } = props;
+type BoardFocus = { n: number; col: number };
+
+function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) => void }) {
+  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, linger, board, onBoard } = props;
   const positions = useRef<Positions>(new Map());
   const colorOf = useMemo(() => {
     const m = new Map(tl.agents.map((a) => [a.key, a.color]));
@@ -107,7 +125,6 @@ function Stage(props: SceneProps) {
     .join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cast = useMemo(() => castAt(tl, snap.t, snap.live), [tl, castKey]);
-  const [boardFly, setBoardFly] = useState(0);
   return (
     <>
       <DeskTop />
@@ -117,9 +134,21 @@ function Stage(props: SceneProps) {
       <CommitTower commits={snap.commits} clock={clock} colorOf={colorOf} reduced={reduced} onSelect={onSelect} />
       <OriginBeacon commits={snap.commits} clock={clock} reduced={reduced} />
       <MiniCityView tl={tl} snap={snap} layout={layout} mini={mini} colorOf={colorOf} editing={editing} onSelect={onSelect} />
-      <Whiteboard snap={snap} colorOf={colorOf} reduced={reduced} onSelect={onSelect} onBoardClick={() => setBoardFly((n) => n + 1)} />
+      <Whiteboard
+        snap={snap}
+        tasks={tl.tasks}
+        colorOf={colorOf}
+        reduced={reduced}
+        onSelect={onSelect}
+        onBoardClick={() => onBoard(-1)}
+        onColumnClick={onBoard}
+      />
+      <DeskLinks cast={cast} snap={snap} clock={clock} layout={layout} mini={mini} linger={linger} colorOf={colorOf} reduced={reduced} />
       <DeskAgents
         cast={cast}
+        messages={tl.messages}
+        linger={linger}
+        eff={(id, ms) => seen.eff(id, ms, live)}
         snap={snap}
         clock={clock}
         layout={layout}
@@ -134,7 +163,7 @@ function Stage(props: SceneProps) {
         positions={positions}
       />
       <Follow positions={positions} followKey={followKey} reduced={reduced} />
-      <FlyTo flyTo={flyTo} board={boardFly} positions={positions} reduced={reduced} />
+      <FlyTo flyTo={flyTo} board={board} positions={positions} reduced={reduced} />
     </>
   );
 }
@@ -150,7 +179,7 @@ function FlyTo({
   reduced,
 }: {
   flyTo?: SceneProps["flyTo"];
-  board: number;
+  board: BoardFocus;
   positions: React.RefObject<Positions>;
   reduced: boolean;
 }) {
@@ -189,11 +218,17 @@ function FlyTo({
   }, [flyTo?.n, controls]);
 
   useEffect(() => {
-    if (!board) return;
+    if (!board.n) return;
     const c = new THREE.Vector3(BOARD.x, BOARD.y + BOARD.h / 2, BOARD.z);
-    start(c.clone().add(new THREE.Vector3(0, 1.5, BOARD.w * 0.85)), c);
+    if (board.col < 0) start(c.clone().add(new THREE.Vector3(0, 1.5, BOARD.w * 0.85)), c);
+    else {
+      // Face one column, close enough to read its post-its.
+      c.x = BOARD.x - BOARD.w / 2 + (BOARD.w / 3) * (board.col + 0.5);
+      start(c.clone().add(new THREE.Vector3(0, 0.4, BOARD.h * 1.25)), c);
+    }
+    // Only a new flight (n) starts this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board]);
+  }, [board.n]);
 
   useFrame(() => {
     const flight = f.current;

@@ -1,11 +1,11 @@
 "use client";
 
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
-import { fileKey, lastBefore, type Snapshot, TASK_COLORS, type Timeline, type TLAgent } from "@/lib/agents3d-timeline";
+import { fileKey, lastBefore, type Snapshot, TASK_COLORS, type Timeline, type TLAgent, type TLMessage } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
@@ -15,9 +15,10 @@ import type { Selection } from "../scene";
 import { type Beat, beatAt, type Doing, doingAt } from "./activity";
 import { type Avatar, disposeAvatar, makeAvatar } from "./avatar";
 import { lookFor } from "./identity";
-import { applyPose, type Pose } from "./poses";
+import { applyPose, DANCES, isDance, type Pose, THINK_POSES } from "./poses";
+import { makeThoughtCloud, type ThoughtCloud } from "./thought";
 import { realAge } from "../parts";
-import { AVATAR_SCALE, BEACON, BOARD, type MiniCities, SEAT_Y, type Seat, seatAt, TABLE, TOWER, type XZ } from "./world";
+import { AVATAR_SCALE, BEACON, BOARD, LAPTOP, laptopAt, type MiniCities, SEAT_Y, type Seat, seatAt, TABLE, TOWER, type XZ } from "./world";
 
 /** A change of activity shows for at least this long (real ms), so bursts stay readable. */
 const MIN_HOLD_MS = 1500;
@@ -26,7 +27,70 @@ const S = AVATAR_SCALE;
 const HEAD_Y = SEAT_Y + 2.45 * S;
 /** Thrown things (messages, flags, commit blocks) are in flight over this part of a beat. */
 const THROW = { from: 0.15, to: 0.6 };
-const LAPTOP = { w: 3.0, d: 2.0, lid: 1.9 };
+/** Messages also fly as envelopes, alongside the speech bubbles. */
+const THROW_MESSAGES = true;
+/** A pose change blends over this long (real ms). */
+const BLEND_MS = 500;
+/** Idle agents cycle through these, each for IDLE_SLOT_S, out of step with each other; long idle adds naps. */
+const IDLE_POSES: Pose[] = ["sip", "pencil", "stretch", "idle"];
+const LONG_IDLE_POSES: Pose[] = ["nap", "sip", "nap", "pencil", "stretch"];
+const IDLE_SLOT_S = 14;
+
+/** The idle variant an agent is in at real time `ms` (shared by the avatar and its label). */
+export function idlePose(seed: number, ms: number, long: boolean): Pose {
+  const list = long ? LONG_IDLE_POSES : IDLE_POSES;
+  const slot = Math.floor(ms / 1000 / IDLE_SLOT_S + (seed % 97) / 97);
+  return list[(slot + seed) % list.length];
+}
+/** At most this many speech bubbles per agent, newest on top. */
+const BUBBLES = 1;
+
+/** The joints a pose sets, flattened, so a change of pose can blend from where the body was. */
+const JOINTS = 20;
+function readJoints(a: Avatar, o: Float32Array) {
+  const j = a.joints;
+  let n = 0;
+  o[n++] = j.body.position.y;
+  for (const g of [j.body, j.head, j.armL, j.armR, j.legL, j.legR]) {
+    o[n++] = g.rotation.x;
+    o[n++] = g.rotation.y;
+    o[n++] = g.rotation.z;
+  }
+  o[n++] = j.legL.position.y;
+}
+function blendJoints(a: Avatar, from: Float32Array, to: Float32Array, k: number) {
+  const j = a.joints;
+  const v = (i: number) => from[i] + (to[i] - from[i]) * k;
+  let n = 0;
+  j.body.position.y = v(n++);
+  for (const g of [j.body, j.head, j.armL, j.armR, j.legL, j.legR]) g.rotation.set(v(n++), v(n++), v(n++));
+  j.legL.position.y = j.legR.position.y = v(n++);
+}
+
+function hash(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+export type Bubble = { id: string; head: string; gist: string; color: string; side: "left" | "center" | "right"; opacity: number };
+
+/** A speech bubble stays this long (real ms) plus the Linger, fading out over its last second. */
+const BUBBLE_MS = 8000;
+
+/** "TASK T56 · TASK: T56 Fix the thing" → the tag line and a short gist. */
+function bubbleText(label: string, tag: string | null, to: string): { head: string; gist: string } {
+  const i = label.indexOf(" · ");
+  const head = ((i >= 0 ? label.slice(0, i) : tag ?? "note").trim() || "note")
+    .replace(/[.,:;]+$/, "")
+    // "CLAIM admin/src/…/scene.tsx" → "CLAIM scene.tsx"
+    .replace(/\S*\/(\S+)/g, "$1");
+  let gist = (i >= 0 ? label.slice(i + 3) : label).replace(/\s+/g, " ").trim();
+  // Drop a repeated "TASK: T38" / "ACK T38." lead-in and "(after …)" notes.
+  gist = gist.replace(/^[A-Z]{2,}:?\s*(T\d+)?[.:,]?\s*/, "").replace(/^\([^)]*\)\s*/, "");
+  if (gist.length > 44) gist = `${gist.slice(0, 43)}…`;
+  return { head: `${head} → ${to}`, gist };
+}
 
 type Live = {
   key: string;
@@ -34,10 +98,28 @@ type Live = {
   avatar: Avatar;
   chair: THREE.Group;
   laptop: THREE.Group;
+  /** The laptop's lid (closes for a nap) and how open it is, 0..1. */
+  lid: THREE.Group;
+  lidOpen: number;
+  /** The thought cloud over its head while it thinks. */
+  cloud: ThoughtCloud;
+  /** The thinking posture of the current spell, and when the spell began. */
+  thinkPose: Pose;
+  thinkSince: number;
   screen: THREE.MeshBasicMaterial;
   base: THREE.MeshStandardMaterial;
   doing: Doing;
   doingSince: number;
+  /** Pose blending: the last pose, the joints before this frame, and the blend's start. */
+  pose: Pose | null;
+  prev: Float32Array;
+  from: Float32Array | null;
+  blendT0: number;
+  cur: Float32Array;
+  /** Upper-body turn towards a target, eased. */
+  twist: number;
+  /** Per agent, so idle variants and gestures don't run in step. */
+  seed: number;
 };
 
 export type Activity = { doing: Doing; repo: string | null; path: string | null; beat: Beat | null };
@@ -71,6 +153,8 @@ export function castAt(tl: Timeline, t: number, live: boolean): TLAgent[] {
     return i >= 0 && t - a.events[i].ms < STALE_MS;
   });
 }
+
+const IDLE_TEXT: Partial<Record<Pose, string>> = { sip: "coffee break", pencil: "fiddling with a pencil", stretch: "stretching", idle: "idle", nap: "" };
 
 const DOING_TEXT: Record<Doing, string> = {
   type: "typing",
@@ -141,7 +225,7 @@ const lidMat = new THREE.MeshPhysicalMaterial({ color: "#cfd3da", metalness: 0.3
 const keysMat = new THREE.MeshStandardMaterial({ color: "#2b2f38", roughness: 0.8 });
 
 /** The agent's own laptop on the table in front of its seat, screen towards it. */
-function makeLaptop(seat: Seat): { g: THREE.Group; screen: THREE.MeshBasicMaterial; base: THREE.MeshStandardMaterial } {
+function makeLaptop(seat: Seat): { g: THREE.Group; lid: THREE.Group; screen: THREE.MeshBasicMaterial; base: THREE.MeshStandardMaterial } {
   const g = new THREE.Group();
   const base = new THREE.MeshStandardMaterial({ color: "#cfd3da", metalness: 0.3, roughness: 0.35 });
   const b = new THREE.Mesh(laptopGeo.base, base);
@@ -164,10 +248,10 @@ function makeLaptop(seat: Seat): { g: THREE.Group; screen: THREE.MeshBasicMateri
   sm.rotation.y = Math.PI; // faces the agent (-z)
   lid.add(shell, sm);
   g.add(b, keys, lid);
-  const inward = S * 0.32 + 0.35 + LAPTOP.d / 2;
-  g.position.set(seat.x + seat.nx * inward, 0, seat.z + seat.nz * inward);
+  const at = laptopAt(seat);
+  g.position.set(at.x, 0, at.z);
   g.rotation.y = seat.yaw;
-  return { g, screen, base };
+  return { g, lid, screen, base };
 }
 
 const SCREEN_COLOR: Record<Doing, string> = { type: "", read: "#94a3b8", run: "#4ade80", think: "#64748b", idle: "#475569", nap: "#1e293b" };
@@ -176,6 +260,9 @@ const SCREEN_COLOR: Record<Doing, string> = { type: "", read: "#94a3b8", run: "#
 
 export function DeskAgents({
   cast,
+  messages,
+  linger,
+  eff,
   snap,
   clock,
   layout,
@@ -191,6 +278,12 @@ export function DeskAgents({
 }: {
   /** The agents at the table (see castAt). */
   cast: TLAgent[];
+  /** The timeline's messages, for speech bubbles. */
+  messages: TLMessage[];
+  /** Real ms effects linger after their operation (the toolbar's Linger). */
+  linger: number;
+  /** When a message's animation is due (live: when it was first seen). */
+  eff: (id: string, ms: number) => number;
   snap: Snapshot;
   clock: Clock;
   layout: CityLayout;
@@ -208,11 +301,33 @@ export function DeskAgents({
   const lives = useMemo(
     () =>
       cast.map((a, i): Live => {
-        const seat = seatAt(i);
+        const seat = seatAt(i, cast.length);
         const avatar = makeAvatar(lookFor(a.key, a.name, colorOf(a.key)), a.key);
         avatar.root.scale.setScalar(S);
         const lap = makeLaptop(seat);
-        return { key: a.key, seat, avatar, chair: makeChair(), laptop: lap.g, screen: lap.screen, base: lap.base, doing: "idle", doingSince: 0 };
+        return {
+          key: a.key,
+          seat,
+          avatar,
+          chair: makeChair(),
+          laptop: lap.g,
+          screen: lap.screen,
+          lid: lap.lid,
+          lidOpen: 1,
+          cloud: makeThoughtCloud(),
+          thinkPose: "think",
+          thinkSince: -1,
+          base: lap.base,
+          doing: "idle",
+          doingSince: 0,
+          pose: null,
+          prev: new Float32Array(JOINTS),
+          from: null,
+          blendT0: 0,
+          cur: new Float32Array(JOINTS),
+          twist: 0,
+          seed: hash(a.key),
+        };
       }),
     // Rebuilt only when the cast or their looks change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -224,6 +339,7 @@ export function DeskAgents({
         disposeAvatar(l.avatar);
         l.screen.map?.dispose();
         l.screen.dispose();
+        l.cloud.dispose();
         l.base.dispose();
       }),
     [lives],
@@ -233,6 +349,7 @@ export function DeskAgents({
     for (const l of lives) positions.current?.set(l.key, new THREE.Vector3(l.seat.x, HEAD_Y - 0.6 * S, l.seat.z));
   }, [lives, positions]);
 
+  const camera = useThree((s) => s.camera);
   const flying = useRef<THREE.InstancedMesh>(null);
   const confetti = useRef<THREE.InstancedMesh>(null);
   const tmp = useMemo(
@@ -305,22 +422,68 @@ export function DeskAgents({
             look = BEACON;
             pose = "wave";
             break;
+          case "cheer":
+            // A happy dance; agents finishing in the same second get different moves.
+            pose = DANCES[(Math.floor(beat.start / 1000) * 31 + i) % DANCES.length];
+            pk = k;
+            break;
           default:
             pose = beat.kind;
         }
       } else {
         // Glance at the whiteboard when one of its tasks has just moved there.
         if (snap.tasks.some((x) => x.worker === l.key && !x.guessed && realAge(clock, t, x.since) >= 0 && realAge(clock, t, x.since) < 4000)) look = BOARD;
-        pose = l.doing === "type" ? "type" : l.doing === "read" ? "read" : l.doing === "run" ? "run" : l.doing === "nap" ? "nap" : "idle";
+        // Idle: coffee, a pencil, a stretch or just sitting (and naps when idle long), per agent.
+        if (l.doing === "idle" || l.doing === "nap") pose = idlePose(l.seed, real, l.doing === "nap");
+        else if (l.doing === "think") {
+          // A posture per thinking spell, picked at random (per agent, per spell).
+          if (l.thinkSince !== l.doingSince) {
+            l.thinkSince = l.doingSince;
+            l.thinkPose = THINK_POSES[hash(`${l.key}@${Math.floor(l.doingSince)}`) % THINK_POSES.length];
+          }
+          pose = l.thinkPose;
+        } else pose = l.doing;
       }
 
-      const hop = applyPose(l.avatar, pose, secs + i * 1.7, pk, false, reduced, true);
-      // Turn the upper body towards what it throws at or waves to.
+      // The laptop closes before a nap and opens again before work: reach for the lid first.
+      const wantLid = pose === "nap" ? 0 : 1;
+      if (Math.abs(l.lidOpen - wantLid) > 0.12 && !beat && !reduced) {
+        pose = "give";
+        pk = 1;
+      }
+      l.lidOpen = reduced ? wantLid : l.lidOpen + Math.sign(wantLid - l.lidOpen) * Math.min(Math.abs(wantLid - l.lidOpen), dt * 2);
+      l.lid.rotation.x = -Math.PI / 2 + 0.03 + (Math.PI / 2 + 0.17) * l.lidOpen;
+
+      // Blend into a new pose from wherever the joints were.
+      readJoints(l.avatar, l.prev);
+      if (pose !== l.pose) {
+        if (l.pose !== null && !reduced) {
+          l.from = l.from ?? new Float32Array(JOINTS);
+          l.from.set(l.prev);
+          l.blendT0 = real;
+        }
+        l.pose = pose;
+      }
+      const hop = applyPose(l.avatar, pose, secs + (l.seed % 1000) / 100, pk, false, reduced, true);
+      if (l.from && real - l.blendT0 < BLEND_MS) {
+        readJoints(l.avatar, l.cur);
+        const x = (real - l.blendT0) / BLEND_MS;
+        blendJoints(l.avatar, l.from, l.cur, x * x * (3 - 2 * x));
+      }
+      // Turn the upper body towards what it throws at, waves to or glances at (eased).
+      let want = 0;
       if (look) {
         const ang = Math.atan2(look.x - l.seat.x, look.z - l.seat.z) - l.seat.yaw;
-        l.avatar.joints.body.rotation.y = Math.max(-0.9, Math.min(0.9, Math.atan2(Math.sin(ang), Math.cos(ang))));
+        want = Math.max(-0.9, Math.min(0.9, Math.atan2(Math.sin(ang), Math.cos(ang))));
       }
-      l.avatar.root.position.y = hop * 0.35;
+      l.twist = reduced ? want : l.twist + (want - l.twist) * Math.min(1, dt * 6);
+      l.avatar.joints.body.rotation.y += l.twist;
+      // Dances stand up on the chair (their lift is in avatar units); other hops stay small.
+      l.avatar.root.position.y = isDance(pose) ? hop * S : hop * 0.35;
+      // The thought cloud: in while thinking, out otherwise, facing the camera.
+      l.cloud.target = THINK_POSES.includes(pose) ? 1 : 0;
+      l.cloud.update(secs + (l.seed % 100) / 10, dt, reduced);
+      l.cloud.group.rotation.y = Math.atan2(camera.position.x - l.seat.x, camera.position.z - l.seat.z);
       if (beat?.kind === "carry") {
         l.avatar.props.envelopeMat.color.set(beat.color);
         l.avatar.props.envelopeMat.emissive.set(beat.color);
@@ -328,14 +491,14 @@ export function DeskAgents({
 
       // The laptop screen: code scrolling in the agent's colour while it types.
       const sc = l.doing === "type" && !beat ? colorOf(l.key) : SCREEN_COLOR[l.doing];
-      l.screen.color.set(sc);
+      l.screen.color.set(sc).multiplyScalar(l.lidOpen);
       if (l.screen.map && !reduced && (l.doing === "type" || l.doing === "run") && !beat) l.screen.map.offset.y += dt * (l.doing === "type" ? 0.25 : 0.6);
       const isSel = selected?.kind === "agent" && selected.key === l.key;
       l.base.emissive.set(isSel ? colorOf(l.key) : "#000000");
       l.base.emissiveIntensity = isSel ? 0.8 : 0;
 
       // Thrown things, stateless from the beat's progress: an arc from the hand to the target.
-      if (beat && from && to && flying.current && k >= THROW.from && k <= THROW.to && flyN < 32) {
+      if (beat && from && to && flying.current && k >= THROW.from && k <= THROW.to && flyN < 32 && (THROW_MESSAGES || beat.kind !== "carry")) {
         const f = (k - THROW.from) / (THROW.to - THROW.from);
         const dist = from.distanceTo(to);
         tmp.v.lerpVectors(from, to, f);
@@ -374,6 +537,39 @@ export function DeskAgents({
     }
   });
 
+  // Speech bubbles: each agent's newest message, for BUBBLE_MS + linger (re-derived at snapshot rate); a newer one replaces it.
+  const bubbles = new Map<string, Bubble[]>();
+  {
+    const seatOf = new Map(lives.map((l) => [l.key, l.seat]));
+    const nameOf = new Map(cast.map((a) => [a.key, displayName(a)]));
+    const showMs = BUBBLE_MS + linger;
+    const pa = new THREE.Vector3();
+    const pb = new THREE.Vector3();
+    for (let n = messages.length - 1; n >= 0; n--) {
+      const m = messages[n];
+      const age = realAge(clock, snap.t, eff(m.id, m.ms));
+      if (age < 0) continue;
+      // Time-sorted: once far in the past (and not delayed by "first seen"), stop.
+      if (age > showMs && realAge(clock, snap.t, m.ms) > showMs * 40) break;
+      const from = seatOf.get(m.from);
+      const to = seatOf.get(m.to);
+      if (age > showMs || !from || !to) continue;
+      const list = bubbles.get(m.from) ?? [];
+      if (list.length >= BUBBLES) continue;
+      pa.set(from.x, HEAD_Y, from.z).project(camera);
+      pb.set(to.x, HEAD_Y, to.z).project(camera);
+      const dx = pb.x - pa.x;
+      list.push({
+        id: m.id,
+        ...bubbleText(m.label, m.tag, nameOf.get(m.to) ?? "?"),
+        color: m.color,
+        side: dx < -0.04 ? "left" : dx > 0.04 ? "right" : "center",
+        opacity: Math.min(1, (showMs - age) / 1000),
+      });
+      bubbles.set(m.from, list);
+    }
+  }
+
   return (
     <group>
       {lives.map((l, i) => {
@@ -390,6 +586,8 @@ export function DeskAgents({
               <primitive object={l.chair} />
             </group>
             <primitive object={l.laptop} onClick={pick} />
+            {/* the thought cloud, over the head, turned to the camera each frame */}
+            <primitive object={l.cloud.group} position={[l.seat.x, HEAD_Y - 0.15 * S, l.seat.z]} scale={S * 0.55} />
             <OverlayLabel position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
               <DeskLabel
                 name={displayName(a)}
@@ -397,6 +595,10 @@ export function DeskAgents({
                 act={acts.get(l.key)}
                 snapAgent={snap.agents.get(l.key)}
                 selected={selected?.kind === "agent" && selected.key === l.key}
+                bubbles={bubbles.get(l.key) ?? []}
+                idle={l.doing === "idle" || l.doing === "nap" ? idlePose(l.seed, performance.now(), l.doing === "nap") : null}
+                // Neighbours' bubbles at alternating heights, so they don't sit on each other.
+                bubbleLift={(i % 2) * 56}
               />
             </OverlayLabel>
           </group>
@@ -420,24 +622,39 @@ function DeskLabel({
   act,
   snapAgent,
   selected,
+  bubbles,
+  bubbleLift,
+  idle,
 }: {
   name: string;
   color: string;
   act: Activity | undefined;
   snapAgent: Snapshot["agents"] extends Map<string, infer A> ? A | undefined : never;
   selected: boolean;
+  bubbles: Bubble[];
+  bubbleLift: number;
+  /** The idle variant being acted out, if idle. */
+  idle: Pose | null;
 }) {
   const beat = act?.beat;
   const file = act?.path?.split("/").pop();
   const text = beat
     ? `${beat.label}${beat.count > 1 ? ` ×${beat.count}` : ""}`
-    : act && act.doing !== "nap"
+    : idle
+      ? (IDLE_TEXT[idle] ?? "")
+      : act
       ? `${DOING_TEXT[act.doing]}${file && (act.doing === "type" || act.doing === "read") ? ` ${file}` : ""}`
       : "";
-  const bubble = beat?.kind === "blocked" ? "?" : act?.doing === "nap" && !beat ? "z z Z" : act?.doing === "think" && !beat ? "…" : null;
+  const bubble = beat?.kind === "blocked" ? "?" : idle === "nap" && !beat ? "z z Z" : null;
   const task = snapAgent?.task;
   return (
     <div style={{ transform: "translateY(-50%)" }} className="flex flex-col items-center gap-0.5">
+      {/* Speech bubbles stack upwards from just above the head; always mounted (empty when none). */}
+      <div className="flex flex-col-reverse items-center gap-1" style={{ marginBottom: bubbles.length ? bubbleLift : 0 }}>
+        {bubbles.map((b, n) => (
+          <SpeechBubble key={b.id} b={b} faded={n > 0} />
+        ))}
+      </div>
       {/* Always rendered (hidden when empty), so the label keeps one shape as it changes. */}
       <div
         className={`rounded-full bg-white px-1.5 text-[11px] font-bold leading-4 shadow ${bubble ? "" : "invisible"} ${
@@ -466,6 +683,38 @@ function DeskLabel({
       >
         {task ? `${task.id ?? "task"} · ${task.title}` : ""}
       </div>
+    </div>
+  );
+}
+
+/** A comic speech bubble: the tag line, a gist, and a tail leaning towards the recipient. */
+function SpeechBubble({ b, faded }: { b: Bubble; faded: boolean }) {
+  const tailLeft = b.side === "left" ? "18%" : b.side === "right" ? "82%" : "50%";
+  const skew = b.side === "left" ? 30 : b.side === "right" ? -30 : 0;
+  return (
+    <div
+      className="relative max-w-48 rounded-2xl px-2.5 py-1 text-[10px] leading-tight shadow-md"
+      style={{
+        background: "#ffffff",
+        color: "#111827",
+        border: `2px solid ${b.color}`,
+        opacity: b.opacity * (faded ? 0.75 : 1),
+        // Snapshots come ~4×/s; the transition smooths the fade between them.
+        transition: "opacity 250ms linear",
+      }}
+    >
+      <div className="truncate font-bold whitespace-nowrap">{b.head}</div>
+      {b.gist && <div className="line-clamp-2 text-[9px] text-slate-600">{b.gist}</div>}
+      <span
+        aria-hidden
+        className="absolute -bottom-[7px] block size-3 bg-white"
+        style={{
+          left: tailLeft,
+          transform: `translateX(-50%) skewX(${skew}deg) rotate(45deg)`,
+          borderRight: `2px solid ${b.color}`,
+          borderBottom: `2px solid ${b.color}`,
+        }}
+      />
     </div>
   );
 }

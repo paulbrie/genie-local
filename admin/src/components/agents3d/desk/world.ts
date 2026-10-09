@@ -4,14 +4,18 @@
  * shoulders above the top), and the miniature cities fitted into its centre.
  * TABLE, CITY_SCALE and AVATAR_SCALE are the knobs for proportions.
  */
+import * as THREE from "three";
+
 import type { CityLayout } from "@/lib/city-layout";
 
 export type XZ = { x: number; z: number };
 
-/** The tabletop (w × d) and its height above the floor. */
-export const TABLE = { w: 26, d: 17, h: 11 };
-/** Share of the tabletop (each way) the miniature cities may fill, centred. */
+/** The round tabletop (radius) and its height above the floor. */
+export const TABLE = { r: 13.5, h: 11 };
+/** The miniature cities fit within this share of the table's diameter, centred. */
 export const CITY_SCALE = 0.55;
+/** Seats keep out of this arc on the camera side (+z), so no head hides the cities. */
+const FRONT_GAP = (120 * Math.PI) / 180;
 /** Avatar size: 1 = the 2.4-unit-tall model; 3.3 seats a person at this table. */
 export const AVATAR_SCALE = 3.3;
 /** Avatar-local height that sits level with the tabletop (just under the shoulders). */
@@ -19,20 +23,20 @@ const SEAT_LINE = 0.85;
 /** Root height of a seated avatar, so head and shoulders show above the top. */
 export const SEAT_Y = -SEAT_LINE * AVATAR_SCALE;
 
-const HW = TABLE.w / 2;
-const HD = TABLE.d / 2;
+/** A point on the table at angle `phi` (0 = the back, positive clockwise seen from above) and radius `r`. */
+const polar = (phi: number, r: number) => ({ x: r * Math.sin(phi), z: -r * Math.cos(phi) });
+const deg = (d: number) => (d * Math.PI) / 180;
 
-export const LAMP = { x: -HW + 2.2, z: -HD + 2 };
-export const MUG = { x: HW - 2.4, z: -HD + 2.2 };
-export const TOWER = { x: HW - 6, z: HD - 2.4 };
-export const BEACON = { x: -HW + 6, z: HD - 2.4 };
-export const PAPERS = { x: -2.5, z: HD - 2.2 };
+// Props on the free ring: the front gap holds the low ones (tower, papers, beacon, mug); the tall lamp
+// stands at the back, between the seats, where it hides nothing.
+export const TOWER = polar(deg(146), 10);
+export const PAPERS = polar(deg(180), 10.4);
+export const BEACON = polar(deg(-146), 10);
+export const LAMP = polar(0, 11.4);
+export const MUG = polar(deg(-164), 11.3);
 /** The whiteboard stands behind the table. */
-/** Its bottom edge clears the back row's heads and labels, as seen from the default camera. */
-export const BOARD = { x: 0, z: -HD - 9, w: 28, h: 13, y: 8.5 };
+export const BOARD = { x: 0, z: -TABLE.r - 9, w: 28, h: 13, y: 8.5 };
 
-/** Where the cities go. */
-export const PLATE = { x0: -HW * CITY_SCALE, x1: HW * CITY_SCALE, z0: -HD * CITY_SCALE, z1: HD * CITY_SCALE };
 export const PLATE_H = 0.12;
 
 export type Seat = {
@@ -45,28 +49,31 @@ export type Seat = {
 };
 
 /**
- * Seats around the table: the back edge first (facing the camera), then the
- * sides, then a second row behind the back. The front (camera side) stays
- * free unless all of those are taken.
+ * Seat i of n: evenly spaced around the table, all facing its centre, leaving
+ * FRONT_GAP open on the camera side. Past ~13 people the gap fills too.
  */
-export function seatAt(i: number): Seat {
-  const gap = AVATAR_SCALE * 1.45;
-  const out = AVATAR_SCALE * 0.32; // chest at the edge
-  const back = Math.max(1, Math.floor((TABLE.w - 4) / gap));
-  const side = Math.max(1, Math.floor((TABLE.d - 4) / gap));
-  const along = (n: number, k: number) => -((n - 1) * gap) / 2 + k * gap;
-  if (i < back) return { x: along(back, i), z: -HD - out, yaw: 0, nx: 0, nz: 1 };
-  i -= back;
-  if (i < side * 2) {
-    const k = Math.floor(i / 2);
-    return i % 2 === 0
-      ? { x: -HW - out, z: along(side, k), yaw: Math.PI / 2, nx: 1, nz: 0 }
-      : { x: HW + out, z: along(side, k), yaw: -Math.PI / 2, nx: -1, nz: 0 };
-  }
-  i -= side * 2;
-  if (i < back - 1) return { x: along(back, i) + gap / 2, z: -HD - out - gap * 0.8, yaw: 0, nx: 0, nz: 1 };
-  i -= back - 1;
-  return { x: along(back, i % back), z: HD + out, yaw: Math.PI, nx: 0, nz: -1 };
+export function seatAt(i: number, n: number): Seat {
+  const minStep = (AVATAR_SCALE * 1.45) / (TABLE.r + AVATAR_SCALE * 0.32); // a seat's width, as an angle
+  const open = 2 * Math.PI - FRONT_GAP;
+  const span = n * minStep > open ? Math.min(2 * Math.PI - minStep, n * minStep) : open;
+  const phi = -span / 2 + (span * (i + 0.5)) / Math.max(1, n);
+  const p = polar(phi, TABLE.r + AVATAR_SCALE * 0.32); // chest at the edge
+  return { x: p.x, z: p.z, yaw: -phi, nx: -Math.sin(phi), nz: Math.cos(phi) };
+}
+
+/** Each agent's laptop, on the table in front of its seat. */
+export const LAPTOP = { w: 3.0, d: 2.0, lid: 1.9 };
+
+/** Centre of the laptop's base in front of a seat. */
+export function laptopAt(seat: Seat): XZ {
+  const inward = AVATAR_SCALE * 0.32 + 0.35 + LAPTOP.d / 2;
+  return { x: seat.x + seat.nx * inward, z: seat.z + seat.nz * inward };
+}
+
+/** Top of the laptop's lid, where its threads to the cities start. */
+export function laptopTop(seat: Seat): THREE.Vector3 {
+  const c = laptopAt(seat);
+  return new THREE.Vector3(c.x + seat.nx * (LAPTOP.d / 2 + 0.3), LAPTOP.lid, c.z + seat.nz * (LAPTOP.d / 2 + 0.3));
 }
 
 // ── Miniature cities ─────────────────────────────────────────────────────────
@@ -88,8 +95,12 @@ export function miniCities(layout: CityLayout): MiniCities {
   const maxX = Math.max(...cs.map((c) => c.x + c.w), 1);
   const minZ = Math.min(...cs.map((c) => c.z), 0);
   const maxZ = Math.max(...cs.map((c) => c.z + c.d), 1);
-  const pw = PLATE.x1 - PLATE.x0;
-  const pd = PLATE.z1 - PLATE.z0;
+  // The largest rectangle of the layout's aspect inside a circle of CITY_SCALE × the diameter.
+  const R = CITY_SCALE * TABLE.r;
+  const aspect = (maxX - minX) / (maxZ - minZ);
+  const pd = (2 * R) / Math.sqrt(1 + aspect * aspect);
+  const pw = pd * aspect;
+  const PLATE = { x0: -pw / 2, z0: -pd / 2 };
   const s = Math.min(pw / (maxX - minX), pd / (maxZ - minZ), 0.25);
   const maxH = Math.max(1, ...layout.buildings.map((b) => b.h));
   // Miniatures: the tallest building about a hand high next to the avatars.
