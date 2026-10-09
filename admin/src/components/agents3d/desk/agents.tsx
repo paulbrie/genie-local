@@ -1,6 +1,5 @@
 "use client";
 
-import { Html } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -10,6 +9,7 @@ import { fileKey, lastBefore, type Snapshot, TASK_COLORS, type Timeline, type TL
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
+import { OverlayLabel } from "../overlay-label";
 import type { Positions } from "../parts";
 import type { Selection } from "../scene";
 import { type Beat, beatAt, type Doing, doingAt } from "./activity";
@@ -390,7 +390,7 @@ export function DeskAgents({
               <primitive object={l.chair} />
             </group>
             <primitive object={l.laptop} onClick={pick} />
-            <Html position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+            <OverlayLabel position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
               <DeskLabel
                 name={displayName(a)}
                 color={colorOf(l.key)}
@@ -398,7 +398,7 @@ export function DeskAgents({
                 snapAgent={snap.agents.get(l.key)}
                 selected={selected?.kind === "agent" && selected.key === l.key}
               />
-            </Html>
+            </OverlayLabel>
           </group>
         );
       })}
@@ -438,7 +438,7 @@ function DeskLabel({
   const task = snapAgent?.task;
   return (
     <div style={{ transform: "translateY(-50%)" }} className="flex flex-col items-center gap-0.5">
-      {/* Always rendered (hidden when empty): mounting/unmounting inside drei Html mid-frame is fragile. */}
+      {/* Always rendered (hidden when empty), so the label keeps one shape as it changes. */}
       <div
         className={`rounded-full bg-white px-1.5 text-[11px] font-bold leading-4 shadow ${bubble ? "" : "invisible"} ${
           bubble === "?" ? "text-red-500" : "text-slate-500"

@@ -1,6 +1,5 @@
 "use client";
 
-import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -8,6 +7,7 @@ import * as THREE from "three";
 import { TASK_COLORS, type Snapshot, type Timeline, type TLCommit, type TLMessage } from "@/lib/agents3d-timeline";
 
 import type { Clock } from "./clock";
+import { OverlayLabel } from "./overlay-label";
 import type { PaneView } from "./use-panes";
 
 /** Live positions of each agent's drone, written by the City view every frame. */
@@ -173,7 +173,7 @@ export function AgentLabel({
   /** Fallback when there's no pane: the last few tool calls. */
   recent?: string[];
   selected?: boolean;
-  /** Kept mounted but not shown (zoomed far out); unmounting drei Html mid-frame is fragile. */
+  /** Kept mounted but not shown (zoomed far out); unmounting a label mid-frame churns its React root. */
   hidden?: boolean;
 }) {
   const task = snapAgent?.task;
@@ -181,7 +181,7 @@ export function AgentLabel({
   const termLines = termAll ? termAll.slice(-10).join("\n") : null;
   const termShort = termAll ? termAll.slice(-4).join("\n") : null;
   return (
-    <Html center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+    <OverlayLabel center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
       <div
         // Keep the click inside the label: bubbling to the canvas would count as a
         // click on empty ground (deselect, free camera).
@@ -252,7 +252,7 @@ export function AgentLabel({
           </div>
         )}
       </div>
-    </Html>
+    </OverlayLabel>
   );
 }
 
@@ -333,9 +333,9 @@ export function CommitTower({
         <meshBasicMaterial color={new THREE.Color("#06b6d4").multiplyScalar(2)} toneMapped={false} />
       </mesh>
       {label && (
-        <Html position={[0, -0.6, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
+        <OverlayLabel position={[0, -0.6, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
           <div className="whitespace-nowrap rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white/80">{label}</div>
-        </Html>
+        </OverlayLabel>
       )}
     </group>
   );

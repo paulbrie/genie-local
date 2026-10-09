@@ -1,6 +1,5 @@
 "use client";
 
-import { Html } from "@react-three/drei";
 import { type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -9,6 +8,7 @@ import { editor, fileKey, type Snapshot, type Timeline, type TLCommit } from "@/
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "./clock";
+import { OverlayLabel } from "./overlay-label";
 import { Lightning, type Strike, tailFade } from "./lightning";
 import type { PaneView } from "./use-panes";
 import { AgentLabel, CommitTower, MessageArcs, type Positions, realAge, useSeen } from "./parts";
@@ -304,22 +304,22 @@ export function CityView({
       ))}
 
       {hb && (
-        <Html position={[hb.x, hb.h + 0.6, hb.z]} center zIndexRange={[30, 0]} style={{ pointerEvents: "none" }}>
+        <OverlayLabel position={[hb.x, hb.h + 0.6, hb.z]} center zIndexRange={[30, 0]} style={{ pointerEvents: "none" }}>
           <div className="whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-white">{hb.path}</div>
-        </Html>
+        </OverlayLabel>
       )}
 
       {cities.map((c) => (
-        <Html key={c.repo} position={[c.x, 0.2, c.z + c.d + 1.5]} zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
+        <OverlayLabel key={c.repo} position={[c.x, 0.2, c.z + c.d + 1.5]} zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
           <div className={`whitespace-nowrap text-xs font-semibold tracking-wide text-white/70 uppercase ${far ? "hidden" : ""}`}>{c.name}</div>
-        </Html>
+        </OverlayLabel>
       ))}
       {districts
         .filter((d) => d.depth === 0 && d.w * d.d > 30)
         .map((d) => (
-          <Html key={`${d.repo}:${d.dir}`} position={[d.x + 0.3, 0.3, d.z + 0.6]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+          <OverlayLabel key={`${d.repo}:${d.dir}`} position={[d.x + 0.3, 0.3, d.z + 0.6]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
             <div className={`whitespace-nowrap font-mono text-[10px] text-white/45 ${far ? "hidden" : ""}`}>{d.dir}/</div>
-          </Html>
+          </OverlayLabel>
         ))}
 
       {tl.agents.map((a) => (

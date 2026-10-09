@@ -1,6 +1,5 @@
 "use client";
 
-import { Html } from "@react-three/drei";
 import { type ThreeEvent, useFrame } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -10,6 +9,7 @@ import { fileKey, type Snapshot, type Timeline, type TLCommit } from "@/lib/agen
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
+import { OverlayLabel } from "../overlay-label";
 import { realAge } from "../parts";
 import type { Selection } from "../scene";
 import { BEACON, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
@@ -222,11 +222,11 @@ export function CommitTower({
           <Clay color={colorOf(c.node)} />
         </mesh>
       ))}
-      <Html position={[0, -0.05, 0.85]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+      <OverlayLabel position={[0, -0.05, 0.85]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className="whitespace-nowrap rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-white/80">
           {commits.length} commit{commits.length === 1 ? "" : "s"}
         </div>
-      </Html>
+      </OverlayLabel>
     </group>
   );
 }
@@ -275,9 +275,9 @@ export function OriginBeacon({ commits, clock, reduced }: { commits: TLCommit[];
         <sphereGeometry args={[0.6, 20, 16]} />
         <meshBasicMaterial color="#06b6d4" transparent depthWrite={false} toneMapped={false} />
       </mesh>
-      <Html position={[0, -0.05, 0.75]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+      <OverlayLabel position={[0, -0.05, 0.75]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
         <div className="whitespace-nowrap rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-cyan-200">origin</div>
-      </Html>
+      </OverlayLabel>
     </group>
   );
 }
@@ -375,9 +375,9 @@ export function MiniCityView({
             <primitive object={rbox(p.w, PLATE_H, p.d, 2, 0.04)} attach="geometry" />
             <meshPhysicalMaterial color="#3f4656" roughness={0.6} clearcoat={0.2} />
           </mesh>
-          <Html position={[0, 0.05, p.d / 2 + 0.15]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
+          <OverlayLabel position={[0, 0.05, p.d / 2 + 0.15]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
             <div className="whitespace-nowrap rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-white/80">{p.name}</div>
-          </Html>
+          </OverlayLabel>
         </group>
       ))}
       {layout.buildings.length > 0 && (

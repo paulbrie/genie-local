@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Armchair, Building2, ChevronDown, ChevronRight, Maximize2, Minimize2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSubject } from "subjecto/react";
@@ -44,6 +44,8 @@ const DeskScene = dynamic(() => import("./desk/desk-scene"), {
   loading: () => <div className="grid h-full place-items-center text-sm text-white/60">Loading the desk…</div>,
 });
 const MODE_KEY = "admin.agents3d.mode";
+const PANEL_KEY = "admin.agents3d.panel";
+const FOLDS_KEY = "admin.agents3d.folds";
 
 /** Time windows, with a replay speed that suits each. */
 const WINDOWS = [
@@ -94,20 +96,51 @@ export function Agents3DView() {
     const saved = Number(localStorage.getItem(LINGER_KEY));
     if (localStorage.getItem(LINGER_KEY) !== null && saved >= 0 && saved <= 10) setLingerS(saved); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
-  // City (drones over the repo cities) or Desk (clay characters on an office desk). While Desk is
-  // in preview, its toggle only shows with ?desk=1 (or ?mode=desk, which also opens it).
-  // Null until read from the URL/storage, so the wrong world never mounts first.
+  // City (drones over the repo cities) or Table (the Desk: clay characters seated around a table),
+  // from the toolbar switch or T. Remembered; ?mode=desk / ?mode=city deep-link and win over the
+  // remembered choice. Null until read, so the wrong world never mounts first. The clock, project
+  // filter and selection live here, so switching keeps them.
   const [mode, setMode] = useState<"city" | "desk" | null>(null);
-  const [deskOn, setDeskOn] = useState(false);
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search);
-    const on = q.get("desk") === "1" || q.get("mode") === "desk";
-    setDeskOn(on); // eslint-disable-line react-hooks/set-state-in-effect
-    setMode(on && (q.get("mode") ?? localStorage.getItem(MODE_KEY)) === "desk" ? "desk" : "city");
+    const m = new URLSearchParams(window.location.search).get("mode") ?? localStorage.getItem(MODE_KEY);
+    setMode(m === "desk" ? "desk" : "city"); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
   const pickMode = (m: "city" | "desk") => {
     setMode(m);
     localStorage.setItem(MODE_KEY, m);
+    // Keep a ?mode= deep link in step, so a reload stays in the chosen view.
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("mode")) {
+      url.searchParams.set("mode", m);
+      window.history.replaceState(window.history.state, "", url);
+    }
+  };
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  });
+  // The side panel: collapsed to a rail, and which of its sections are folded.
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [folded, setFolded] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (localStorage.getItem(PANEL_KEY) === "0") setPanelOpen(false); // eslint-disable-line react-hooks/set-state-in-effect
+    try {
+      const f = JSON.parse(localStorage.getItem(FOLDS_KEY) ?? "[]");
+      if (Array.isArray(f)) setFolded(new Set(f.filter((x) => typeof x === "string")));
+    } catch {
+      // ignore a malformed value
+    }
+  }, []);
+  const togglePanel = () => {
+    setPanelOpen(!panelOpen);
+    localStorage.setItem(PANEL_KEY, panelOpen ? "0" : "1");
+  };
+  const toggleFold = (id: string) => {
+    const next = new Set(folded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFolded(next);
+    localStorage.setItem(FOLDS_KEY, JSON.stringify([...next]));
   };
   const [selected, setSelected] = useState<Selection | null>(null);
   // Clicking an agent's card or row: first click flies the camera to it, a second follows it.
@@ -148,8 +181,10 @@ export function Agents3DView() {
     } else setOverlay(true);
   };
   const toggleRef = useRef(toggleFull);
+  const pickModeRef = useRef(pickMode);
   useEffect(() => {
     toggleRef.current = toggleFull;
+    pickModeRef.current = pickMode;
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -157,6 +192,9 @@ export function Agents3DView() {
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         toggleRef.current();
+      } else if ((e.key === "t" || e.key === "T") && modeRef.current) {
+        e.preventDefault();
+        pickModeRef.current(modeRef.current === "desk" ? "city" : "desk");
       } else if (e.key === "Escape") {
         setOverlay(false); // native full screen handles Esc itself
         setFollow(""); // and back to the free camera
@@ -270,21 +308,6 @@ export function Agents3DView() {
     >
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">
-        {deskOn && (
-          <div className="flex rounded-md border" role="group" aria-label="View">
-            {(["city", "desk"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => pickMode(m)}
-                aria-pressed={mode === m}
-                className={`px-2 py-1 text-xs capitalize ${mode === m ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-        )}
         <ProjectsFilter
           projects={projects}
           hidden={hidden}
@@ -299,6 +322,26 @@ export function Agents3DView() {
               className={`px-2 py-1 text-xs ${w.hours === hours ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
             >
               {w.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex rounded-md border" role="group" aria-label="View (T)">
+          {(
+            [
+              ["city", "City", Building2, "The 3D city of repos, with agents as drones"],
+              ["desk", "Table", Armchair, "The agents seated around a table, with the cities as miniatures"],
+            ] as const
+          ).map(([m, label, Icon, title]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => pickMode(m)}
+              aria-pressed={mode === m}
+              title={`${title} (T)`}
+              className={`flex items-center gap-1 px-2 py-1 text-xs ${mode === m ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              <Icon className="size-3.5" aria-hidden />
+              {label}
             </button>
           ))}
         </div>
@@ -385,9 +428,12 @@ export function Agents3DView() {
       )}
 
       <div
-        className={`grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem] ${
+        className={`grid min-h-0 flex-1 grid-cols-1 gap-3 ${
+          // Collapsed, the panel is a thin rail and the scene takes the width (the canvas resizes itself).
+          panelOpen ? "xl:grid-cols-[minmax(0,1fr)_22rem]" : "xl:grid-cols-[minmax(0,1fr)_2.5rem]"
+        } ${
           // In full screen on narrow screens the side panel stacks below: keep most height for the scene.
-          full ? "grid-rows-[minmax(0,1fr)_minmax(0,30%)] xl:grid-rows-1" : ""
+          full ? (panelOpen ? "grid-rows-[minmax(0,1fr)_minmax(0,30%)] xl:grid-rows-1" : "grid-rows-[minmax(0,1fr)_auto] xl:grid-rows-1") : ""
         }`}
       >
         <div
@@ -424,22 +470,51 @@ export function Agents3DView() {
             </p>
           )}
         </div>
-        <aside
-          className={`min-h-0 overflow-auto rounded-md border p-3 text-sm ${full ? "h-full" : "max-h-[calc(100vh-15rem)]"}`}
-        >
-          {tl && snap && (
-            <SidePanel
-              tl={tl}
-              snap={snap}
-              selected={selected}
-              onSelect={setSelected}
-              onOpen={setOpenMsg}
-              onAgentClick={onAgentClick}
-              panes={terminals ? panes : undefined}
-              live={clock.live}
-            />
-          )}
-        </aside>
+        {panelOpen ? (
+          <aside
+            aria-label="Side panel"
+            className={`relative min-h-0 overflow-auto rounded-md border p-3 text-sm ${full ? "h-full" : "max-h-[calc(100vh-15rem)]"}`}
+          >
+            <button
+              type="button"
+              onClick={togglePanel}
+              aria-expanded
+              aria-label="Collapse the side panel"
+              title="Collapse the side panel"
+              className="absolute top-1.5 right-1.5 grid size-6 place-items-center rounded text-muted-foreground hover:bg-muted"
+            >
+              <PanelRightClose className="size-4" />
+            </button>
+            {tl && snap && (
+              <SidePanel
+                tl={tl}
+                snap={snap}
+                selected={selected}
+                onSelect={setSelected}
+                onOpen={setOpenMsg}
+                onAgentClick={onAgentClick}
+                panes={terminals ? panes : undefined}
+                live={clock.live}
+                folded={folded}
+                onFold={toggleFold}
+              />
+            )}
+          </aside>
+        ) : (
+          <aside aria-label="Side panel (collapsed)" className="flex min-h-0 justify-center rounded-md border p-1 xl:items-start">
+            <button
+              type="button"
+              onClick={togglePanel}
+              aria-expanded={false}
+              aria-label="Expand the side panel"
+              title="Expand the side panel"
+              className="flex items-center gap-1 rounded px-1 py-1.5 text-xs text-muted-foreground hover:bg-muted xl:flex-col"
+            >
+              <PanelRightOpen className="size-4" />
+              <span className="xl:[writing-mode:vertical-rl]">Agents · tasks · messages</span>
+            </button>
+          </aside>
+        )}
       </div>
 
       <MessageSheet
@@ -495,6 +570,8 @@ function SidePanel({
   onAgentClick,
   panes,
   live,
+  folded,
+  onFold,
 }: {
   tl: Timeline;
   snap: Snapshot;
@@ -504,6 +581,9 @@ function SidePanel({
   onAgentClick: (key: string) => void;
   panes?: Record<string, PaneView>;
   live: boolean;
+  /** Overview sections folded to their heading. */
+  folded: Set<string>;
+  onFold: (id: string) => void;
 }) {
   const name = (k: string) => tl.byKey.get(k)?.name ?? "?";
   const dot = (k: string) => <Dot tl={tl} k={k} />;
@@ -693,63 +773,91 @@ function SidePanel({
   // Overview
   const open = snap.tasks.filter((x) => !isClosed(x.state)).sort((a, b) => b.since - a.since);
   const clashes = [...snap.holders.entries()].filter(([, h]) => h.length > 1);
+  const latest = recentMsgs(() => true);
+  const fold = (id: string, label: string, count: number) => (
+    <Fold id={id} label={label} count={count} open={!folded.has(id)} onToggle={onFold} />
+  );
   return (
     <div>
-      <H>Agents</H>
-      <ul className="space-y-1">
-        {tl.agents.map((a) => {
-          const s = snap.agents.get(a.key);
-          return (
-            <li key={a.key}>
-              <button
-                type="button"
-                onClick={() => onAgentClick(a.key)}
-                title="Fly to this agent; click again to follow it"
-                className="flex w-full items-center gap-2 text-left text-xs hover:underline"
-              >
-                {dot(a.key)} <span className="font-medium">{a.name}</span>
-                <span className="text-muted-foreground">{a.role}</span>
-                <span className={s?.busy ? "text-amber-500" : "text-muted-foreground"}>{s?.busy ? (s.lastTool ?? "busy") : "idle"}</span>
-                {s?.task?.id && <span className="ml-auto font-mono" style={{ color: TASK_COLORS[s.task.state] }}>{s.task.id}</span>}
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-      {clashes.length > 0 && (
-        <>
-          <H>Clashes</H>
-          <ul className="space-y-0.5 text-xs text-destructive">
-            {clashes.map(([k, h]) => (
-              <li key={k}>
-                <button type="button" onClick={() => onSelect({ kind: "file", key: k })} className="hover:underline">
-                  {k.split("\n")[1]}: {h.map(name).join(" + ")}
+      {fold("agents", "Agents", tl.agents.length)}
+      {!folded.has("agents") && (
+        <ul className="space-y-1">
+          {tl.agents.map((a) => {
+            const s = snap.agents.get(a.key);
+            return (
+              <li key={a.key}>
+                <button
+                  type="button"
+                  onClick={() => onAgentClick(a.key)}
+                  title="Fly to this agent; click again to follow it"
+                  className="flex w-full items-center gap-2 text-left text-xs hover:underline"
+                >
+                  {dot(a.key)} <span className="font-medium">{a.name}</span>
+                  <span className="text-muted-foreground">{a.role}</span>
+                  <span className={s?.busy ? "text-amber-500" : "text-muted-foreground"}>{s?.busy ? (s.lastTool ?? "busy") : "idle"}</span>
+                  {s?.task?.id && <span className="ml-auto font-mono" style={{ color: TASK_COLORS[s.task.state] }}>{s.task.id}</span>}
                 </button>
               </li>
-            ))}
-          </ul>
+            );
+          })}
+        </ul>
+      )}
+      {clashes.length > 0 && (
+        <>
+          {fold("clashes", "Clashes", clashes.length)}
+          {!folded.has("clashes") && (
+            <ul className="space-y-0.5 text-xs text-destructive">
+              {clashes.map(([k, h]) => (
+                <li key={k}>
+                  <button type="button" onClick={() => onSelect({ kind: "file", key: k })} className="hover:underline">
+                    {k.split("\n")[1]}: {h.map(name).join(" + ")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
-      <H>Open tasks ({open.length})</H>
-      <ul className="space-y-1 text-xs">
-        {open.slice(0, 12).map((x) => (
-          <li key={x.key}>
-            <button type="button" onClick={() => onSelect({ kind: "task", key: x.key })} className="text-left hover:underline">
-              <span className="font-mono" style={{ color: TASK_COLORS[x.state] }}>
-                {x.id ?? "·"} {x.state.replace("_", " ")}
-              </span>{" "}
-              {x.title}
-            </button>
-          </li>
-        ))}
-      </ul>
-      <H>Latest messages</H>
-      <MsgList tl={tl} onOpen={onOpen} list={recentMsgs(() => true)} />
+      {fold("tasks", "Open tasks", open.length)}
+      {!folded.has("tasks") && (
+        <ul className="space-y-1 text-xs">
+          {open.slice(0, 12).map((x) => (
+            <li key={x.key}>
+              <button type="button" onClick={() => onSelect({ kind: "task", key: x.key })} className="text-left hover:underline">
+                <span className="font-mono" style={{ color: TASK_COLORS[x.state] }}>
+                  {x.id ?? "·"} {x.state.replace("_", " ")}
+                </span>{" "}
+                {x.title}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {fold("messages", "Latest messages", latest.length)}
+      {!folded.has("messages") && <MsgList tl={tl} onOpen={onOpen} list={latest} />}
       <p className="mt-3 text-[10px] text-muted-foreground">
         Files touched with Edit/Write/Read are known exactly. Most edits go through Bash, so files with uncommitted
         changes pulse when their modification time moves, credited to the holder or the busy agent in that repo.
       </p>
     </div>
+  );
+}
+
+/** An overview section's heading: click (or Enter/Space) to fold it; the count stays visible. */
+function Fold({ id, label, count, open, onToggle }: { id: string; label: string; count: number; open: boolean; onToggle: (id: string) => void }) {
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <h3 className="mt-3 mb-1 first:mt-0">
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        aria-expanded={open}
+        className="flex items-center gap-1 rounded text-xs font-medium tracking-wide text-muted-foreground uppercase hover:text-foreground"
+      >
+        <Chevron className="size-3.5" aria-hidden />
+        {label} ({count})
+      </button>
+    </h3>
   );
 }
 
