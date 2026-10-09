@@ -26,14 +26,16 @@ const STATE_LABEL: Record<TaskState, string> = {
   in_progress: "in progress",
   blocked: "blocked",
   done: "done",
+  cancelled: "cancelled",
 };
 const STATE_CLASS: Record<TaskState, string> = {
   dispatched: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
   in_progress: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
   blocked: "bg-destructive/15 text-destructive",
   done: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  cancelled: "bg-muted text-muted-foreground line-through",
 };
-const STATE_ORDER: TaskState[] = ["blocked", "in_progress", "dispatched", "done"];
+const STATE_ORDER: TaskState[] = ["blocked", "in_progress", "dispatched", "done", "cancelled"];
 
 const Empty = ({ children }: { children: React.ReactNode }) => (
   <p className="rounded-md border p-3 text-sm text-muted-foreground">{children}</p>
@@ -68,7 +70,9 @@ export function TasksPanel({
               onClick={() => onHighlight(t.history.map((h) => h.msgId))}
               title="Highlight this task's messages in the diagram"
             >
-              <span className="line-clamp-2">{t.title}</span>
+              <span className={`line-clamp-2 ${t.state === "cancelled" ? "text-muted-foreground line-through" : ""}`}>
+                {t.title}
+              </span>
             </button>
             <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${STATE_CLASS[t.state]}`}>
               {STATE_LABEL[t.state]}

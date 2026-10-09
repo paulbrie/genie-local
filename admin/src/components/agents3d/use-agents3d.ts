@@ -11,14 +11,14 @@ const POLL_MS = 3000;
  * Polls /api/agents3d. Repo layouts are only re-sent when they change, and
  * tool calls only after the newest one we hold, so a busy poll stays small.
  */
-export function useAgents3D(days: number, live: boolean) {
+export function useAgents3D(hours: number, live: boolean) {
   const [model, setModel] = useState<Agents3DModel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cur = useRef<Agents3DModel | null>(null);
 
   const load = useCallback(async () => {
     const prev = cur.current;
-    const q = new URLSearchParams({ days: String(days) });
+    const q = new URLSearchParams({ hours: String(hours) });
     if (prev) {
       q.set("v", prev.version);
       q.set("rv", prev.reposVersion);
@@ -58,7 +58,7 @@ export function useAgents3D(days: number, live: boolean) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [days]);
+  }, [hours]);
 
   useEffect(() => {
     cur.current = null;

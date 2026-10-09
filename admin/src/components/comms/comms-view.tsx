@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { CommsModel, CommsNode, CommsRole } from "@/lib/claude-comms-parse";
+import { agentColorMap } from "@/lib/comms-colors";
 import { BASE_PATH } from "@/lib/config";
 import { formatRelativeTime } from "@/lib/format";
 import { commsPrefs, hydrateCommsPrefs, setCommsPrefs } from "@/store/comms";
@@ -18,20 +19,6 @@ import { SequenceDiagram } from "./sequence-diagram";
 
 const POLL_MS = 3000;
 const DAY_OPTIONS = [1, 3, 7, 30];
-
-// Same lane palette as the git graph, so both read alike.
-const PALETTE = [
-  "#3b82f6",
-  "#ef4444",
-  "#22c55e",
-  "#a855f7",
-  "#f59e0b",
-  "#06b6d4",
-  "#ec4899",
-  "#84cc16",
-  "#f97316",
-  "#14b8a6",
-];
 
 export type NodeView = CommsNode & { color: string; pinned: boolean };
 
@@ -85,9 +72,8 @@ export function CommsView() {
 
   const nodes: NodeView[] = useMemo(() => {
     if (!model) return [];
-    // Colours keyed by session so they don't shift when filters change.
-    const sorted = [...model.nodes].sort((a, b) => a.key.localeCompare(b.key));
-    const color = new Map(sorted.map((n, i) => [n.key, PALETTE[i % PALETTE.length]]));
+    // Fixed colours for named agents, the rest keyed by session (stable under filters).
+    const color = agentColorMap(model.nodes);
     const rank: Record<CommsRole, number> = { manager: 0, peer: 1, worker: 2 };
     return model.nodes
       .map((n) => ({

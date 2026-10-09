@@ -13,7 +13,7 @@ import type { CityLayout } from "@/lib/city-layout";
 import type { Clock } from "./clock";
 import { type Positions, realAge, useSeen } from "./parts";
 
-/** A touched file keeps its bolt this long (real ms), fading out. */
+/** A touched file keeps its bolt this long (real ms) before the linger starts. */
 const HOLD_MS = 6000;
 /** The strike flash after an Edit. */
 export const FLASH_MS = 450;
@@ -70,6 +70,19 @@ type Bolt = {
 };
 
 type Burst = { born: number; x: number; y: number; z: number; color: THREE.Color; vel: Float32Array };
+
+const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
+
+/**
+ * 1 while an effect is active (age ≤ activeMs); then, over `linger` ms, it holds
+ * for the first 40% and eases out to 0. With no linger it ends at activeMs.
+ */
+export function tailFade(age: number, activeMs: number, linger: number): number {
+  if (age <= activeMs) return 1;
+  if (linger <= 0) return 0;
+  const x = (age - activeMs) / linger;
+  return x >= 1 ? 0 : 1 - smooth((x - 0.4) / 0.6);
+}
 
 // Scratch vectors (module-level: no per-frame allocation).
 const vA = new THREE.Vector3();
@@ -154,6 +167,7 @@ export function Lightning({
   reduced,
   scale,
   strikes,
+  linger,
 }: {
   tl: Timeline;
   snap: Snapshot;
@@ -163,6 +177,8 @@ export function Lightning({
   reduced: boolean;
   scale: number;
   strikes: React.RefObject<Strike[]>;
+  /** After an operation ends, a bolt stays this long (real ms) while fading out. */
+  linger: number;
 }) {
   const seenEv = useSeen();
   const seenMsg = useSeen();
@@ -213,59 +229,48 @@ export function Lightning({
   const col = useMemo(() => new THREE.Color(), []);
   const targets = useMemo(() => new Map<string, { age: number; kind: "edit" | "read"; ms: number }>(), []);
   const strikePool = useMemo(() => Array.from({ length: 24 }, () => ({ x: 0, y: 0, z: 0, color: new THREE.Color(), k: 0 })), []);
+  // Bolt candidates for this frame (reused objects), drawn in priority order.
+  const cands = useMemo(
+    () =>
+      Array.from({ length: POOL * 2 }, () => ({
+        from: new THREE.Vector3(),
+        to: new THREE.Vector3(),
+        color: new THREE.Color(),
+        bright: 0,
+        kind: "edit" as "edit" | "read" | "msg",
+        age: 0,
+        fade: 1,
+      })),
+    [],
+  );
+  const order = useMemo<number[]>(() => [], []);
 
   useFrame(() => {
     const t = clock.now();
     const live = clock.live;
     const now = performance.now();
-    let used = 0;
     const out = strikes.current;
     if (out) out.length = 0;
+    let n = 0;
 
-    const strike = (
+    const enqueue = (
       from: THREE.Vector3,
       to: THREE.Vector3,
       color: THREE.Color,
       bright: number,
       kind: "edit" | "read" | "msg",
+      age: number,
+      fade: number,
     ) => {
-      if (used >= POOL) return;
-      const b = bolts[used++];
-      const rough = kind === "read" ? 0.35 : kind === "msg" ? 1.4 : 1;
-      const hz = kind === "read" ? 6 : 14;
-      if (reduced) {
-        jag(b.pts, from, to, 0); // static: straight, no flicker
-      } else if (now >= b.nextRegen) {
-        jag(b.pts, from, to, rough);
-        b.nextRegen = now + 1000 / hz;
-        if (kind === "edit")
-          b.branches.forEach((br) =>
-            branch(br, b.pts, 4 + Math.floor(Math.random() * (SEG - 10)), from.distanceTo(to) * (0.12 + Math.random() * 0.14)),
-          );
-      } else {
-        // Keep the shape but pin the ends to the (moving) drone and roof.
-        b.pts[0] = from.x;
-        b.pts[1] = from.y;
-        b.pts[2] = from.z;
-        b.pts[SEG * 3] = to.x;
-        b.pts[SEG * 3 + 1] = to.y;
-        b.pts[SEG * 3 + 2] = to.z;
-      }
-      const flick = reduced ? 1 : 0.7 + Math.random() * 0.6;
-      writeSegs(b.core, b.pts);
-      // Core: blue-white, tinted a little toward the agent; glow: the agent's colour.
-      b.core.mat.color.copy(CORE_COLOR).lerp(color, 0.15).multiplyScalar(bright * flick * 3.2);
-      b.core.mat.opacity = Math.min(1, 0.4 + bright);
-      b.core.mat.linewidth = kind === "read" ? READ_PX : CORE_PX;
-      b.core.obj.visible = true;
-      b.glow.obj.visible = kind !== "read";
-      b.glow.mat.color.copy(color).multiplyScalar(bright * flick * 1.6);
-      b.glow.mat.opacity = Math.min(0.6, 0.45 * bright);
-      b.branches.forEach((br) => {
-        br.obj.visible = kind === "edit" && !reduced && Math.random() > 0.2;
-        br.mat.color.copy(CORE_COLOR).lerp(color, 0.4).multiplyScalar(bright * flick * 2.2);
-        br.mat.opacity = Math.min(1, 0.8 * bright);
-      });
+      if (n >= cands.length || bright * fade <= 0.001) return;
+      const c = cands[n++];
+      c.from.copy(from);
+      c.to.copy(to);
+      c.color.copy(color);
+      c.bright = bright;
+      c.kind = kind;
+      c.age = age;
+      c.fade = fade;
     };
 
     for (const a of tl.agents) {
@@ -273,23 +278,23 @@ export function Lightning({
       if (!from || !snap.agents.get(a.key)) continue;
       targets.clear();
       const end = lastBefore(a.events, t);
-      for (let i = end, n = 0; i >= 0 && n < 40; i--, n++) {
+      for (let i = end, k = 0; i >= 0 && k < 40; i--, k++) {
         const e = a.events[i];
         if (!e.repo || !e.path) continue;
         const kind = toolKind(e.tool);
         if (kind !== "edit" && kind !== "read") continue;
         const age = realAge(clock, t, seenEv.eff(`${a.key}@${e.ms}@${e.tool}`, e.ms, live));
-        if (age < 0 || age > HOLD_MS) continue;
-        const k = fileKey(e.repo, e.path);
-        const prev = targets.get(k);
-        if (!prev || age < prev.age) targets.set(k, { age, kind: kind === "edit" || prev?.kind === "edit" ? "edit" : "read", ms: e.ms });
+        if (age < 0 || age > HOLD_MS + linger) continue;
+        const fk = fileKey(e.repo, e.path);
+        const prev = targets.get(fk);
+        if (!prev || age < prev.age) targets.set(fk, { age, kind: kind === "edit" || prev?.kind === "edit" ? "edit" : "read", ms: e.ms });
       }
       // Edits seen through file mtimes (made with Bash), credited to this agent.
-      for (let i = lastBefore(tl.edits, t), n = 0; i >= 0 && n < 120; i--, n++) {
+      for (let i = lastBefore(tl.edits, t), k = 0; i >= 0 && k < 120; i--, k++) {
         const e = tl.edits[i];
         if (e.node && e.node !== a.key) continue;
         const age = realAge(clock, t, seenEv.eff(`${e.fileKey}@${e.ms}`, e.ms, live));
-        if (age < 0 || age > HOLD_MS) continue;
+        if (age < 0 || age > HOLD_MS + linger) continue;
         if (!e.node && editor(tl, snap, e) !== a.key) continue;
         const prev = targets.get(e.fileKey);
         if (!prev || age < prev.age) targets.set(e.fileKey, { age, kind: "edit", ms: e.ms });
@@ -303,12 +308,19 @@ export function Lightning({
         if (bi === undefined) return;
         const b = layout.buildings[bi];
         vB.set(b.x, b.h, b.z);
-        const fade = 1 - tg.age / HOLD_MS;
-        const flash = tg.kind === "edit" && tg.age < FLASH_MS ? 1 - tg.age / FLASH_MS : 0;
-        const bright = (rank === 0 ? 1 : 0.55) * (0.45 + 0.55 * fade) + flash * 2;
-        strike(from, vB, color, tg.kind === "edit" ? bright : bright * 0.6, tg.kind);
+        const active = 1 - Math.min(1, tg.age / HOLD_MS);
+        const fade = tailFade(tg.age, HOLD_MS, linger);
+        // The strike flash: full, then a short hold-and-fade tail.
+        const flash =
+          tg.kind !== "edit"
+            ? 0
+            : tg.age < FLASH_MS
+              ? 1 - (tg.age / FLASH_MS) * 0.5
+              : 0.5 * tailFade(tg.age, FLASH_MS, linger * 0.35);
+        const bright = (rank === 0 ? 1 : 0.55) * (0.45 + 0.55 * active) + flash * 2;
+        enqueue(from, vB, color, tg.kind === "edit" ? bright : bright * 0.6, tg.kind, tg.age, fade);
 
-        if (flash > 0 && out && out.length < strikePool.length) {
+        if (flash > 0.01 && out && out.length < strikePool.length) {
           const sp = strikePool[out.length];
           sp.x = vB.x;
           sp.y = vB.y;
@@ -317,7 +329,7 @@ export function Lightning({
           sp.k = flash;
           out.push(sp);
         }
-        if (flash > 0 && !reduced) {
+        if (tg.kind === "edit" && tg.age < FLASH_MS && !reduced) {
           const key = `${a.key}|${k}|${tg.ms}`;
           if (!state.burstKeys.has(key)) {
             state.burstKeys.add(key);
@@ -342,26 +354,79 @@ export function Lightning({
     }
 
     // Dim bolts between drones when a TASK / STATUS passes.
-    for (let i = lastBefore(tl.messages, t), n = 0; i >= 0 && n < 30; i--, n++) {
+    for (let i = lastBefore(tl.messages, t), k = 0; i >= 0 && k < 30; i--, k++) {
       const m = tl.messages[i];
       if (m.tag !== "TASK" && m.tag !== "STATUS") continue;
       const age = realAge(clock, t, seenMsg.eff(m.id, m.ms, live));
-      if (age < 0 || age > MSG_MS) continue;
+      if (age < 0 || age > MSG_MS + linger) continue;
       const pa = positions.current?.get(m.from);
       const pb = positions.current?.get(m.to);
       if (!pa || !pb) continue;
       col.set(m.color);
-      strike(pa, pb, col, 0.45 * (1 - age / MSG_MS), "msg");
+      enqueue(pa, pb, col, 0.45 * (1 - 0.5 * Math.min(1, age / MSG_MS)), "msg", age, tailFade(age, MSG_MS, linger));
     }
 
+    // Draw: active bolts first (newest first), then fading ones (newest first), so when
+    // the pool is full the oldest fading bolts are the ones dropped.
+    order.length = n;
+    for (let i = 0; i < n; i++) order[i] = i;
+    order.sort((x, y) => {
+      const fx = cands[x].fade < 1 ? 1 : 0;
+      const fy = cands[y].fade < 1 ? 1 : 0;
+      return fx - fy || cands[x].age - cands[y].age;
+    });
+    const used = Math.min(n, POOL);
+    for (let i = 0; i < used; i++) {
+      const c = cands[order[i]];
+      const b = bolts[i];
+      const f = c.fade;
+      const rough = c.kind === "read" ? 0.35 : c.kind === "msg" ? 1.4 : 1;
+      // Flicker slows as the bolt fades.
+      const hz = (c.kind === "read" ? 6 : 14) * Math.max(0.15, f);
+      if (reduced) {
+        jag(b.pts, c.from, c.to, 0); // static: straight, no flicker
+      } else if (now >= b.nextRegen) {
+        jag(b.pts, c.from, c.to, rough);
+        b.nextRegen = now + 1000 / hz;
+        if (c.kind === "edit")
+          b.branches.forEach((br) =>
+            branch(br, b.pts, 4 + Math.floor(Math.random() * (SEG - 10)), c.from.distanceTo(c.to) * (0.12 + Math.random() * 0.14)),
+          );
+      } else {
+        // Keep the shape but pin the ends to the (moving) drone and roof.
+        b.pts[0] = c.from.x;
+        b.pts[1] = c.from.y;
+        b.pts[2] = c.from.z;
+        b.pts[SEG * 3] = c.to.x;
+        b.pts[SEG * 3 + 1] = c.to.y;
+        b.pts[SEG * 3 + 2] = c.to.z;
+      }
+      const flick = reduced ? 1 : 1 + (Math.random() * 0.6 - 0.3) * f;
+      const br = c.bright * f;
+      writeSegs(b.core, b.pts);
+      // Core: blue-white, tinted a little toward the agent; glow: the agent's colour.
+      b.core.mat.color.copy(CORE_COLOR).lerp(c.color, 0.15).multiplyScalar(br * flick * 3.2);
+      b.core.mat.opacity = Math.min(1, (0.4 + c.bright) * f);
+      b.core.mat.linewidth = c.kind === "read" ? READ_PX : CORE_PX;
+      b.core.obj.visible = true;
+      b.glow.obj.visible = c.kind !== "read";
+      b.glow.mat.color.copy(c.color).multiplyScalar(br * flick * 1.6);
+      b.glow.mat.opacity = Math.min(0.6, 0.45 * br);
+      b.branches.forEach((bb) => {
+        bb.obj.visible = c.kind === "edit" && !reduced && f > 0.5 && Math.random() > 0.2;
+        bb.mat.color.copy(CORE_COLOR).lerp(c.color, 0.4).multiplyScalar(br * flick * 2.2);
+        bb.mat.opacity = Math.min(1, 0.8 * br);
+      });
+    }
     for (let i = used; i < POOL; i++) {
       const b = bolts[i];
       b.core.obj.visible = false;
       b.glow.obj.visible = false;
-      b.branches.forEach((br) => (br.obj.visible = false));
+      b.branches.forEach((bb) => (bb.obj.visible = false));
     }
 
-    // Spark bursts: ballistic points, fading over ~0.9 s.
+    // Spark bursts: ballistic points; they fade over 0.9 s plus a share of the linger.
+    const life = 0.9 + (linger / 1000) * 0.25;
     const pos = sparks.geometry.getAttribute("position") as THREE.BufferAttribute;
     const cols = sparks.geometry.getAttribute("color") as THREE.BufferAttribute;
     const pa = pos.array as Float32Array;
@@ -369,7 +434,7 @@ export function Lightning({
     for (let s = 0; s < BURSTS; s++) {
       const bu = bursts[s];
       const age = (now - bu.born) / 1000;
-      const alive = age >= 0 && age < 0.9;
+      const alive = age >= 0 && age < life;
       for (let j = 0; j < SPARKS; j++) {
         const o = (s * SPARKS + j) * 3;
         if (!alive) {
@@ -379,7 +444,7 @@ export function Lightning({
         pa[o] = bu.x + bu.vel[j * 3] * age;
         pa[o + 1] = bu.y + bu.vel[j * 3 + 1] * age + 0.5 * GRAVITY * scale * age * age;
         pa[o + 2] = bu.z + bu.vel[j * 3 + 2] * age;
-        const k = (1 - age / 0.9) * 3;
+        const k = (1 - smooth(age / life)) * 3;
         ca[o] = Math.min(4, bu.color.r * k + 0.6 * k);
         ca[o + 1] = Math.min(4, bu.color.g * k + 0.6 * k);
         ca[o + 2] = Math.min(4, bu.color.b * k + 0.6 * k);

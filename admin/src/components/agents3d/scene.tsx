@@ -1,10 +1,10 @@
 "use client";
 
-import { OrbitControls, Stars } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
-import { useRef } from "react";
-import type * as THREE from "three";
+import { useEffect, useRef } from "react";
+import * as THREE from "three";
 
 import type { Snapshot, Timeline } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
@@ -12,6 +12,8 @@ import type { CityLayout } from "@/lib/city-layout";
 import { CityView } from "./city-view";
 import type { Clock } from "./clock";
 import { Follow, type Positions } from "./parts";
+import { Planet, planetFor, SkyDome, WorldLights } from "./sky";
+import type { PaneView } from "./use-panes";
 
 export type Selection =
   | { kind: "agent"; key: string }
@@ -29,8 +31,16 @@ export type SceneProps = {
   reduced: boolean;
   selected: Selection | null;
   onSelect: (s: Selection | null) => void;
+  /** ms effects linger (fading) after an operation ends. */
+  linger: number;
   /** Changing it remounts the canvas, re-framing the camera (e.g. a new project selection). */
   frameKey?: string;
+  /** Fly the camera to this agent (a new `n` starts a new flight). */
+  flyTo?: { key: string; n: number } | null;
+  /** Live terminal captures by agent key; undefined when terminals are off. */
+  panes?: Record<string, PaneView>;
+  /** An agent's card was clicked. */
+  onAgentClick?: (key: string) => void;
   /** Start the camera here instead of the default framing. */
   camera?: { position: [number, number, number]; target: [number, number, number] };
 };
@@ -46,12 +56,14 @@ function cameraFor(layout: CityLayout): { position: [number, number, number]; ta
 export default function Scene(props: SceneProps) {
   const { layout, bloom, reduced, onSelect } = props;
   const cam = props.camera ?? cameraFor(layout);
+  // Far enough out to see the planet's curve and limb, but not lose the cities.
+  const maxDist = Math.max(layout.size * 3 + 200, planetFor(layout).radius * 0.9);
 
   return (
     <Canvas
       // Remount on a new project selection, so the camera re-frames it.
       key={props.frameKey ?? ""}
-      camera={{ position: cam.position, fov: 50, near: 0.1, far: 4000 }}
+      camera={{ position: cam.position, fov: 50, near: 0.5, far: 9000 }}
       gl={{ antialias: true }}
       dpr={[1, 2]}
       onPointerMissed={() => onSelect(null)}
@@ -59,11 +71,11 @@ export default function Scene(props: SceneProps) {
         (gl as THREE.WebGLRenderer).setClearColor("#03050a");
       }}
     >
-      <fog attach="fog" args={["#03050a", 60, layout.size * 2.5 + 150]} />
-      <ambientLight intensity={0.55} />
-      <hemisphereLight args={["#9db4ff", "#0a0a12", 0.5]} />
-      <directionalLight position={[40, 80, 30]} intensity={1.5} />
-      {!reduced && <Stars radius={600} depth={80} count={2500} factor={6} fade speed={0.4} />}
+      {/* A light haze for depth; it never hides the cities at the zoom-out limit. */}
+      <fog attach="fog" args={["#05070d", maxDist * 0.5, maxDist * 2.2]} />
+      <WorldLights />
+      <SkyDome reduced={reduced} />
+      <Planet layout={layout} />
 
       <Stage {...props} />
 
@@ -72,7 +84,7 @@ export default function Scene(props: SceneProps) {
         target={cam.target}
         enableDamping
         maxPolarAngle={Math.PI / 2.05}
-        maxDistance={layout.size * 3 + 200}
+        maxDistance={maxDist}
       />
       {bloom && (
         <EffectComposer>
@@ -90,6 +102,73 @@ function Stage(props: SceneProps) {
     <>
       <CityView {...props} positions={positions} />
       <Follow positions={positions} followKey={props.followKey} reduced={props.reduced} />
+      <FlyTo {...props} positions={positions} />
     </>
   );
+}
+
+const FLY_MS = 800;
+const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
+
+/**
+ * Eases the camera to an agent: frames the drone and the file under its bolt
+ * (its focus) at a comfortable distance, keeping the current viewing
+ * direction, then holds. Reduced motion jumps instead.
+ */
+function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { positions: React.RefObject<Positions> }) {
+  const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
+  const camera = useThree((s) => s.camera);
+  const flightRef = useRef({
+    active: false,
+    t0: 0,
+    fromPos: new THREE.Vector3(),
+    fromTarget: new THREE.Vector3(),
+    toPos: new THREE.Vector3(),
+    toTarget: new THREE.Vector3(),
+  });
+
+  useEffect(() => {
+    const flight = flightRef.current;
+    if (!flyTo || !controls) return;
+    const p = positions.current?.get(flyTo.key);
+    if (!p) return;
+    const focus = snap.agents.get(flyTo.key)?.focus;
+    const bi = focus ? layout.index.get(focus) : undefined;
+    const b = bi !== undefined ? layout.buildings[bi] : null;
+    // Centre between the drone and its target; distance grows with their separation.
+    const center = b ? new THREE.Vector3(b.x, b.h, b.z).add(p).multiplyScalar(0.5) : p.clone();
+    const sep = b ? p.distanceTo(new THREE.Vector3(b.x, b.h, b.z)) : 0;
+    const dist = Math.max(22, sep * 2.2);
+    const dir = camera.position.clone().sub(controls.target);
+    dir.y = 0;
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+    dir.normalize().multiplyScalar(Math.cos(0.62) * dist);
+    dir.y = Math.sin(0.62) * dist; // ~35° above the horizon
+    flight.fromPos.copy(camera.position);
+    flight.fromTarget.copy(controls.target);
+    flight.toTarget.copy(center);
+    flight.toPos.copy(center).add(dir);
+    flight.t0 = performance.now();
+    flight.active = true;
+    if (reduced) {
+      camera.position.copy(flight.toPos);
+      controls.target.copy(flight.toTarget);
+      controls.update();
+      flight.active = false;
+    }
+    // Only a new flight (n) starts this; snapshot ticks must not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flyTo?.n, controls]);
+
+  useFrame(() => {
+    const flight = flightRef.current;
+    if (!flight.active || !controls) return;
+    const x = Math.min(1, (performance.now() - flight.t0) / FLY_MS);
+    const k = ease(x);
+    camera.position.lerpVectors(flight.fromPos, flight.toPos, k);
+    controls.target.lerpVectors(flight.fromTarget, flight.toTarget, k);
+    controls.update();
+    if (x >= 1) flight.active = false;
+  });
+  return null;
 }

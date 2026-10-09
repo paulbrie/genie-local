@@ -29,18 +29,21 @@ export function MessageSheet({
   byKey,
   commits,
   onClose,
+  container,
 }: {
   message: CommsMessage | null;
   byKey: Map<string, NodeView>;
   commits: CommitLink[];
   onClose: () => void;
+  /** Portal target, e.g. a fullscreen element (default: body). */
+  container?: HTMLElement | null;
 }) {
   const [raw, setRaw] = useState(false);
   const from = message ? byKey.get(message.from) : undefined;
   const to = message ? byKey.get(message.to) : undefined;
   return (
     <Sheet open={!!message} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" className="w-full sm:max-w-2xl">
+      <SheetContent side="right" className="w-full sm:max-w-2xl" container={container ?? undefined}>
         {message && (
           <>
             <SheetHeader>

@@ -4,8 +4,9 @@
  * what was true at time T (who was busy, on which file, holding which files,
  * on which task, which commits existed). Live mode is just T = now.
  */
-import type {
-  CommitInfo,
+import {
+  isClosed,
+  type CommitInfo,
   CommsMessage,
   CommsNode,
   CommsRole,
@@ -13,25 +14,10 @@ import type {
   TaskState,
 } from "@/lib/claude-comms-parse";
 import type { AgentEvent, Agents3DModel, RepoLayout } from "@/lib/agents3d-types";
-import { NOTE_COLOR, TAG_COLORS } from "@/lib/comms-colors";
+import { agentColorMap, NOTE_COLOR, TAG_COLORS } from "@/lib/comms-colors";
 
-export const AGENT_PALETTE = [
-  "#3b82f6",
-  "#ef4444",
-  "#22c55e",
-  "#a855f7",
-  "#f59e0b",
-  "#06b6d4",
-  "#ec4899",
-  "#84cc16",
-  "#f97316",
-  "#14b8a6",
-];
-
-/** Colours keyed by sorted node key, so they don't shift with filters (same as Comms). */
-export function agentColors(keys: string[]): Map<string, string> {
-  return new Map([...keys].sort().map((k, i) => [k, AGENT_PALETTE[i % AGENT_PALETTE.length]]));
-}
+/** Colours keyed by node key (named agents fixed, see comms-colors), stable under filters. */
+export { agentColorMap } from "@/lib/comms-colors";
 
 export type ToolKind = "edit" | "read" | "run" | "message" | "agent" | "other";
 export const TOOL_COLORS: Record<ToolKind, string> = {
@@ -56,6 +42,7 @@ export const TASK_COLORS: Record<TaskState, string> = {
   in_progress: "#f59e0b",
   blocked: "#ef4444",
   done: "#22c55e",
+  cancelled: "#6b7280",
 };
 
 export type TLAgent = {
@@ -80,7 +67,15 @@ export type TLMessage = {
   label: string;
 };
 
-export type TLClaim = { ms: number; node: string; action: "claim" | "release"; fileKey: string | null; path: string };
+export type TLClaim = {
+  ms: number;
+  node: string;
+  action: "claim" | "release";
+  fileKey: string | null;
+  path: string;
+  /** From prose, not a CLAIM:/RELEASE: tag: makes a "maybe" holder at most. */
+  guessed: boolean;
+};
 export type TLEdit = { ms: number; fileKey: string; node: string | null };
 export type TLCommit = {
   hash: string;
@@ -161,7 +156,7 @@ export function buildTimeline(
   pins: Record<string, CommsRole> = {},
 ): Timeline {
   const { comms } = model;
-  const colors = agentColors(comms.nodes.map((n) => n.key));
+  const colors = agentColorMap(comms.nodes);
   const agents: TLAgent[] = comms.nodes.map((n) => {
     const repo = model.nodeRepos[n.key] ?? null;
     const cwdRel = repo && n.cwd && n.cwd.startsWith(repo) ? n.cwd.slice(repo.length).replace(/^\//, "") : "";
@@ -215,6 +210,7 @@ export function buildTimeline(
         ms: t,
         node: h.node,
         action: h.action,
+        guessed: h.guessed,
         path: f.path,
         fileKey: resolveClaim(f.path, byKey.get(h.node), files, byBase),
       });
@@ -296,7 +292,10 @@ export type Snapshot = {
   live: boolean;
   agents: Map<string, AgentState>;
   /** fileKey → node keys holding it (two or more = conflict). */
+  /** fileKey → agents holding it by CLAIM: tag (two or more = clash). */
   holders: Map<string, string[]>;
+  /** fileKey → agents that may hold it (guessed from prose), for files with no tagged holder. */
+  maybe: Map<string, string[]>;
   tasks: { key: string; id: string | null; title: string; state: TaskState; manager: string; worker: string; guessed: boolean; since: number }[];
   commits: TLCommit[];
 };
@@ -346,7 +345,7 @@ export function snapshotAt(tl: Timeline, t: number, live: boolean): Snapshot {
     const mine = tasks
       .filter((x) => x.worker === a.key && !x.guessed && (x.state === "in_progress" || x.state === "blocked"))
       .sort((x, y) => y.since - x.since)[0];
-    const managing = tasks.filter((x) => x.manager === a.key && !x.guessed && x.state !== "done").length;
+    const managing = tasks.filter((x) => x.manager === a.key && !x.guessed && !isClosed(x.state)).length;
     agents.set(a.key, {
       busy,
       lastTool: last?.tool ?? null,
@@ -357,19 +356,31 @@ export function snapshotAt(tl: Timeline, t: number, live: boolean): Snapshot {
     });
   }
 
+  // Tagged claims make holders; prose guesses only "maybe" holders. Any release
+  // by an agent ends both.
   const held = new Map<string, Set<string>>();
+  const guessedHeld = new Map<string, Set<string>>();
+  const set = (m: Map<string, Set<string>>, k: string) => {
+    let s = m.get(k);
+    if (!s) m.set(k, (s = new Set()));
+    return s;
+  };
   for (let i = 0; i < tl.claims.length && tl.claims[i].ms <= t; i++) {
     const c = tl.claims[i];
     if (!c.fileKey) continue;
-    if (!held.has(c.fileKey)) held.set(c.fileKey, new Set());
-    if (c.action === "claim") held.get(c.fileKey)!.add(c.node);
-    else held.get(c.fileKey)!.delete(c.node);
+    if (c.action === "claim") set(c.guessed ? guessedHeld : held, c.fileKey).add(c.node);
+    else {
+      set(held, c.fileKey).delete(c.node);
+      set(guessedHeld, c.fileKey).delete(c.node);
+    }
   }
   const holders = new Map<string, string[]>();
   for (const [k, s] of held) if (s.size) holders.set(k, [...s]);
+  const maybe = new Map<string, string[]>();
+  for (const [k, s] of guessedHeld) if (s.size && !holders.has(k)) maybe.set(k, [...s]);
 
   const commits = tl.commits.filter((c) => c.ms <= t);
-  return { t, live, agents, holders, tasks, commits };
+  return { t, live, agents, holders, maybe, tasks, commits };
 }
 
 /** Who most likely made an unattributed edit: the file's holder, else a busy agent in that repo. */

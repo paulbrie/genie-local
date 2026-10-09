@@ -8,6 +8,7 @@ import * as THREE from "three";
 import { TASK_COLORS, type Snapshot, type Timeline, type TLCommit, type TLMessage } from "@/lib/agents3d-timeline";
 
 import type { Clock } from "./clock";
+import type { PaneView } from "./use-panes";
 
 /** Live positions of each agent's drone, written by the City view every frame. */
 export type Positions = Map<string, THREE.Vector3>;
@@ -157,19 +158,44 @@ export function AgentLabel({
   snapAgent,
   live,
   onClick,
+  term,
+  recent,
+  selected,
+  hidden,
 }: {
   name: string;
   color: string;
   snapAgent: Snapshot["agents"] extends Map<string, infer A> ? A | undefined : never;
   live: boolean;
   onClick?: () => void;
+  /** Live terminal: its capture, null when the session has no pane, undefined when terminals are off. */
+  term?: PaneView | null;
+  /** Fallback when there's no pane: the last few tool calls. */
+  recent?: string[];
+  selected?: boolean;
+  /** Kept mounted but not shown (zoomed far out); unmounting drei Html mid-frame is fragile. */
+  hidden?: boolean;
 }) {
   const task = snapAgent?.task;
+  const termAll = term?.text ? term.text.split("\n") : null;
+  const termLines = termAll ? termAll.slice(-10).join("\n") : null;
+  const termShort = termAll ? termAll.slice(-4).join("\n") : null;
   return (
     <Html center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
       <div
-        onClick={onClick}
-        className="pointer-events-auto -translate-y-10 cursor-pointer select-none whitespace-nowrap rounded-md border border-white/15 bg-black/70 px-2 py-1 text-[11px] text-white shadow-lg backdrop-blur"
+        // Keep the click inside the label: bubbling to the canvas would count as a
+        // click on empty ground (deselect, free camera).
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick?.();
+        }}
+        // The card grows upwards from just above the drone.
+        style={{ transform: "translateY(calc(-50% - 26px))" }}
+        className={`${hidden ? "hidden" : ""} group pointer-events-auto cursor-pointer select-none whitespace-nowrap rounded-md border bg-black/75 px-2 py-1 text-[11px] text-white shadow-lg backdrop-blur ${
+          selected ? "border-white/40" : "border-white/15"
+        }`}
       >
         <div className="flex items-center gap-1.5 font-semibold">
           <span className="size-2 rounded-full" style={{ background: color, boxShadow: snapAgent?.busy ? `0 0 8px ${color}` : undefined }} />
@@ -187,6 +213,42 @@ export function AgentLabel({
               {task.id ?? "task"} · {task.state.replace("_", " ")}
             </span>
             <span className="truncate text-white/80">{task.title}</span>
+          </div>
+        )}
+        {term !== undefined && (
+          <div className="mt-1 border-t border-white/10 pt-0.5">
+            {!live ? (
+              <div className="text-[9px] text-white/45">terminal: live only (not recorded for replay)</div>
+            ) : term && termLines !== null ? (
+              <>
+                <div className="flex items-center gap-1 text-[9px] text-white/45">
+                  <span className="size-1.5 rounded-full bg-emerald-400" />
+                  {term.pane} · {new Date(term.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </div>
+                {/* Compact (4 lines) by default; 10 lines and wider on hover or when selected. */}
+                {selected ? (
+                  <pre className="w-[34rem] overflow-hidden font-mono text-[9px] leading-[1.2] text-white/85">{termLines}</pre>
+                ) : (
+                  <>
+                    <pre className="w-[18rem] overflow-hidden font-mono text-[9px] leading-[1.2] text-white/85 group-hover:hidden">
+                      {termShort}
+                    </pre>
+                    <pre className="hidden w-[34rem] overflow-hidden font-mono text-[9px] leading-[1.2] text-white/85 group-hover:block">
+                      {termLines}
+                    </pre>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="text-[9px] text-white/50">
+                no terminal
+                {recent?.map((r, i) => (
+                  <div key={i} className="font-mono text-white/70">
+                    {r}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

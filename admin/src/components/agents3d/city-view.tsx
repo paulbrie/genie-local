@@ -1,7 +1,7 @@
 "use client";
 
 import { Html } from "@react-three/drei";
-import { type ThreeEvent, useFrame } from "@react-three/fiber";
+import { type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
@@ -9,7 +9,8 @@ import { editor, fileKey, type Snapshot, type Timeline, type TLCommit } from "@/
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "./clock";
-import { Lightning, type Strike } from "./lightning";
+import { Lightning, type Strike, tailFade } from "./lightning";
+import type { PaneView } from "./use-panes";
 import { AgentLabel, CommitTower, MessageArcs, type Positions, realAge, useSeen } from "./parts";
 import type { Selection } from "./scene";
 
@@ -34,6 +35,7 @@ const DEFAULT_EXT = "#6b7280";
 const AMBER = new THREE.Color("#f59e0b");
 const RED = new THREE.Color("#ef4444");
 const WHITE = new THREE.Color("#ffffff");
+const GREY = new THREE.Color("#94a3b8");
 
 const EDIT_PULSE_MS = 3500;
 const BEAMS = 24;
@@ -47,7 +49,15 @@ export function CityView({
   reduced,
   selected,
   onSelect,
+  onAgentClick,
+  linger,
+  panes,
 }: {
+  /** Live terminal captures by agent key; undefined when terminals are off. */
+  panes?: Record<string, PaneView>;
+  onAgentClick?: (key: string) => void;
+  /** ms a bolt, flash or edit pulse stays (fading) after its operation ends. */
+  linger: number;
   tl: Timeline;
   snap: Snapshot;
   clock: Clock;
@@ -58,6 +68,10 @@ export function CityView({
   onSelect: (s: Selection | null) => void;
 }) {
   const { buildings, index, districts, cities } = layout;
+  // Far out (looking at the planet), labels would pile up: hide them.
+  const camera = useThree((s) => s.camera);
+  const [far, setFar] = useState(false);
+  const farAt = layout.size * 2.5 + 250;
   // Drones grow with the main city so they stay visible over big repos.
   const droneScale = Math.min(3, Math.max(1, Math.max(cities[0]?.w ?? 0, cities[0]?.d ?? 0) / 35));
   const bRef = useRef<THREE.InstancedMesh>(null);
@@ -148,6 +162,8 @@ export function CityView({
   const target = useMemo(() => new THREE.Vector3(), []);
 
   useFrame((state, dt) => {
+    const isFar = camera.position.length() > farAt;
+    if (isFar !== far) setFar(isFar);
     const t = clock.now();
     const time = state.clock.elapsedTime;
     const mesh = bRef.current;
@@ -158,10 +174,11 @@ export function CityView({
     for (let i = tl.edits.length - 1, n = 0; i >= 0 && n < 400; i--, n++) {
       const e = tl.edits[i];
       const age = realAge(clock, t, seenEdit.eff(`${e.fileKey}@${e.ms}`, e.ms, live));
-      if (age < 0 || age > EDIT_PULSE_MS) continue;
+      if (age < 0 || age > EDIT_PULSE_MS + linger) continue;
       const bi = index.get(e.fileKey);
       if (bi === undefined) continue;
-      const k = 1 - age / EDIT_PULSE_MS;
+      // Decays to 40% over the pulse, then holds and fades out over the linger.
+      const k = (1 - 0.6 * Math.min(1, age / EDIT_PULSE_MS)) * tailFade(age, EDIT_PULSE_MS, linger);
       if ((pulse.get(bi)?.k ?? 0) < k) pulse.set(bi, { k, node: editor(tl, snap, e) });
     }
 
@@ -177,6 +194,8 @@ export function CityView({
         tmpC.copy(baseColors[i]);
         if (dirty.has(b.key)) tmpC.lerp(AMBER, 0.45);
         const h = snap.holders.get(b.key);
+        // Only guessed holders: a soft grey tint, never a clash.
+        if (!h && snap.maybe.has(b.key)) tmpC.lerp(GREY, 0.55);
         if (h && h.length > 1) {
           tmpC.copy(RED).multiplyScalar(reduced ? 2 : 1.2 + Math.abs(Math.sin(time * 9)) * 2.2);
         } else if (h && h.length === 1) {
@@ -259,11 +278,7 @@ export function CityView({
 
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, 0]} receiveShadow>
-        <planeGeometry args={[layout.size * 4 + 200, layout.size * 4 + 200]} />
-        <meshStandardMaterial color="#05070c" />
-      </mesh>
-
+      {/* The ground is the planet's flattened pole (sky.tsx). */}
       <instancedMesh ref={dRef} args={[undefined, undefined, Math.max(districts.length, 1)]} frustumCulled={false}>
         <boxGeometry />
         <meshStandardMaterial />
@@ -296,14 +311,14 @@ export function CityView({
 
       {cities.map((c) => (
         <Html key={c.repo} position={[c.x, 0.2, c.z + c.d + 1.5]} zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
-          <div className="whitespace-nowrap text-xs font-semibold tracking-wide text-white/70 uppercase">{c.name}</div>
+          <div className={`whitespace-nowrap text-xs font-semibold tracking-wide text-white/70 uppercase ${far ? "hidden" : ""}`}>{c.name}</div>
         </Html>
       ))}
       {districts
         .filter((d) => d.depth === 0 && d.w * d.d > 30)
         .map((d) => (
           <Html key={`${d.repo}:${d.dir}`} position={[d.x + 0.3, 0.3, d.z + 0.6]} zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-            <div className="whitespace-nowrap font-mono text-[10px] text-white/45">{d.dir}/</div>
+            <div className={`whitespace-nowrap font-mono text-[10px] text-white/45 ${far ? "hidden" : ""}`}>{d.dir}/</div>
           </Html>
         ))}
 
@@ -334,7 +349,18 @@ export function CityView({
             color={a.color}
             snapAgent={snap.agents.get(a.key)}
             live={clock.live}
-            onClick={() => onSelect({ kind: "agent", key: a.key })}
+            onClick={() => (onAgentClick ? onAgentClick(a.key) : onSelect({ kind: "agent", key: a.key }))}
+            term={panes ? (panes[a.key] ?? null) : undefined}
+            recent={
+              panes && !panes[a.key]?.text
+                ? a.events
+                    .filter((e) => e.ms <= snap.t)
+                    .slice(-3)
+                    .map((e) => `${e.tool}${e.path ? ` ${e.path}` : ""}`)
+                : undefined
+            }
+            selected={selected?.kind === "agent" && selected.key === a.key}
+            hidden={far}
           />
         </group>
       ))}
@@ -348,6 +374,7 @@ export function CityView({
         reduced={reduced}
         scale={droneScale}
         strikes={strikes}
+        linger={linger}
       />
 
       <MessageArcs tl={tl} clock={clock} positions={positions} eff={(m) => seenMsg.eff(m.id, m.ms, clock.live)} reduced={reduced} />

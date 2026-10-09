@@ -10,11 +10,15 @@
  *   STATUS: <id> <text>       progress
  *   BLOCKED: <id> <reason>
  *   DONE: <id> <summary>
+ *   CANCELLED: <id> [reason]  the task is dropped (closed, not done)
  *   CLAIM: <path>[, <path>…]  the sender is now editing these files
  *   RELEASE: <path>[, …]      the sender no longer holds them
  *   COMMIT: <hash>[, <hash>…] commits the sender made
  *   PUSHED: <hash>            the branch is on the remote up to this hash
- * Messages with no tag fall back to keyword guesses, marked `guessed`.
+ * Messages with no tag fall back to keyword guesses, marked `guessed`, but
+ * only between two sessions that haven't used tags yet: once a pair sends its
+ * first tagged message, prose no longer makes claims or tasks, and the
+ * guessed tasks from before are dropped.
  */
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -25,6 +29,7 @@ export const TAG_NAMES = [
   "STATUS",
   "BLOCKED",
   "DONE",
+  "CANCELLED",
   "CLAIM",
   "RELEASE",
   "COMMIT",
@@ -75,7 +80,10 @@ export type CommsMessage = {
   guess: "dispatch" | "progress" | "done" | "blocked" | null;
 };
 
-export type TaskState = "dispatched" | "in_progress" | "blocked" | "done";
+export type TaskState = "dispatched" | "in_progress" | "blocked" | "done" | "cancelled";
+
+/** Done or cancelled: no longer open. */
+export const isClosed = (s: TaskState) => s === "done" || s === "cancelled";
 
 export type CommsTask = {
   key: string;
@@ -337,7 +345,7 @@ export function deriveState(messages: CommsMessage[]): {
   const openTask = (manager: string, worker: string, guessedOnly = false) => {
     let found: CommsTask | undefined;
     for (const t of tasks.values()) {
-      if (t.manager === manager && t.worker === worker && t.state !== "done") {
+      if (t.manager === manager && t.worker === worker && !isClosed(t.state)) {
         if (guessedOnly && !t.guessed) continue;
         if (!found || (t.updatedAt ?? "") >= (found.updatedAt ?? "")) found = t;
       }
@@ -390,9 +398,29 @@ export function deriveState(messages: CommsMessage[]): {
     }
   };
 
-  for (const m of [...messages].sort(byTime)) {
+  const sorted = [...messages].sort(byTime);
+  // When each pair of sessions started using tags.
+  const tagsSince = new Map<string, string>();
+  for (const m of sorted) {
+    const at = m.sentAt ?? m.receivedAt;
+    const k = pairKey(m.from, m.to);
+    if (m.tags.length > 0 && at && !tagsSince.has(k)) tagsSince.set(k, at);
+  }
+
+  const adopted = new Set<string>();
+  for (const m of sorted) {
     const at = m.sentAt ?? m.receivedAt;
     if (m.tags.length > 0) {
+      // The pair's first tagged message: its earlier prose guesses about who
+      // holds what are stale, so end them (guessed releases).
+      const pk = pairKey(m.from, m.to);
+      if (!adopted.has(pk)) {
+        adopted.add(pk);
+        for (const f of files.values())
+          for (const node of [m.from, m.to])
+            if (f.history.some((h) => h.guessed && h.action === "claim" && h.node === node))
+              fileAct(f.path, "release", node, m, true);
+      }
       for (const { tag, arg } of m.tags) {
         switch (tag) {
           case "TASK": {
@@ -418,7 +446,8 @@ export function deriveState(messages: CommsMessage[]): {
           case "ACK":
           case "STATUS":
           case "BLOCKED":
-          case "DONE": {
+          case "DONE":
+          case "CANCELLED": {
             const { id, rest } = splitTaskId(arg);
             // Without an id: the latest open task the sender works on for the receiver.
             const t = id ? findTask(id, m.from, m.to) : openTask(m.to, m.from);
@@ -443,8 +472,13 @@ export function deriveState(messages: CommsMessage[]): {
             } else if (t) {
               // A done task stays done: a later ACK/STATUS (e.g. the manager's
               // review) is kept in its history but doesn't reopen it. Only
-              // BLOCKED or a new TASK does.
-              const next = t.state === "done" && (tag === "ACK" || tag === "STATUS") ? "done" : tagState(tag);
+              // BLOCKED or a new TASK does. A cancelled one only reopens on TASK.
+              const next =
+                t.state === "cancelled" && tag !== "DONE"
+                  ? "cancelled"
+                  : t.state === "done" && (tag === "ACK" || tag === "STATUS")
+                    ? "done"
+                    : tagState(tag);
               move(t, next, m, rest || null);
             }
             break;
@@ -471,12 +505,15 @@ export function deriveState(messages: CommsMessage[]): {
       continue;
     }
 
-    // Untagged: keyword fallbacks, all marked as guesses.
+    for (const h of findHashes(m.body))
+      mentions.push({ hash: h, kind: "mention", node: m.from, msgId: m.id, at });
+    // Untagged: keyword fallbacks, all marked as guesses, only while this pair
+    // hasn't started using tags.
+    const since = tagsSince.get(pairKey(m.from, m.to));
+    if (since && at && at >= since) continue;
     for (const fa of guessFileActions(m.body)) {
       fileAct(fa.path, fa.action, fa.who === "sender" ? m.from : m.to, m, true);
     }
-    for (const h of findHashes(m.body))
-      mentions.push({ hash: h, kind: "mention", node: m.from, msgId: m.id, at });
 
     const text = m.summary || firstLine(m.body);
     const open = openTask(m.to, m.from, true);
@@ -513,14 +550,17 @@ export function deriveState(messages: CommsMessage[]): {
   const fileList = [...files.values()].sort((a, b) =>
     (b.since ?? "").localeCompare(a.since ?? ""),
   );
-  const taskList = [...tasks.values()].sort((a, b) =>
+  // Guessed tasks of a pair that later used tags are superseded by the tagged ones.
+  const taskList = [...tasks.values()]
+    .filter((t) => !(t.guessed && tagsSince.has(pairKey(t.manager, t.worker))))
+    .sort((a, b) =>
     (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""),
   );
   return { tasks: taskList, files: fileList, mentions };
 }
 
-function tagState(tag: "ACK" | "STATUS" | "BLOCKED" | "DONE"): TaskState {
-  return tag === "DONE" ? "done" : tag === "BLOCKED" ? "blocked" : "in_progress";
+function tagState(tag: "ACK" | "STATUS" | "BLOCKED" | "DONE" | "CANCELLED"): TaskState {
+  return tag === "DONE" ? "done" : tag === "CANCELLED" ? "cancelled" : tag === "BLOCKED" ? "blocked" : "in_progress";
 }
 
 /** Manager = hands out more tasks than it takes; worker = the reverse. */

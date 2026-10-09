@@ -285,7 +285,7 @@ async function refreshFile(abs: string, sessionId: string): Promise<FileState | 
 
 // ── Live registry ────────────────────────────────────────────────────────────
 
-type RegistryEntry = {
+export type RegistryEntry = {
   pid: number;
   sessionId: string;
   name: string | null;
@@ -297,7 +297,7 @@ type RegistryEntry = {
   updatedAt: number | null;
 };
 
-async function readRegistry(): Promise<{ entries: RegistryEntry[]; sig: string }> {
+export async function readRegistry(): Promise<{ entries: RegistryEntry[]; sig: string }> {
   let names: string[];
   try {
     names = (await fs.readdir(REGISTRY_DIR)).filter((f) => /^\d+\.json$/.test(f));
@@ -497,7 +497,8 @@ export async function getCommsModel(
   days = DEFAULT_DAYS,
   opts: { activity?: boolean } = {},
 ): Promise<CommsModel> {
-  const d = Math.min(Math.max(1, Math.round(days)), MAX_DAYS);
+  // Fractional days allowed (1 h = 1/24); rounded to the minute for caching.
+  const d = Math.min(Math.max(1 / 24, Math.round(days * 1440) / 1440), MAX_DAYS);
   // Serialize builds: concurrent pollers share one pass over the files.
   while (building) await building.catch(() => null);
   building = buildModel(d, !!opts.activity);
@@ -713,10 +714,14 @@ async function assemble(
     if (n && !n.sockets.includes(sock)) n.sockets.push(sock);
   }
 
+  // State (tasks, claims) comes from everything loaded, so a task dispatched
+  // before the window still has the right state; only the window's messages
+  // and tool calls are returned.
   const { tasks, files, mentions } = deriveState(messages);
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  const windowed = messages.filter((m) => (m.sentAt ?? m.receivedAt ?? "") >= cutoff);
   let activity: CommsModel["activity"];
   if (withActivity) {
-    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
     activity = {};
     for (const st of states) {
       const recent = st.activity.filter((a) => a.t >= cutoff);
@@ -735,7 +740,7 @@ async function assemble(
     generatedAt: new Date().toISOString(),
     days,
     nodes: nodeList,
-    messages,
+    messages: windowed,
     tasks,
     files,
     commits,
