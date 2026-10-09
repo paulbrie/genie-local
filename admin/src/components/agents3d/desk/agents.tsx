@@ -138,20 +138,26 @@ export function activitiesAt(tl: Timeline, beats: Map<string, Beat[]>, t: number
 const unnamed = (a: TLAgent) => /^[0-9a-f-]{6,}$/i.test(a.name) || a.key.includes(a.name);
 export const displayName = (a: TLAgent) => (unnamed(a) ? `Agent ${a.name.replace(/-/g, "").slice(0, 4)}` : a.name);
 
-/** Unnamed sessions quiet for this long leave the table. */
+/** Guest sessions quiet for this long leave the table. */
 const STALE_MS = 30 * 60_000;
 
+/** A guest at t: a session nobody named (a default or an id) that was active recently, or is busy now, live. */
+function guestAt(a: TLAgent, t: number, live: boolean): boolean {
+  if (!a.node.guest) return false;
+  if (live && a.node.status === "busy") return true;
+  const i = lastBefore(a.events, t);
+  return i >= 0 && t - a.events[i].ms < STALE_MS;
+}
+
+/** The guests that could sit at the table at t (what "Show guests" would add). */
+export const guestsAt = (tl: Timeline, t: number, live: boolean) => tl.agents.filter((a) => guestAt(a, t, live));
+
 /**
- * Who sits at the table at t: every named agent, plus unnamed sessions that
- * were active recently (or are busy now, live). Stable order, as in the timeline.
+ * Who sits at the table at t: every named agent (one per name, as the model
+ * merges a name's sessions), plus the guests if shown. Stable order, as in the timeline.
  */
-export function castAt(tl: Timeline, t: number, live: boolean): TLAgent[] {
-  return tl.agents.filter((a) => {
-    if (!unnamed(a)) return true;
-    if (live && a.node.status === "busy") return true;
-    const i = lastBefore(a.events, t);
-    return i >= 0 && t - a.events[i].ms < STALE_MS;
-  });
+export function castAt(tl: Timeline, t: number, live: boolean, guests: boolean): TLAgent[] {
+  return tl.agents.filter((a) => !a.node.guest || (guests && guestAt(a, t, live)));
 }
 
 const IDLE_TEXT: Partial<Record<Pose, string>> = { sip: "coffee break", pencil: "fiddling with a pencil", stretch: "stretching", idle: "idle", nap: "" };
@@ -590,7 +596,7 @@ export function DeskAgents({
             <primitive object={l.cloud.group} position={[l.seat.x, HEAD_Y - 0.15 * S, l.seat.z]} scale={S * 0.55} />
             <OverlayLabel position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
               <DeskLabel
-                name={displayName(a)}
+                name={a.node.guest ? `${displayName(a)} (guest)` : displayName(a)}
                 color={colorOf(l.key)}
                 act={acts.get(l.key)}
                 snapAgent={snap.agents.get(l.key)}

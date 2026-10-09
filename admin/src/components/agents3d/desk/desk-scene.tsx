@@ -10,7 +10,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { Follow, type Positions, useSeen } from "../parts";
 import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
-import { activitiesAt, castAt, DeskAgents, editingFiles } from "./agents";
+import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
 import { CommitTower, DeskTop, Lamp, MiniCityView, Mug, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
 import { Whiteboard } from "./whiteboard";
@@ -21,8 +21,17 @@ import { BOARD, miniCities } from "./world";
  * character per agent acting out what it does. A drop-in for <Scene> (same
  * props); its own canvas, room lighting and camera, no sky or planet.
  */
+const GUESTS_KEY = "admin.agents3d.desk.guests";
+
 export default function DeskScene(props: SceneProps) {
   const { bloom, onSelect } = props;
+  // Guests (sessions nobody named) stay off the table unless asked for; remembered.
+  const [guests, setGuests] = useState(() => localStorage.getItem(GUESTS_KEY) === "1");
+  const guestCount = guestsAt(props.tl, props.snap.t, props.snap.live).length;
+  const toggleGuests = (on: boolean) => {
+    setGuests(on);
+    localStorage.setItem(GUESTS_KEY, on ? "1" : "0");
+  };
   const small = typeof window !== "undefined" && window.innerWidth < 800;
   // The whiteboard close-ups: the whole board (col -1) or one column; `n` starts a new flight.
   const [board, setBoard] = useState<BoardFocus>({ n: 0, col: -1 });
@@ -37,45 +46,53 @@ export default function DeskScene(props: SceneProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [board.col]);
   return (
-    <Canvas
-      key={props.frameKey ?? ""}
-      shadows={{ type: THREE.PCFShadowMap }}
-      camera={{ position: [0, 23, 41], fov: 40, near: 0.1, far: 400 }}
-      gl={{ antialias: true }}
-      dpr={[1, 1.5]}
-      scene={{ environmentIntensity: 0.3 }}
-      onPointerMissed={() => {
-        onSelect(null);
-        if (board.col >= 0) onBoard(-1);
-      }}
-    >
-      <color attach="background" args={["#1d1a17"]} />
-      <Room />
-      <hemisphereLight args={["#fff7ed", "#5b4636", 0.55]} />
-      <directionalLight
-        position={[-10, 24, 16]}
-        intensity={2.2}
-        color="#fff4e6"
-        castShadow
-        shadow-mapSize={small ? [1024, 1024] : [2048, 2048]}
-        shadow-bias={-0.0004}
-        shadow-radius={5}
-        shadow-camera-left={-22}
-        shadow-camera-right={22}
-        shadow-camera-top={18}
-        shadow-camera-bottom={-18}
-        shadow-camera-near={1}
-        shadow-camera-far={70}
-      />
-      <directionalLight position={[8, 6, -10]} intensity={0.8} color="#bcd4ff" />
-      <Stage {...props} board={board} onBoard={onBoard} />
-      <OrbitControls makeDefault target={[0, 6, -6]} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
-      {bloom && (
-        <EffectComposer>
-          <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} />
-        </EffectComposer>
+    <div className="relative h-full w-full">
+      <Canvas
+        key={props.frameKey ?? ""}
+        shadows={{ type: THREE.PCFShadowMap }}
+        camera={{ position: [0, 23, 41], fov: 40, near: 0.1, far: 400 }}
+        gl={{ antialias: true }}
+        dpr={[1, 1.5]}
+        scene={{ environmentIntensity: 0.3 }}
+        onPointerMissed={() => {
+          onSelect(null);
+          if (board.col >= 0) onBoard(-1);
+        }}
+      >
+        <color attach="background" args={["#1d1a17"]} />
+        <Room />
+        <hemisphereLight args={["#fff7ed", "#5b4636", 0.55]} />
+        <directionalLight
+          position={[-10, 24, 16]}
+          intensity={2.2}
+          color="#fff4e6"
+          castShadow
+          shadow-mapSize={small ? [1024, 1024] : [2048, 2048]}
+          shadow-bias={-0.0004}
+          shadow-radius={5}
+          shadow-camera-left={-22}
+          shadow-camera-right={22}
+          shadow-camera-top={18}
+          shadow-camera-bottom={-18}
+          shadow-camera-near={1}
+          shadow-camera-far={70}
+        />
+        <directionalLight position={[8, 6, -10]} intensity={0.8} color="#bcd4ff" />
+        <Stage {...props} board={board} onBoard={onBoard} guests={guests} />
+        <OrbitControls makeDefault target={[0, 6, -6]} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
+        {bloom && (
+          <EffectComposer>
+            <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} />
+          </EffectComposer>
+        )}
+      </Canvas>
+      {guestCount > 0 && (
+        <label className="absolute right-2 bottom-2 flex cursor-pointer items-center gap-1.5 rounded bg-black/50 px-2 py-0.5 text-[10px] text-white/75">
+          <input type="checkbox" checked={guests} onChange={(e) => toggleGuests(e.target.checked)} />
+          Show guests ({guestCount})
+        </label>
       )}
-    </Canvas>
+    </div>
   );
 }
 
@@ -94,8 +111,8 @@ function Room() {
 
 type BoardFocus = { n: number; col: number };
 
-function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) => void }) {
-  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, linger, board, onBoard } = props;
+function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) => void; guests: boolean }) {
+  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, linger, board, onBoard, guests } = props;
   const positions = useRef<Positions>(new Map());
   const colorOf = useMemo(() => {
     const m = new Map(tl.agents.map((a) => [a.key, a.color]));
@@ -120,11 +137,11 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
   const acts = useMemo(() => activitiesAt(tl, beats, snap.t, snap.live), [tl, beats, snap]);
   const editing = useMemo(() => editingFiles(tl, acts, colorOf), [tl, acts, colorOf]);
   // Who sits at the table; the array only changes when someone joins or leaves.
-  const castKey = castAt(tl, snap.t, snap.live)
+  const castKey = castAt(tl, snap.t, snap.live, guests)
     .map((a) => a.key)
     .join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const cast = useMemo(() => castAt(tl, snap.t, snap.live), [tl, castKey]);
+  const cast = useMemo(() => castAt(tl, snap.t, snap.live, guests), [tl, castKey]);
   return (
     <>
       <DeskTop />

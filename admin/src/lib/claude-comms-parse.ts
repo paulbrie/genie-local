@@ -69,6 +69,10 @@ export type CommsNode = {
   sent: number;
   received: number;
   lastActivity: string | null;
+  /** Every session merged under this name, the shown one first (a restart gives a new id). */
+  sessions: string[];
+  /** No chosen name (a dir-based default like "project-f7", or an id): not a team member. */
+  guest: boolean;
 };
 
 export type DeliveryState = "delivered" | "queued" | "failed" | "sending" | "received";
@@ -200,7 +204,8 @@ export function redact(text: string): string {
 // ── Tags ─────────────────────────────────────────────────────────────────────
 
 const TAG_RE = new RegExp(`^[ \\t>*_-]*(${TAG_NAMES.join("|")}):[ \\t]*(.*)$`);
-const ID = "[A-Za-z]{1,6}-?\\d+[a-z]?";
+/** T12, T12a, AB-3; "T44.7" is part 7 of T44. */
+const ID = "[A-Za-z]{1,6}-?\\d+[a-z]?(?:\\.\\d+)?";
 /** "TASK T72 …" / "TASK: T72 …", at the line's start or after a short lead-in ("Queued after T68: TASK T72 …"). */
 const LOOSE_TASK_RE = new RegExp(`^(.{0,80}?)(?<![A-Za-z])TASK:?[ \\t]+(${ID})(?![\\w-])[:,.]?[ \\t]*(.*)$`);
 
@@ -333,6 +338,68 @@ export function guessFileActions(body: string): FileAction[] {
   return out;
 }
 
+// ── One agent per name ───────────────────────────────────────────────────────
+
+/**
+ * A name nobody chose: the session id's prefix, "pid 123", a raw socket, or
+ * Claude Code's dir-based default ("project-f7" for a session in /opt/project).
+ */
+export function isDefaultName(name: string, cwd: string | null, sessionId: string | null): boolean {
+  if (sessionId && name === sessionId.slice(0, 8)) return true;
+  if (/^pid \d+$/.test(name) || name.startsWith("uds:") || name === "?") return true;
+  const base = cwd?.split("/").filter(Boolean).pop();
+  if (!base) return false;
+  const esc = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc}-[0-9a-z]{1,6}$`, "i").test(name);
+}
+
+const byShown = (a: CommsNode, b: CommsNode) =>
+  Number(b.live) - Number(a.live) || (b.lastActivity ?? "").localeCompare(a.lastActivity ?? "");
+
+/**
+ * Merge the nodes that share a name into one agent: the live session (else the
+ * latest active) is shown and keeps its key, so panes and registry lookups by
+ * `s:<sessionId>` still work; the others are ended sessions whose history
+ * joins it. Names nobody chose (ids, pids) are never merged. `keyOf` maps every
+ * input key to its merged key.
+ */
+export function mergeNodesByName(input: CommsNode[]): { nodes: CommsNode[]; keyOf: Map<string, string> } {
+  const groups = new Map<string, CommsNode[]>();
+  const out: CommsNode[] = [];
+  const keyOf = new Map<string, string>();
+  for (const n of input) {
+    if (n.name === n.shortId || isDefaultName(n.name, null, n.sessionId)) {
+      out.push({ ...n, sessions: n.sessionId ? [n.sessionId] : [], guest: true });
+      keyOf.set(n.key, n.key);
+      continue;
+    }
+    const g = groups.get(n.name) ?? [];
+    g.push(n);
+    groups.set(n.name, g);
+  }
+  for (const [name, g] of groups) {
+    const [shown, ...rest] = [...g].sort(byShown);
+    const all = [shown, ...rest];
+    const names: { name: string; at: string | null }[] = [];
+    for (const e of all.flatMap((n) => n.names).sort((a, b) => (a.at ?? "").localeCompare(b.at ?? "")))
+      if (names.length === 0 || names[names.length - 1].name !== e.name) names.push(e);
+    const cwd = shown.cwd ?? rest.find((n) => n.cwd)?.cwd ?? null;
+    out.push({
+      ...shown,
+      cwd,
+      names: rest.length ? names : shown.names,
+      sockets: [...new Set(all.flatMap((n) => n.sockets))],
+      sent: all.reduce((s, n) => s + n.sent, 0),
+      received: all.reduce((s, n) => s + n.received, 0),
+      lastActivity: all.map((n) => n.lastActivity).reduce((a, b) => ((b ?? "") > (a ?? "") ? b : a), null),
+      sessions: all.map((n) => n.sessionId).filter((x): x is string => !!x),
+      guest: all.some((n) => n.guest) || isDefaultName(name, cwd, shown.sessionId),
+    });
+    for (const n of all) keyOf.set(n.key, shown.key);
+  }
+  return { nodes: out, keyOf };
+}
+
 // ── Derivation ───────────────────────────────────────────────────────────────
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
@@ -361,13 +428,14 @@ export function deriveState(messages: CommsMessage[]): {
   const mentions: CommitMention[] = [];
 
   const findTask = (id: string, a: string, b: string): CommsTask | undefined => {
-    // Prefer a task between this pair; else any task with that id that involves a.
+    // Prefer a task between this pair; else one with that id that involves
+    // either (a helper reporting to the manager on someone else's task).
     let fallback: CommsTask | undefined;
     for (const t of tasks.values()) {
       if (t.id !== id) continue;
       const pair = pairKey(t.manager, t.worker);
       if (pair === pairKey(a, b)) return t;
-      if (!fallback && (t.manager === a || t.worker === a)) fallback = t;
+      if (!fallback && [t.manager, t.worker].some((n) => n === a || n === b)) fallback = t;
     }
     return fallback;
   };
@@ -388,6 +456,20 @@ export function deriveState(messages: CommsMessage[]): {
     t.updatedAt = at;
     if (text) t.lastText = text;
     t.history.push({ state, at, msgId: m.id, text });
+  };
+
+  /** A tagged report from the task's owner or manager. */
+  const report = (t: CommsTask, tag: ReportTag, m: CommsMessage, text: string) => {
+    // A done task stays done: a later ACK/STATUS (e.g. the manager's review)
+    // is kept in its history but doesn't reopen it. Only BLOCKED or a new TASK
+    // does. A cancelled one only reopens on TASK.
+    const next =
+      t.state === "cancelled" && tag !== "DONE"
+        ? "cancelled"
+        : t.state === "done" && (tag === "ACK" || tag === "STATUS")
+          ? "done"
+          : tagState(tag);
+    move(t, next, m, text || null);
   };
 
   // Basename → full paths seen, so "x.ts is yours now" can match "src/lib/x.ts".
@@ -479,39 +561,46 @@ export function deriveState(messages: CommsMessage[]): {
           case "DONE":
           case "CANCELLED": {
             const { ids, rest } = splitTaskIds(arg);
-            for (const id of ids.length ? ids : [null]) {
-            // Without an id: the latest open task the sender works on for the receiver.
-            const t = id ? findTask(id, m.from, m.to) : openTask(m.to, m.from);
-            if (!t && id) {
-              // A report on a task we never saw dispatched (older than the window).
-              const key = `${id}@${m.to}`;
-              const nt: CommsTask = {
-                key,
-                id,
-                title: rest || m.summary || id,
-                manager: m.to,
-                worker: m.from,
-                state: "dispatched",
-                guessed: false,
-                lastText: null,
-                createdAt: at,
-                updatedAt: at,
-                history: [],
-              };
-              tasks.set(key, nt);
-              move(nt, tagState(tag), m, rest || null);
-            } else if (t) {
-              // A done task stays done: a later ACK/STATUS (e.g. the manager's
-              // review) is kept in its history but doesn't reopen it. Only
-              // BLOCKED or a new TASK does. A cancelled one only reopens on TASK.
-              const next =
-                t.state === "cancelled" && tag !== "DONE"
-                  ? "cancelled"
-                  : t.state === "done" && (tag === "ACK" || tag === "STATUS")
-                    ? "done"
-                    : tagState(tag);
-              move(t, next, m, rest || null);
+            if (ids.length === 0) {
+              // Only an id right after the tag closes a task; without one, an
+              // ACK / STATUS / BLOCKED is about the latest open task the sender
+              // works on for the receiver.
+              if (tag === "DONE" || tag === "CANCELLED") break;
+              const t = openTask(m.to, m.from);
+              if (t) report(t, tag, m, rest);
+              break;
             }
+            for (const raw of ids) {
+              // "DONE: T44.7 …" finishes part 7 of T44: progress on T44, not its end.
+              const part = /\.\d+$/.test(raw);
+              const id = part ? raw.replace(/\.\d+$/, "") : raw;
+              const eff = part && (tag === "DONE" || tag === "CANCELLED") ? "STATUS" : tag;
+              const text = part ? `${raw} ${rest}`.trim() : rest;
+              const t = findTask(id, m.from, m.to);
+              if (!t) {
+                // A report on a task we never saw dispatched (older than the window).
+                const key = `${id}@${m.to}`;
+                const nt: CommsTask = {
+                  key,
+                  id,
+                  title: (part ? "" : rest) || m.summary || id,
+                  manager: m.to,
+                  worker: m.from,
+                  state: "dispatched",
+                  guessed: false,
+                  lastText: null,
+                  createdAt: at,
+                  updatedAt: at,
+                  history: [],
+                };
+                tasks.set(key, nt);
+                move(nt, tagState(eff), m, text || null);
+              } else if (m.from === t.worker || m.from === t.manager) {
+                report(t, eff, m, text);
+              }
+              // From anyone else (a helper's "DONE: T74" for their part of
+              // someone's task) the state stays the owner's; the message still
+              // shows in the task's thread, which lists every message naming it.
             }
             break;
           }
@@ -601,7 +690,9 @@ export function deriveState(messages: CommsMessage[]): {
   return { tasks: taskList, files: fileList, mentions };
 }
 
-function tagState(tag: "ACK" | "STATUS" | "BLOCKED" | "DONE" | "CANCELLED"): TaskState {
+type ReportTag = "ACK" | "STATUS" | "BLOCKED" | "DONE" | "CANCELLED";
+
+function tagState(tag: ReportTag): TaskState {
   return tag === "DONE" ? "done" : tag === "CANCELLED" ? "cancelled" : tag === "BLOCKED" ? "blocked" : "in_progress";
 }
 

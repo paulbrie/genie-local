@@ -16,6 +16,8 @@ import {
   type CommsModel,
   type CommsNode,
   deriveState,
+  isDefaultName,
+  mergeNodesByName,
   parseTags,
   redact,
 } from "@/lib/claude-comms-parse";
@@ -609,6 +611,11 @@ async function assemble(
         sent: 0,
         received: 0,
         lastActivity: st?.lastTs ?? null,
+        sessions: [sid],
+        // Claude Code's default name comes from the dir it was started in.
+        guest: [reg?.cwd, st?.cwd].some((cwd) =>
+          isDefaultName(reg?.name ?? names[names.length - 1]?.name ?? "", cwd ?? null, sid),
+        ),
       });
     }
     return key;
@@ -633,6 +640,8 @@ async function assemble(
         sent: 0,
         received: 0,
         lastActivity: null,
+        sessions: [],
+        guest: false,
       });
     }
     return nodes.get(key)!.key;
@@ -714,20 +723,39 @@ async function assemble(
     if (n && !n.sockets.includes(sock)) n.sockets.push(sock);
   }
 
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+  // Sessions that only ran tools are nodes too (the 3D views), so they merge.
+  const recentActivity = new Map<string, ActivityEvent[]>();
+  if (withActivity)
+    for (const st of states) {
+      const recent = st.activity.filter((a) => a.t >= cutoff);
+      if (recent.length > 0) recentActivity.set(sessionNode(st.sessionId), recent);
+    }
+
+  // One agent per name: a restart gives each session a new id, and the ended
+  // sessions' messages, tasks and tool calls join the live one's.
+  const merged = mergeNodesByName([...nodes.values()]);
+  const canon = (key: string) => merged.keyOf.get(key) ?? key;
+  for (const m of messages) {
+    m.from = canon(m.from);
+    m.to = canon(m.to);
+  }
+  nodes.clear();
+  for (const n of merged.nodes) nodes.set(n.key, n);
+
   // State (tasks, claims) comes from everything loaded, so a task dispatched
   // before the window still has the right state; only the window's messages
   // and tool calls are returned.
   const { tasks, files, mentions } = deriveState(messages);
-  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
   const windowed = messages.filter((m) => (m.sentAt ?? m.receivedAt ?? "") >= cutoff);
   let activity: CommsModel["activity"];
   if (withActivity) {
     activity = {};
-    for (const st of states) {
-      const recent = st.activity.filter((a) => a.t >= cutoff);
-      if (recent.length === 0) continue;
-      activity[sessionNode(st.sessionId)] = recent.slice(-MAX_ACTIVITY);
+    for (const [key, events] of recentActivity) {
+      const k = canon(key);
+      activity[k] = activity[k] ? [...activity[k], ...events].sort((a, b) => a.t.localeCompare(b.t)) : events;
     }
+    for (const k of Object.keys(activity)) activity[k] = activity[k].slice(-MAX_ACTIVITY);
   }
   const nodeList = [...nodes.values()].filter(
     (n) => n.sent + n.received > 0 || (activity && activity[n.key]),

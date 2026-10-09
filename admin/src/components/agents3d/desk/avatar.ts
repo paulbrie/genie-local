@@ -241,11 +241,6 @@ export function makeAvatar(look: Look, seed: string): Avatar {
       for (const sx of [-1, 1]) head.add(part(new THREE.TorusGeometry(0.095, 0.014, 6, 24), M.dark, [sx * 0.165, 0.55, 0.45]));
       head.add(part(new THREE.CylinderGeometry(0.01, 0.01, 0.1, 6), M.dark, [0, 0.56, 0.46], [1, 1, 1], [0, 0, Math.PI / 2]));
       break;
-    case "headset":
-      head.add(part(new THREE.TorusGeometry(0.54, 0.028, 8, 40, Math.PI), M.dark, [0, 0.5, 0], [1, 1.07, 1]));
-      for (const sx of [-1, 1]) head.add(part(SPHERE_LO, M.trim, [sx * 0.54, 0.5, 0], [0.07, 0.12, 0.12]));
-      head.add(part(new THREE.CapsuleGeometry(0.015, 0.3, 4, 8), M.dark, [-0.42, 0.36, 0.22], [1, 1, 1], [0.9, 0.6, 0.5]));
-      break;
     case "bow":
       for (const sx of [-1, 1]) head.add(part(new THREE.ConeGeometry(0.1, 0.18, 12), M.trim, [0.3 + sx * 0.09, 1.0, 0.05], [1, 1, 0.6], [0, 0, sx * Math.PI / 2]));
       head.add(part(SPHERE_LO, M.trim, [0.3, 1.0, 0.05], [0.05, 0.05, 0.05]));

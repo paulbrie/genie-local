@@ -4,7 +4,7 @@
  * Unknown sessions get a generic look picked from their key.
  */
 export type HairStyle = "quiff" | "spiky" | "bun" | "bob" | "buzz";
-export type Accessory = "clipboard" | "glasses" | "headset" | "bow" | "magnifier" | "cap" | "beanie" | "none";
+export type Accessory = "clipboard" | "glasses" | "bow" | "magnifier" | "cap" | "beanie" | "none";
 
 export type Look = {
   hoodie: string;
@@ -18,7 +18,7 @@ export type Look = {
 const LOOKS: Record<string, Omit<Look, "hoodie">> = {
   alice: { trim: "#c97cf0", skin: "#eaa77f", hair: "#1c1918", hairStyle: "quiff", accessory: "clipboard" },
   bob: { trim: "#facc15", skin: "#c68863", hair: "#3b2a20", hairStyle: "buzz", accessory: "glasses" },
-  alex: { trim: "#f8fafc", skin: "#f1c7a5", hair: "#9a4a22", hairStyle: "spiky", accessory: "headset" },
+  alex: { trim: "#f8fafc", skin: "#f1c7a5", hair: "#9a4a22", hairStyle: "spiky", accessory: "none" },
   tatiana: { trim: "#fb7185", skin: "#e0ac8a", hair: "#2b1b14", hairStyle: "bob", accessory: "bow" },
   ramona: { trim: "#7dd3fc", skin: "#8d5a3b", hair: "#1a1110", hairStyle: "bun", accessory: "magnifier" },
   tom: { trim: "#fb923c", skin: "#f0b892", hair: "#6b4a2e", hairStyle: "buzz", accessory: "cap" },

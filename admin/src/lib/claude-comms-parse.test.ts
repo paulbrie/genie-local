@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { deriveState, parseTags, splitTaskIds, type CommsMessage } from "./claude-comms-parse";
+import { deriveState, isDefaultName, mergeNodesByName, parseTags, splitTaskIds, type CommsMessage, type CommsNode } from "./claude-comms-parse";
 
 let n = 0;
 const msg = (from: string, to: string, body: string): CommsMessage => {
@@ -69,5 +69,107 @@ describe("task parsing, as we write", () => {
     assert.equal(task(m, "T12")?.state, "done");
     assert.deepEqual(splitTaskIds("T12 and T1x").ids, ["T12", "T1X"]);
     assert.deepEqual(splitTaskIds("T12x5").ids, []);
+  });
+});
+
+const node = (sid: string, name: string, o: Partial<CommsNode> = {}): CommsNode => ({
+  key: `s:${sid}`, sessionId: sid, shortId: sid.slice(0, 8), name, names: [{ name, at: null }], cwd: "/opt/project/projects/trafficsim",
+  gitBranch: null, live: false, status: null, tmux: null, sockets: [], role: "peer", sent: 0, received: 0,
+  lastActivity: null, sessions: [sid], guest: false, ...o,
+});
+
+describe("one agent per name", () => {
+  const oldBob = node("b0000001-old", "Bob", { sent: 5, received: 3, lastActivity: "2026-10-09T20:13:00Z", sockets: ["uds:/a.sock"] });
+  const newBob = node("b0000002-new", "Bob", { live: true, status: "busy", tmux: "admin-Bob", sent: 1, lastActivity: "2026-10-09T20:56:00Z", sockets: ["uds:/b.sock"] });
+
+  it("sessions with the same name merge; the live one is shown and keeps its key", () => {
+    const { nodes, keyOf } = mergeNodesByName([oldBob, newBob, node("a0000001", "Alice", { live: true })]);
+    assert.equal(nodes.length, 2);
+    const bob = nodes.find((n) => n.name === "Bob")!;
+    assert.equal(bob.key, newBob.key);
+    assert.deepEqual([bob.live, bob.status, bob.tmux], [true, "busy", "admin-Bob"]);
+    assert.deepEqual(bob.sessions, ["b0000002-new", "b0000001-old"]);
+    assert.deepEqual([bob.sent, bob.received, bob.lastActivity], [6, 3, "2026-10-09T20:56:00Z"]);
+    assert.deepEqual(bob.sockets, ["uds:/b.sock", "uds:/a.sock"]);
+    assert.equal(keyOf.get(oldBob.key), newBob.key);
+  });
+
+  it("with none live, the latest active one is shown (an ended agent is still one agent)", () => {
+    const later = { ...newBob, live: false, status: null };
+    const { nodes } = mergeNodesByName([later, oldBob]);
+    assert.deepEqual(nodes.map((n) => n.key), [newBob.key]);
+    const flipped = mergeNodesByName([{ ...oldBob, live: true }, later]).nodes;
+    assert.equal(flipped[0].key, oldBob.key, "live beats more recent");
+  });
+
+  it("unchosen names (ids, pids) never merge; dir-based defaults are guests", () => {
+    const a = node("46012075-aaaa", "46012075");
+    const x: CommsNode = { ...node("x", "pid 99"), key: "x:uds:/99.sock", sessionId: null, shortId: "pid 99", sessions: [] };
+    const { nodes } = mergeNodesByName([a, x, { ...x, key: "x:uds:/99b.sock" }]);
+    assert.equal(nodes.length, 3);
+    assert.ok(nodes.every((n) => n.guest));
+    assert.ok(isDefaultName("project-f7", "/opt/project", "96ee253c-1"));
+    assert.ok(!isDefaultName("project-f7", "/opt/project/admin", "96ee253c-1"));
+    assert.ok(!isDefaultName("Bob", "/opt/project", "96ee253c-1"));
+    const guest = mergeNodesByName([node("c1", "project-f7", { cwd: "/opt/project" })]).nodes[0];
+    assert.equal(guest.guest, true);
+  });
+
+  it("after the merge, a restarted worker's reports land on the task it had before", () => {
+    const m = [
+      msg("s:alice", oldBob.key, "TASK: T56 What's left"),
+      msg(oldBob.key, "s:alice", "ACK: T56"),
+      msg(newBob.key, "s:alice", "STATUS: T56 back after the restart"),
+    ];
+    const { keyOf } = mergeNodesByName([oldBob, newBob]);
+    for (const x of m) [x.from, x.to] = [keyOf.get(x.from) ?? x.from, keyOf.get(x.to) ?? x.to];
+    const ts = deriveState(m).tasks.filter((t) => t.id === "T56");
+    assert.equal(ts.length, 1);
+    assert.equal(ts[0].worker, newBob.key);
+    assert.equal(ts[0].history.length, 3);
+  });
+});
+
+describe("which reports change a task (T56, T74)", () => {
+  it("a part's DONE (T44.7) is progress on T44 and never closes another open task", () => {
+    const m = [
+      msg("alice", "bob", "TASK: T44 Test in Sketch fixes"),
+      msg("alice", "bob", "TASK: T46 Zone locks"),
+      msg("alice", "bob", "TASK: T56 What's left"),
+      msg("bob", "alice", "ACK: T56"),
+      // Bob's 20:13 message, as sent
+      msg("bob", "alice", "DONE: T46 the lane and junction zone locks\nCOMMIT: 657bb2d\nDONE: T44.7 RoadStats.lanes (per road)\nCOMMIT: 72b001e\nSTATUS: T56 parts 1, 3, 4 are done"),
+    ];
+    assert.equal(task(m, "T46")?.state, "done");
+    assert.equal(task(m, "T56")?.state, "in_progress");
+    assert.equal(task(m, "T44")?.state, "in_progress");
+    assert.equal(task(m, "T44")?.lastText, "T44.7 RoadStats.lanes (per road)");
+    assert.equal(task(m, "T44.7"), undefined);
+    assert.deepEqual(splitTaskIds("T44.7 RoadStats").ids, ["T44.7"]);
+  });
+
+  it("only an id right after DONE: closes a task; an id-less DONE changes nothing", () => {
+    const m = [msg("alice", "bob", "TASK: T56 What's left"), msg("bob", "alice", "ACK: T56"), msg("bob", "alice", "DONE: the harness part, see above")];
+    assert.equal(task(m, "T56")?.state, "in_progress");
+    const s = [msg("alice", "bob", "TASK: T57 X"), msg("bob", "alice", "STATUS: half way")];
+    assert.equal(task(s, "T57")?.state, "in_progress", "an id-less STATUS still counts");
+  });
+
+  it("DONE / ACK from someone else than the owner or the manager leaves the state alone", () => {
+    const m = [
+      msg("alice", "tatiana", "TASK: T74 V2 route tracer"),
+      msg("tatiana", "alice", "ACK: T74"),
+      msg("bob", "alice", "DONE: T74 sim part (test cars, for Tatiana)\nCOMMIT: 46a9565"),
+    ];
+    const t = task(m, "T74")!;
+    assert.equal(t.state, "in_progress");
+    assert.equal(t.worker, "tatiana");
+    assert.equal(t.history.length, 2, "the original task is kept, not replaced by Bob's report");
+    assert.equal(deriveState(m).tasks.filter((x) => x.id === "T74").length, 1);
+    const ack = [msg("alice", "tatiana", "TASK: T75 Y"), msg("bob", "alice", "ACK: T75")];
+    assert.equal(task(ack, "T75")?.state, "dispatched");
+    // the manager can still close it
+    m.push(msg("alice", "tatiana", "DONE: T74 accepted"));
+    assert.equal(task(m, "T74")?.state, "done");
   });
 });
