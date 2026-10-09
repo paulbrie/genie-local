@@ -163,7 +163,9 @@ function renderBlocks(md: string): React.ReactNode[] {
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
       const level = heading[1].length;
-      const Tag = `h${level}` as keyof React.JSX.IntrinsicElements;
+      // Not `keyof JSX.IntrinsicElements`: @react-three/fiber adds three.js
+      // elements to that set, and their children types don't take text.
+      const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
       out.push(
         <Tag key={nextKey()} className={HEADING_CLASS[level]}>
           {renderInline(heading[2].trim(), nextKey())}

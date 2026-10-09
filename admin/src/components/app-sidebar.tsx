@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Activity,
   Bot,
+  Box,
   Code2,
   Container,
   Database,
@@ -61,6 +62,7 @@ const NAV: NavItem[] = [
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/claude", label: "Claude", icon: Sparkles },
   { href: "/comms", label: "Comms", icon: MessagesSquare },
+  { href: "/agents3d", label: "Agents City", icon: Box },
 ];
 
 const STORAGE_KEY = "admin.sidebar.collapsed";
