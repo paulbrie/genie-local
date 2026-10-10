@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import type { BrowserSession } from "@/lib/browsers";
 
-import { browserLook, lookKey, seatBrowsers } from "./browser-look";
+import { browserLook, seatBrowsers } from "./browser-look";
 
 const session = (o: Partial<BrowserSession>): BrowserSession => ({
   session: "Tom",
@@ -51,25 +51,19 @@ describe("seatBrowsers", () => {
 });
 
 describe("browserLook", () => {
-  it("CPU: amber over 30 %, red over a whole core; the bar is full at two cores", () => {
-    assert.equal(browserLook(session({ cpuPercent: 30 }), true).level, "ok");
-    assert.equal(browserLook(session({ cpuPercent: 45 }), true).level, "warn");
-    assert.equal(browserLook(session({ cpuPercent: 101 }), true).level, "bad");
-    assert.equal(browserLook(session({ cpuPercent: 100 }), true).cpuFill, 0.5);
-    assert.equal(browserLook(session({ cpuPercent: 450 }), true).cpuFill, 1);
-    const first = browserLook(session({ cpuPercent: null }), true);
+  it("CPU: amber over 30 %, red over a whole core; none before the first reading", () => {
+    assert.equal(browserLook(session({ cpuPercent: 30 })).level, "ok");
+    assert.equal(browserLook(session({ cpuPercent: 45 })).level, "warn");
+    assert.equal(browserLook(session({ cpuPercent: 101 })).level, "bad");
+    const first = browserLook(session({ cpuPercent: null }));
     assert.equal(first.level, "none");
     assert.equal(first.cpuText, "CPU …");
   });
-  it("shows the host and title, marks unowned, and repaints only on a visible change", () => {
-    const l = browserLook(session({ cpuPercent: 44.9 }), true);
+  it("shows the host and the CPU in whole percents, and how many more sessions", () => {
+    const l = browserLook(session({ cpuPercent: 44.9 }), 2);
     assert.equal(l.host, "localhost:7000");
     assert.equal(l.cpuText, "45% CPU");
-    assert.equal(browserLook(session({ session: "default" }), false).bar, "unowned · default");
-    assert.equal(browserLook(session({ page: null }), true).host, "no page");
-    const k = lookKey(l, "#f00");
-    assert.equal(lookKey(browserLook(session({ cpuPercent: 45.2, memMB: 999 }), true), "#f00"), k);
-    assert.notEqual(lookKey(browserLook(session({ cpuPercent: 46 }), true), "#f00"), k);
-    assert.notEqual(lookKey(l, "#0f0"), k);
+    assert.equal(l.more, 2);
+    assert.equal(browserLook(session({ page: null })).host, "no page");
   });
 });

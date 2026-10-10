@@ -197,7 +197,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         onBoardClick={() => onBoard(-1)}
         onColumnClick={onBoard}
       />
-      <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} colorOf={colorOf} />
+      <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} />
       <DeskAgents
         cast={cast}
         messages={tl.messages}

@@ -1,14 +1,11 @@
 /**
  * Who is using a browser (agent-browser sessions with Chrome running), for the
- * Table: which seat each session goes to and what its little browser window
- * shows. Pure, so the matching and the CPU levels are tested.
+ * Table: which seat each session goes to and what its label shows. Pure, so
+ * the matching and the CPU levels are tested.
  */
 import type { BrowserSession } from "@/lib/browsers";
 
 import type { Level } from "./gauge-levels";
-
-/** At most this many unowned windows in the front gap; the rest are counted on the last one. */
-export const MAX_UNOWNED = 3;
 
 /**
  * Running sessions by the agent at the table they belong to (matched by name,
@@ -35,34 +32,22 @@ export function seatBrowsers(cast: { key: string; name: string }[], sessions: Br
 /** A browser's CPU (100 = one core): amber over 30 %, red over a whole core. */
 export const BROWSER_CPU_WARN = 30;
 export const BROWSER_CPU_BAD = 100;
-/** The CPU bar is full at two cores. */
-const CPU_FULL = 200;
 
 export type BrowserLook = {
-  /** Title bar text: the session, marked when nobody owns it. */
-  bar: string;
   host: string;
-  title: string;
   cpuText: string;
-  /** CPU bar fill, 0–1. */
-  cpuFill: number;
   level: Level;
   /** More sessions behind this one (shown as "+n"). */
   more: number;
 };
 
-export function browserLook(s: BrowserSession, owned: boolean, more = 0): BrowserLook {
+/** A session's label: its page's host, its CPU in whole percents and that level. */
+export function browserLook(s: BrowserSession, more = 0): BrowserLook {
   const cpu = s.cpuPercent;
   return {
-    bar: owned ? s.session : `unowned · ${s.session}`,
     host: s.page?.host ?? (s.page ? "" : "no page"),
-    title: s.page?.title ?? "",
     cpuText: cpu === null ? "CPU …" : `${Math.round(cpu)}% CPU`,
-    cpuFill: cpu === null ? 0 : Math.max(0, Math.min(1, cpu / CPU_FULL)),
     level: cpu === null ? "none" : cpu > BROWSER_CPU_BAD ? "bad" : cpu > BROWSER_CPU_WARN ? "warn" : "ok",
     more,
   };
 }
-
-/** A window's look as a string: its texture is repainted only when this changes (whole percents). */
-export const lookKey = (l: BrowserLook, color: string) => [l.bar, l.host, l.title, l.cpuText, l.level, l.more, color].join("|");
