@@ -19,6 +19,9 @@ import {
   deriveState,
   isDefaultName,
   mergeNodesByName,
+  nameFromPrompt,
+  recipientName,
+  nodesInWindow,
   parseTags,
   redact,
 } from "@/lib/claude-comms-parse";
@@ -53,6 +56,7 @@ const MAX_ACTIVITY = 20_000;
 // ('"type":"text"': an assistant's words, to tell when a turn ended on a question to the user.)
 const NEEDLES = [
   '"type":"text"',
+  '"custom-title"',
   '"SendMessage"',
   '"kind":"peer"',
   "cross-session-message",
@@ -74,6 +78,8 @@ type RawOut = {
   body: string;
   msgId: string | null;
   result: "delivered" | "queued" | "failed" | null;
+  /** The recipient's name as the result gave it (`recipientName`): names a socket address `to`. */
+  toName: string | null;
 };
 
 type RawIn = {
@@ -101,6 +107,9 @@ type FileState = {
   activity: ActivityEvent[];
   /** The last assistant entry was text asking the user something (lib/asking.ts): when; else null. */
   ask: { ts: string | null } | null;
+  /** The name its first prompt gives ("You are Bob, …"), for when nothing else names it; checked once. */
+  promptName: string | null;
+  promptChecked: boolean;
 };
 
 const fileStates = new Map<string, FileState>();
@@ -118,7 +127,32 @@ function resultState(r: Record<string, unknown>): RawOut["result"] {
   return /\bqueued\b/i.test(msg) ? "queued" : "delivered";
 }
 
+/** The text of a user entry the person typed (not a tool result, a meta note or a command's output). */
+function typedText(obj: Record<string, unknown>): string | null {
+  if (obj.type !== "user" || obj.isMeta || obj.isSidechain) return null;
+  const content = (obj.message as Record<string, unknown> | undefined)?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content) && !content.some((b) => (b as Record<string, unknown>)?.type === "tool_result")
+        ? ((content.find((b) => (b as Record<string, unknown>)?.type === "text") as Record<string, unknown> | undefined)?.text as string | undefined)
+        : undefined;
+  return text && !/^\s*<(?:command-|local-command-)/.test(text) ? text : null;
+}
+
 function ingestLine(st: FileState, line: string): void {
+  // The first prompt, once per file: a fallback name for a session whose registry entry is gone.
+  if (!st.promptChecked && line.includes('"type":"user"')) {
+    try {
+      const text = typedText(JSON.parse(line));
+      if (text !== null) {
+        st.promptChecked = true;
+        st.promptName = nameFromPrompt(text);
+      }
+    } catch {
+      /* not JSON */
+    }
+  }
   if (!NEEDLES.some((n) => line.includes(n))) return;
   let obj: Record<string, unknown>;
   try {
@@ -169,6 +203,7 @@ function ingestLine(st: FileState, line: string): void {
         body,
         msgId: null,
         result: null,
+        toName: null,
       });
     }
     return;
@@ -185,6 +220,7 @@ function ingestLine(st: FileState, line: string): void {
         const rec = r as Record<string, unknown>;
         out.msgId = str(rec.msg_id);
         out.result = resultState(rec);
+        out.toName = recipientName(str(rec.message) ?? "");
       } else {
         out.result = b.is_error ? "failed" : "delivered";
       }
@@ -206,6 +242,11 @@ function ingestLine(st: FileState, line: string): void {
       st.seenIn.add(dedupe);
       st.ins.push({ ts, from, fromName: str(origin?.name) ?? wrapped?.[2] ?? null, msgId, body });
     }
+    return;
+  }
+  // A name set with /rename or -n, as Claude Code records it in the transcript.
+  if (obj.type === "custom-title" && str(obj.customTitle)) {
+    st.renames.push({ name: (obj.customTitle as string).trim(), ts });
     return;
   }
   if (obj.type === "user" && typeof content === "string") {
@@ -266,6 +307,8 @@ async function refreshFile(abs: string, sessionId: string): Promise<FileState | 
       renames: [],
       activity: [],
       ask: null,
+      promptName: null,
+      promptChecked: false,
     };
     fileStates.set(abs, st);
   }
@@ -530,8 +573,15 @@ export async function getCommsModel(
   }
 }
 
+/**
+ * Transcripts are read at least this far back, whatever the window: sessions that ended before it (a
+ * reboot's) are still named and paired with their sockets, and tasks keep their owners; only the window's
+ * messages, tool calls and nodes are returned.
+ */
+const CONTEXT_DAYS = 1;
+
 async function buildModel(days: number, withActivity: boolean): Promise<CommsModel> {
-  const [files, registry] = await Promise.all([listTranscripts(days), readRegistry()]);
+  const [files, registry] = await Promise.all([listTranscripts(Math.max(days, CONTEXT_DAYS)), readRegistry()]);
   const cacheKey = `${days}:${withActivity}`;
   const version = createHash("sha1")
     .update(cacheKey)
@@ -618,7 +668,8 @@ async function assemble(
         key,
         sessionId: sid,
         shortId: sid.slice(0, 8),
-        name: reg?.name ?? names[names.length - 1]?.name ?? sid.slice(0, 8),
+        // (the first prompt's "You are Bob" only when neither the registry nor anyone's messages name it)
+        name: reg?.name ?? names[names.length - 1]?.name ?? st?.promptName ?? sid.slice(0, 8),
         names,
         cwd: st?.cwd ?? reg?.cwd ?? null,
         gitBranch: st?.gitBranch ?? null,
@@ -636,7 +687,7 @@ async function assemble(
         sessions: [sid],
         // Claude Code's default name comes from the dir it was started in.
         guest: [reg?.cwd, st?.cwd].some((cwd) =>
-          isDefaultName(reg?.name ?? names[names.length - 1]?.name ?? "", cwd ?? null, sid),
+          isDefaultName(reg?.name ?? names[names.length - 1]?.name ?? st?.promptName ?? "", cwd ?? null, sid),
         ),
       });
     }
@@ -669,9 +720,14 @@ async function assemble(
     }
     return nodes.get(key)!.key;
   };
+  // A socket nobody's transcript maps to a session (its sender's file is older than the window, or its
+  // registry entry went with a reboot): the name a SendMessage's result gave it, so it merges by name.
+  const socketName = new Map<string, string>();
+  for (const st of states)
+    for (const out of st.outs.values()) if (out.toName && out.to.startsWith("uds:")) socketName.set(out.to, out.toName);
   const resolveTarget = (to: string, name: string | null): string => {
     const sid = socketToSession.get(to) ?? nameToSession.get(to) ?? nameToSession.get(to.replace(/\s*\[[0-9a-f]+\]$/, ""));
-    return sid ? sessionNode(sid) : externalNode(to, name ?? (to.startsWith("uds:") ? null : to));
+    return sid ? sessionNode(sid) : externalNode(to, name ?? socketName.get(to) ?? (to.startsWith("uds:") ? null : to));
   };
 
   const clip = (text: string) => {
@@ -690,7 +746,7 @@ async function assemble(
       if (paired) seenIncoming.add(paired.inc);
       // Results without a msg_id are in-process subagent sends, not sessions.
       if (out.result && out.result !== "failed" && !out.msgId) continue;
-      const to = paired ? sessionNode(paired.st.sessionId) : resolveTarget(out.to, null);
+      const to = paired ? sessionNode(paired.st.sessionId) : resolveTarget(out.to, out.toName);
       const { body, truncated } = clip(out.body);
       messages.push({
         id: out.msgId ?? `${st.sessionId}:${out.toolUseId}`,
@@ -712,7 +768,7 @@ async function assemble(
     for (const inc of st.ins) {
       if (seenIncoming.has(inc)) continue;
       const sid = socketToSession.get(inc.from);
-      const from = sid ? sessionNode(sid) : externalNode(inc.from, inc.fromName);
+      const from = sid ? sessionNode(sid) : externalNode(inc.from, inc.fromName ?? socketName.get(inc.from) ?? null);
       const { body, truncated } = clip(inc.body);
       messages.push({
         id: inc.msgId ?? `${st.sessionId}:in:${inc.ts}`,
@@ -780,9 +836,7 @@ async function assemble(
     }
     for (const k of Object.keys(activity)) activity[k] = activity[k].slice(-MAX_ACTIVITY);
   }
-  const nodeList = [...nodes.values()].filter(
-    (n) => n.sent + n.received > 0 || (activity && activity[n.key]),
-  );
+  const nodeList = nodesInWindow([...nodes.values()], windowed, tasks, cutoff, activity);
   assignRoles(nodeList, tasks);
   const commits = await resolveCommits(mentions, nodes);
 

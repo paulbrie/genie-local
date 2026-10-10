@@ -389,6 +389,46 @@ const byShown = (a: CommsNode, b: CommsNode) =>
  * joins it. Names nobody chose (ids, pids) are never merged. `keyOf` maps every
  * input key to its merged key.
  */
+/**
+ * Who a SendMessage reached, from its result ("“…” → Bob (another Claude session on this machine; …)",
+ * also "→ Bob [6cc30e] (…"): the name a socket address had when it was sent to, which survives the
+ * registry (a reboot empties it). Null when the result doesn't say.
+ */
+export function recipientName(resultMessage: string): string | null {
+  const m = resultMessage.match(/→\s*([^\n(\[]+?)\s*(?:\[[0-9a-f]+\]\s*)?\(/);
+  const name = m?.[1].trim();
+  return name && !name.startsWith("uds:") && name.length <= 60 ? name : null;
+}
+
+/**
+ * A session's name from its own first prompt, for an ended one whose registry entry is gone (a reboot):
+ * the team's recipe starts "You are <Name>, …" (team.md). Conservative: a capitalised word right after
+ * "You are" and followed by "," "." or " —", not "Claude"; else null.
+ */
+export function nameFromPrompt(text: string): string | null {
+  const m = text.trimStart().match(/^You are ([A-Z][A-Za-z0-9_-]{0,30})(?=\s*(?:[,.]|—|-\s))/);
+  return m && m[1] !== "Claude" ? m[1] : null;
+}
+
+/**
+ * The nodes worth listing for a window: live ones, and those with a message, a tool call or a task in it.
+ * A session seen only in older lines of a file that is still being written (e.g. a pre-reboot peer's
+ * socket, "pid 14604") has nothing in the window and isn't listed.
+ */
+export function nodesInWindow(
+  nodes: CommsNode[],
+  windowed: CommsMessage[],
+  tasks: CommsTask[],
+  cutoff: string,
+  activity?: Record<string, unknown[]>,
+): CommsNode[] {
+  const seen = new Set<string>();
+  for (const m of windowed) seen.add(m.from).add(m.to);
+  for (const t of tasks)
+    if ((t.updatedAt ?? "") >= cutoff) for (const k of [t.manager, t.worker, ...Object.keys(t.parts ?? {})]) seen.add(k);
+  return nodes.filter((n) => n.live || seen.has(n.key) || !!activity?.[n.key]?.length);
+}
+
 export function mergeNodesByName(input: CommsNode[]): { nodes: CommsNode[]; keyOf: Map<string, string> } {
   const groups = new Map<string, CommsNode[]>();
   const out: CommsNode[] = [];

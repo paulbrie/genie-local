@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { deriveState, isDefaultName, mergeNodesByName, parseTags, splitTaskIds, type CommsMessage, type CommsNode } from "./claude-comms-parse";
+import { deriveState, isDefaultName, mergeNodesByName, nameFromPrompt, nodesInWindow, parseTags, recipientName, splitTaskIds, type CommsMessage, type CommsNode } from "./claude-comms-parse";
 
 let n = 0;
 const msg = (from: string, to: string, body: string): CommsMessage => {
@@ -274,5 +274,37 @@ describe("which reports change a task (T56, T74)", () => {
     // the manager can still close it
     m.push(msg("alice", "tatiana", "DONE: T74 accepted"));
     assert.equal(task(m, "T74")?.state, "done");
+  });
+});
+
+describe("names for sessions that ended before a reboot (T121)", () => {
+  it("the team's first prompt names a session; other openings don't", () => {
+    assert.equal(nameFromPrompt("You are Bob, simulation and editor, in a team of Claude Code sessions managed by Alice.\nRead …"), "Bob");
+    assert.equal(nameFromPrompt("  You are Alice, the manager of the team in /opt/project/projects/trafficsim/docs/team.md."), "Alice");
+    assert.equal(nameFromPrompt("You are Tom. Read team.md."), "Tom");
+    for (const t of ["You are a helpful assistant.", "you are Bob, lower case", "You are Claude, made by Anthropic.", "Fix the build please", "You are Bobby the tester who"])
+      assert.equal(nameFromPrompt(t), null, t);
+  });
+
+  it("a SendMessage result names the socket it reached", () => {
+    assert.equal(recipientName("“ACK T92” → Alice (another Claude session on this machine; queued there — …)"), "Alice");
+    assert.equal(recipientName("“x” → Bob [351878] (another Claude session on this machine; …)"), "Bob");
+    assert.equal(recipientName("“x” → uds:/run/user/1000/cc-socks/14604.sock (another Claude session …)"), null);
+    assert.equal(recipientName("queued"), null);
+  });
+
+  it("only nodes with something in the window are listed: a pre-reboot socket with old messages only isn't", () => {
+    const at = (h: number) => new Date(Date.UTC(2026, 9, 10, h)).toISOString();
+    const pid = { ...node("x", "pid 14604"), key: "x:uds:/run/user/1000/cc-socks/14604.sock", sessionId: null, sessions: [], guest: true };
+    const bob = node("b1", "Bob", { live: true });
+    const tom = node("t1", "Tom");
+    const old = { ...msg("s:a1", pid.key, "TASK: T56 What's left"), sentAt: at(0) };
+    const recent = { ...msg(tom.key, "s:a1", "STATUS: T96"), sentAt: at(13) };
+    const tasks = deriveState([old]).tasks;
+    const listed = nodesInWindow([pid, bob, tom], [recent], tasks, at(6));
+    assert.deepEqual(listed.map((n) => n.name), ["Bob", "Tom"]);
+    // with its task updated inside the window, its owner stays
+    const t2 = tasks.map((t) => ({ ...t, updatedAt: at(13) }));
+    assert.deepEqual(nodesInWindow([pid, bob, tom], [], t2, at(6)).map((n) => n.name), ["pid 14604", "Bob"]);
   });
 });
