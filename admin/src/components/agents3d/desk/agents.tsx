@@ -17,6 +17,7 @@ import { asksUser, type Beat, beatAt, type Doing, doingAt, gazeAt, headCue, wave
 import { type Avatar, disposeAvatar, makeAvatar } from "./avatar";
 import { lookFor } from "./identity";
 import { applyPose, DANCES, idlePose, isDance, type Pose, THINK_POSES } from "./poses";
+import { glanceAt } from "./glance";
 import { makeThoughtCloud, type ThoughtCloud } from "./thought";
 import { realAge } from "../parts";
 import { AVATAR_SCALE, BEACON, BOARD, LAPTOP, laptopAt, type MiniCities, SEAT_Y, type Seat, seatAt, TABLE, TOWER, type XZ } from "./world";
@@ -141,7 +142,14 @@ type Live = {
   gazeX: number;
   /** Per agent, so idle variants and gestures don't run in step. */
   seed: number;
+  /** Where the eyes sit on the face at rest (thinking moves them; see glance.ts). */
+  eyeRest: THREE.Vector3[];
 };
+
+/** How far the eyes move on the face for a full glance (avatar units: about half an eye across, a third up). */
+const EYE_REACH = { x: 0.035, y: 0.028 };
+/** The head's turn and tilt for the eyes' full range, when it follows a long hold (radians, times HEAD_SHARE). */
+const HEAD_REACH = { yaw: 0.9, pitch: 0.7 };
 
 export type Activity = { doing: Doing; repo: string | null; path: string | null; beat: Beat | null };
 
@@ -359,6 +367,7 @@ export function DeskAgents({
           gazeY: 0,
           gazeX: 0,
           seed: hash(a.key),
+          eyeRest: avatar.joints.eyes.map((e) => e.position.clone()),
         };
       }),
     // Rebuilt only when the cast or their looks change.
@@ -553,6 +562,19 @@ export function DeskAgents({
       l.avatar.joints.head.rotation.y += l.gazeY;
       l.avatar.joints.head.rotation.x += l.gazeX;
       if (Math.abs(want - l.twist) + Math.abs(gazeY - l.gazeY) + Math.abs(gazeX - l.gazeX) > 1e-3) busy = true;
+      // Thinking, the eyes wander (quick glances, held, a blink now and then) and the head follows long holds a little.
+      const eyes = l.avatar.joints.eyes;
+      if (THINK_POSES.includes(pose) && !beat && !reduced) {
+        const g = glanceAt(l.seed, Date.now());
+        eyes.forEach((e, n) => {
+          e.position.set(l.eyeRest[n].x + g.x * EYE_REACH.x, l.eyeRest[n].y + g.y * EYE_REACH.y, l.eyeRest[n].z);
+          if (g.blink) e.scale.y = 0.01;
+        });
+        l.avatar.joints.head.rotation.y += g.head * g.hx * HEAD_REACH.yaw;
+        l.avatar.joints.head.rotation.x -= g.head * g.hy * HEAD_REACH.pitch;
+        if (g.moving) busy = true;
+        else nextMs = Math.min(nextMs, g.inMs + 1);
+      } else eyes.forEach((e, n) => e.position.copy(l.eyeRest[n]));
       // Dances stand up on the chair (their lift is in avatar units); other hops stay small.
       l.avatar.root.position.y = isDance(pose) ? hop * S : hop * 0.35;
       // The thought cloud: in while thinking, out otherwise, facing the camera.
