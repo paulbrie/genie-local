@@ -149,7 +149,7 @@ async function parentOf(pid: number): Promise<number> {
 }
 
 /** agent-browser's daemons: `~/.agent-browser/<session>.pid` → pid → the session's name. */
-async function agentBrowserSessions(): Promise<Map<number, string>> {
+export async function agentBrowserSessions(): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   const dir = path.join(os.homedir(), ".agent-browser");
   let names: string[];
