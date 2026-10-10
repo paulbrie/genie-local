@@ -356,7 +356,7 @@ export function Whiteboard({
         {/* Matte, so the lamp and the room don't wash out the headings up close. */}
         <meshStandardMaterial map={boardTex} roughness={0.85} />
       </mesh>
-      <ServerGauges />
+      <ServerGauges reduced={reduced} />
       {placed.map((p) => (
         <PostIt
           key={p.task.key}
