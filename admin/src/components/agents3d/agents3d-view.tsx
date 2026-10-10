@@ -32,6 +32,7 @@ import { commsPrefs, hydrateCommsPrefs, setCommsPrefs } from "@/store/comms";
 import { Clock } from "./clock";
 import { EditorTimeline } from "./timeline";
 import { escapeAction } from "./escape";
+import { useLowPower } from "./low-power";
 import type { SceneProps, Selection } from "./scene";
 import { useAgents3D } from "./use-agents3d";
 import { type PaneView, usePanes } from "./use-panes";
@@ -178,7 +179,9 @@ export function Agents3DView() {
   const [openMsg, setOpenMsg] = useState<string | null>(null);
   const [prefs] = useSubject(commsPrefs);
   const reduced = useSyncExternalStore(subscribeReduced, getReduced, () => false);
-  const bloom = bloomPref ?? !reduced;
+  const [lowPower, setLowPower] = useLowPower(reduced);
+  // (Low power: no glow, whatever Glow says)
+  const bloom = !lowPower && (bloomPref ?? !reduced);
 
   // Full screen: the whole page (toolbar, scrubber, scene, side panel) via the
   // Fullscreen API, or a fixed full-viewport overlay where it's missing (iOS Safari).
@@ -397,8 +400,15 @@ export function Agents3DView() {
             ))}
         </select>
         <label className="flex items-center gap-1 text-xs text-muted-foreground">
-          <input type="checkbox" checked={bloom} onChange={(e) => setBloom(e.target.checked)} />
+          <input type="checkbox" checked={bloom} disabled={lowPower} onChange={(e) => setBloom(e.target.checked)} />
           Glow
+        </label>
+        <label
+          className="flex items-center gap-1 text-xs text-muted-foreground"
+          title="Draw the 3D cheaper: no glow, plain resolution, no antialiasing, at most 30 frames a second (15 for idle motion). On by itself on battery or with reduced motion, until switched."
+        >
+          <input type="checkbox" checked={lowPower} onChange={(e) => setLowPower(e.target.checked)} />
+          Low power
         </label>
         <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Live tmux pane of each agent in its card (redacted)">
           <input
@@ -482,6 +492,7 @@ export function Agents3DView() {
               frameKey={frameKey}
               followKey={followKey}
               bloom={bloom}
+              lowPower={lowPower}
               linger={lingerS * 1000}
               reduced={reduced}
               selected={selected}

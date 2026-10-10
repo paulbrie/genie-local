@@ -16,7 +16,20 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
  * a frame: the views re-render 4× a second (the clock), so R3F elements get
  * stable event handlers (`useStableHandler`) and memoized objects.
  */
-type Governor = { want: (fps: number) => void };
+type Governor = { want: (fps: number, kind?: FrameKind) => void };
+/** what a frame is for: "ambient" = idle motion that goes on while nothing happens (a busy drone bobbing, a busy avatar typing) */
+export type FrameKind = "event" | "ambient";
+
+/**
+ * Low power (T162): every frame at most 30 a second, ambient motion at most 15. Set by the view (its switch); one
+ * page shows one 3D view, so a module setting is enough.
+ */
+let lowPower = false;
+export function setLowPowerFrames(on: boolean) {
+  lowPower = on;
+}
+/** the rate a request is held to (low power: 30, ambient 15) */
+export const cappedFps = (fps: number, kind: FrameKind = "event", low = lowPower) => (low ? Math.min(fps, kind === "ambient" ? 15 : 30) : fps);
 
 const governors = new WeakMap<() => void, Governor>();
 
@@ -31,7 +44,8 @@ function governorFor(invalidate: () => void): Governor {
     invalidate();
   };
   g = {
-    want(fps) {
+    want(asked, kind) {
+      const fps = cappedFps(asked, kind);
       // At display rate: just the next frame.
       if (fps >= 60) return invalidate();
       const at = performance.now() + 1000 / fps;
@@ -45,8 +59,8 @@ function governorFor(invalidate: () => void): Governor {
   return g;
 }
 
-/** `want(fps)`: draw another frame within 1/fps s. Call it from `useFrame` while animating. */
-export function useWantFrame(): (fps: number) => void {
+/** `want(fps, kind?)`: draw another frame within 1/fps s. Call it from `useFrame` while animating. */
+export function useWantFrame(): (fps: number, kind?: FrameKind) => void {
   const invalidate = useThree((s) => s.invalidate);
   return governorFor(invalidate).want;
 }

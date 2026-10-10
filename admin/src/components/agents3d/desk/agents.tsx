@@ -696,7 +696,9 @@ export function DeskAgents({
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
-    if (busy || flyN > 0 || confettiN > 0) wantFrame(BUSY_FPS);
+    // (thrown things and confetti are events; a busy agent typing is ambient, held lower in Low power)
+    if (flyN > 0 || confettiN > 0) wantFrame(BUSY_FPS);
+    else if (busy) wantFrame(BUSY_FPS, "ambient");
     else if (nextMs < Infinity) wantFrame(1000 / Math.max(1, nextMs));
   });
 

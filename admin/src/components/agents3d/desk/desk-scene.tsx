@@ -36,7 +36,7 @@ const GUESTS_KEY = "admin.agents3d.desk.guests";
 const HOME = { pos: new THREE.Vector3(0, 29, 50), target: new THREE.Vector3(0, 5, -7) };
 
 export default function DeskScene(props: SceneProps) {
-  const { bloom, onSelect } = props;
+  const { bloom, onSelect, lowPower } = props;
   // Guests (sessions nobody named) stay off the table unless asked for; remembered.
   const [guests, setGuests] = useState(() => localStorage.getItem(GUESTS_KEY) === "1");
   const guestCount = guestsAt(props.tl, props.snap.t, props.snap.live).length;
@@ -65,12 +65,12 @@ export default function DeskScene(props: SceneProps) {
       {/* Frames on demand: whatever animates asks for them (useWantFrame). With bloom the
           composer antialiases (4× MSAA), so the canvas doesn't; `gl` is read once, hence the key. */}
       <Canvas
-        key={`${props.frameKey ?? ""}:${bloom ? "bloom" : "aa"}`}
+        key={`${props.frameKey ?? ""}:${bloom ? "bloom" : "aa"}:${lowPower ? "low" : "full"}`}
         frameloop="demand"
         shadows={{ type: THREE.PCFShadowMap }}
         camera={{ position: HOME.pos.toArray(), fov: 40, near: 0.1, far: 400 }}
-        gl={{ antialias: !bloom }}
-        dpr={[1, 1.5]}
+        gl={{ antialias: !bloom && !lowPower }}
+        dpr={lowPower ? 1 : [1, 1.5]}
         scene={{ environmentIntensity: 0.3 }}
         onPointerMissed={() => {
           onSelect(null);
@@ -99,7 +99,7 @@ export default function DeskScene(props: SceneProps) {
         <Stage {...props} board={board} onBoard={onBoard} guests={guests} />
         <OrbitControls makeDefault target={HOME.target.toArray()} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
         {bloom && (
-          <EffectComposer multisampling={4}>
+          <EffectComposer multisampling={lowPower ? 0 : 4}>
             <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} resolutionScale={0.5} />
           </EffectComposer>
         )}

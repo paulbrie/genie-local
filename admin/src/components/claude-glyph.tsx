@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 const FRAMES = ["·", "✢", "*", "✶", "✻", "✽"] as const;
 const FULL = FRAMES.length - 1; // steadiest, fullest glyph (used when idle)
 const FRAME_MS = 110;
+/** how long it twinkles when Claude starts working, then holds the full spark (no endless animation on every page: T162) */
+const TWINKLE_MS = 2640;
 
 /** The three states a Claude terminal glyph can show. */
 export type ClaudeState = "active" | "idle" | "input";
@@ -41,7 +43,8 @@ const SIZE_CLS = {
 
 /**
  * A Claude status glyph — no glow, three states:
- * - `active` — Claude is working: the spark twinkles through every CLI glyph.
+ * - `active` — Claude is working: the spark twinkles through every CLI glyph for
+ *   a couple of seconds when it starts, then holds a full-strength spark.
  * - `idle`   — Claude is sitting at its prompt: a steady, dimmed spark.
  * - `input`  — Claude is blocked asking you something: a "?" instead of a spark.
  *
@@ -75,7 +78,14 @@ export function ClaudeGlyph({
       else if (idx <= 0) dir = 1;
       setFrame(idx);
     }, FRAME_MS);
-    return () => window.clearInterval(id);
+    const stop = window.setTimeout(() => {
+      window.clearInterval(id);
+      setFrame(FULL);
+    }, TWINKLE_MS);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(stop);
+    };
   }, [state]);
 
   const base = `inline-flex shrink-0 items-center justify-center font-mono leading-none ${SIZE_CLS[size]} ${className}`;

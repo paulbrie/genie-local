@@ -29,6 +29,8 @@ export type SceneProps = {
   layout: CityLayout;
   followKey: string | null;
   bloom: boolean;
+  /** Low power (T162): dpr 1, no antialiasing or MSAA (and no bloom: the view turns it off) */
+  lowPower?: boolean;
   reduced: boolean;
   selected: Selection | null;
   onSelect: (s: Selection | null) => void;
@@ -57,7 +59,7 @@ function cameraFor(layout: CityLayout): { position: [number, number, number]; ta
 }
 
 export default function Scene(props: SceneProps) {
-  const { layout, bloom, reduced, onSelect } = props;
+  const { layout, bloom, reduced, onSelect, lowPower } = props;
   const cam = props.camera ?? cameraFor(layout);
   // Far enough out to see the planet's curve and limb, but not lose the cities.
   const maxDist = Math.max(layout.size * 3 + 200, planetFor(layout).radius * 0.9);
@@ -65,13 +67,14 @@ export default function Scene(props: SceneProps) {
   return (
     <Canvas
       // Remount on a new project selection, so the camera re-frames it.
-      key={props.frameKey ?? ""}
+      // (and on Low power: `gl` is read once)
+      key={`${props.frameKey ?? ""}:${lowPower ? "low" : "full"}`}
       camera={{ position: cam.position, fov: 50, near: 0.5, far: 9000 }}
       // Frames on demand: drawn when something moves or changes (frame-governor.ts).
       frameloop="demand"
-      gl={{ antialias: true }}
-      // 1.5 is sharp enough for this scene on a 2× screen at ~56% of the pixels.
-      dpr={[1, 1.5]}
+      gl={{ antialias: !lowPower }}
+      // 1.5 is sharp enough for this scene on a 2× screen at ~56% of the pixels; Low power: 1.
+      dpr={lowPower ? 1 : [1, 1.5]}
       onPointerMissed={() => onSelect(null)}
       onCreated={({ gl }) => {
         (gl as THREE.WebGLRenderer).setClearColor("#03050a");
@@ -93,7 +96,7 @@ export default function Scene(props: SceneProps) {
         maxDistance={maxDist}
       />
       {bloom && (
-        <EffectComposer multisampling={4}>
+        <EffectComposer multisampling={lowPower ? 0 : 4}>
           <Bloom mipmapBlur luminanceThreshold={0.85} luminanceSmoothing={0.2} intensity={1.4} />
         </EffectComposer>
       )}

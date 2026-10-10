@@ -215,7 +215,7 @@ export function CityView({
     const mesh = bRef.current;
     const live = clock.live;
     // A playing replay moves on its own; so do the effects below while they last.
-    let fps = !live && clock.playing ? ANIM_FPS : 0;
+    let fps = !live && clock.playing ? ANIM_FPS : 0, ambient = false;
 
     // Recent edits per building → pulse strength (entries reused while they last).
     for (const p of pulse.values()) p.k = 0;
@@ -308,13 +308,14 @@ export function CityView({
         const off = (idx % 4) * 0.8;
         target.set(b.x + off * droneScale, b.h + lifts[bi] + 6 * droneScale, b.z + off * droneScale);
       } else target.copy(homes.get(a.key)!);
-      // A busy drone bobs and spins its ring; an idle one holds still (no frames needed).
-      if (s?.busy && !reduced) {
-        target.y += Math.sin(time * 1.4 + idx) * 0.35;
-        fps = Math.max(fps, ANIM_FPS);
-      }
+      // A busy drone bobs and spins its ring; an idle one holds still (no frames needed). Flying to its
+      // place is an event; the bob there is ambient (the bob's own reach, 0.35, doesn't count as flying).
+      const bob = s?.busy && !reduced ? Math.sin(time * 1.4 + idx) * 0.35 : 0;
+      if (s?.busy && !reduced) ambient = true;
+      if (g.position.distanceToSquared(target) > 0.5 * 0.5) fps = Math.max(fps, ANIM_FPS);
+      target.y += bob;
       g.position.lerp(target, reduced ? 1 : Math.min(1, dt * 2.2));
-      if (g.position.distanceToSquared(target) > 1e-4) fps = Math.max(fps, ANIM_FPS);
+      if (!bob && g.position.distanceToSquared(target) > 1e-4) fps = Math.max(fps, ANIM_FPS);
       positions.current?.set(a.key, g.position);
       const ring = g.children[1] as THREE.Mesh;
       if (ring && s?.busy && !reduced) ring.rotation.z += dt * 2.5;
@@ -354,7 +355,9 @@ export function CityView({
         }
       }
     }
+    // (only a busy drone bobbing: ambient, held lower in Low power)
     if (fps) want(fps);
+    else if (ambient) want(ANIM_FPS, "ambient");
   });
 
   const onMove = useStableHandler((e: ThreeEvent<PointerEvent>) => {
