@@ -42,11 +42,14 @@ export function OverlayLabel({
   const connected = useThree((s) => s.events.connected) as HTMLElement | undefined;
   const elRef = useRef<HTMLDivElement | null>(null);
   const root = useRef<Root | null>(null);
+  // What was last written to the element's style, so an unmoved label costs no DOM writes.
+  const last = useRef({ show: false, x: NaN, y: NaN, z: "" });
   const target = connected ?? (gl.domElement.parentNode as HTMLElement | null);
 
   useLayoutEffect(() => {
     if (!target) return;
     const el = document.createElement("div");
+    last.current = { show: false, x: NaN, y: NaN, z: "" };
     el.style.cssText = "position:absolute;top:0;left:0;will-change:transform;display:none;";
     const r = createRoot(el);
     elRef.current = el;
@@ -75,18 +78,28 @@ export function OverlayLabel({
     v.setFromMatrixPosition(g.matrixWorld);
     const dist = camera.position.distanceTo(v);
     v.project(camera);
+    const l = last.current;
     // Behind the camera (or past the far plane): hide.
     if (v.z < -1 || v.z > 1) {
-      el.style.display = "none";
+      if (l.show) el.style.display = "none";
+      l.show = false;
       return;
     }
-    el.style.display = "block";
-    const x = (v.x * 0.5 + 0.5) * size.width;
-    const y = (-v.y * 0.5 + 0.5) * size.height;
-    el.style.transform = `translate3d(${x}px,${y}px,0)`;
+    if (!l.show) el.style.display = "block";
+    l.show = true;
+    // Whole pixels: sub-pixel drift would rewrite every label on every frame.
+    const x = Math.round((v.x * 0.5 + 0.5) * size.width);
+    const y = Math.round((-v.y * 0.5 + 0.5) * size.height);
+    if (x !== l.x || y !== l.y) {
+      el.style.transform = `translate3d(${x}px,${y}px,0)`;
+      l.x = x;
+      l.y = y;
+    }
     const far = (camera as THREE.PerspectiveCamera).far || 1000;
     const [near, farZ] = zIndexRange;
-    el.style.zIndex = String(Math.round(near - (near - farZ) * Math.min(1, dist / far)));
+    const z = String(Math.round(near - (near - farZ) * Math.min(1, dist / far)));
+    if (z !== l.z) el.style.zIndex = z;
+    l.z = z;
   });
 
   return <group ref={group} position={position} />;

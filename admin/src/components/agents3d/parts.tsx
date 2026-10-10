@@ -1,17 +1,21 @@
 "use client";
 
-import { useFrame, useThree } from "@react-three/fiber";
-import { useMemo, useRef, useState } from "react";
+import { type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
-import { TASK_COLORS, type Snapshot, type Timeline, type TLCommit, type TLMessage } from "@/lib/agents3d-timeline";
+import { TASK_COLORS, type Snapshot, type Timeline, type TLCommit, type TLEdit, type TLMessage } from "@/lib/agents3d-timeline";
 
 import type { Clock } from "./clock";
+import { useStableHandler, useWantFrame } from "./frame-governor";
 import { OverlayLabel } from "./overlay-label";
 import type { PaneView } from "./use-panes";
 
 /** Live positions of each agent's drone, written by the City view every frame. */
 export type Positions = Map<string, THREE.Vector3>;
+
+/** Frame rate asked for while an effect moves (frame-governor.ts). */
+export const ANIM_FPS = 30;
 
 /** Real-time duration of a message's flight, and how long its trail lingers. */
 export const FLIGHT_MS = 2600;
@@ -34,6 +38,18 @@ class SeenTracker {
     return live ? Math.max(ms, this.seen.get(id) ?? 0) : ms;
   }
 }
+
+const keys = new WeakMap<object, string>();
+
+/** `make(o)`, computed once per object: event ids for the per-frame loops without a new string each frame. */
+export function keyOf<T extends object>(o: T, make: (o: T) => string): string {
+  let k = keys.get(o);
+  if (k === undefined) keys.set(o, (k = make(o)));
+  return k;
+}
+
+/** An edit's id for the "seen" trackers (use through keyOf). */
+export const editId = (e: TLEdit) => `${e.fileKey}@${e.ms}`;
 
 export function useSeen(): SeenTracker {
   const [tracker] = useState(() => new SeenTracker());
@@ -99,10 +115,12 @@ export function MessageArcs({
   const curve = useMemo(() => new THREE.QuadraticBezierCurve3(new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()), []);
   const tmp = useMemo(() => new THREE.Vector3(), []);
   const col = useMemo(() => new THREE.Color(), []);
+  const want = useWantFrame();
 
   useFrame(() => {
     const t = clock.now();
     const act = activeMessages(tl, clock, t, eff, ARC_POOL);
+    if (act.length) want(ANIM_FPS);
     pool.forEach((p, i) => {
       const a = act[i];
       const from = a && positions.current?.get(a.m.from);
@@ -256,6 +274,8 @@ export function AgentLabel({
   );
 }
 
+const BEACON = new THREE.Color("#06b6d4").multiplyScalar(2);
+
 /**
  * Commits stacking into a tower, newest dropping in from above, with an
  * "origin" beacon that flashes when a push is reported.
@@ -281,15 +301,25 @@ export function CommitTower({
   const blocks = useRef<(THREE.Mesh | null)[]>([]);
   const beam = useRef<THREE.Mesh>(null);
   const BLOCK_H = 0.55;
+  const want = useWantFrame();
+  // A block's mesh is named after its commit.
+  const onBlockClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    const c = commits.find((x) => x.hash === e.eventObject.name);
+    if (c) onSelect?.(c);
+  });
 
   useFrame(() => {
     const t = clock.now();
+    let moving = false;
     shown.forEach((c, i) => {
       const m = blocks.current[i];
       if (!m) return;
       const age = realAge(clock, t, c.ms);
       const y = i * BLOCK_H + BLOCK_H / 2;
-      m.position.y = reduced || age > 1500 || age < 0 ? y : y + (1 - age / 1500) ** 2 * 12;
+      const falling = !reduced && age >= 0 && age <= 1500;
+      m.position.y = falling ? y + (1 - age / 1500) ** 2 * 12 : y;
+      if (falling) moving = true;
     });
     if (beam.current) {
       let flash = 0;
@@ -298,11 +328,13 @@ export function CommitTower({
         const age = realAge(clock, t, c.pushedMs);
         if (age >= 0 && age < 3500) flash = Math.max(flash, 1 - age / 3500);
       }
+      if (flash > 0) moving = true;
       const mat = beam.current.material as THREE.MeshBasicMaterial;
       mat.opacity = 0.12 + flash * 0.85;
       mat.color.set("#06b6d4").multiplyScalar(1 + flash * 3);
       beam.current.scale.x = beam.current.scale.z = 1 + flash * 2.5;
     }
+    if (moving) want(ANIM_FPS);
   });
 
   const top = shown.length * BLOCK_H;
@@ -314,11 +346,9 @@ export function CommitTower({
           ref={(m) => {
             blocks.current[i] = m;
           }}
+          name={c.hash}
           position={[0, i * BLOCK_H + BLOCK_H / 2, 0]}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect?.(c);
-          }}
+          onClick={onBlockClick}
         >
           <boxGeometry args={[1.6, BLOCK_H * 0.86, 1.6]} />
           <meshStandardMaterial color={colorOf(c.node)} emissive={colorOf(c.node)} emissiveIntensity={0.5} />
@@ -330,7 +360,7 @@ export function CommitTower({
       </mesh>
       <mesh position={[0, top + 40.5, 0]}>
         <octahedronGeometry args={[0.8]} />
-        <meshBasicMaterial color={new THREE.Color("#06b6d4").multiplyScalar(2)} toneMapped={false} />
+        <meshBasicMaterial color={BEACON} toneMapped={false} />
       </mesh>
       {label && (
         <OverlayLabel position={[0, -0.6, 0]} center zIndexRange={[10, 0]} style={{ pointerEvents: "none" }}>
@@ -346,15 +376,23 @@ export function Follow({ positions, followKey, reduced }: { positions: React.Ref
   const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
   const camera = useThree((s) => s.camera);
   const delta = useMemo(() => new THREE.Vector3(), []);
+  const want = useWantFrame();
+  // Start following even if nothing else is drawing.
+  useEffect(() => {
+    if (followKey) want(60);
+  }, [followKey, want]);
   useFrame((_, dt) => {
     if (!followKey || !controls) return;
     const p = positions.current?.get(followKey);
     if (!p) return;
-    // Time-based easing, so it settles at the same pace at any frame rate.
-    delta.copy(p).sub(controls.target).multiplyScalar(reduced ? 1 : 1 - Math.exp(-dt * 3.5));
+    // Time-based easing, so it settles at the same pace at any frame rate (dt capped: the
+    // first frame after a still spell would otherwise jump).
+    delta.copy(p).sub(controls.target).multiplyScalar(reduced ? 1 : 1 - Math.exp(-Math.min(dt, 0.1) * 3.5));
+    if (delta.lengthSq() < 1e-8) return;
     controls.target.add(delta);
     camera.position.add(delta);
     controls.update();
+    want(60);
   });
   return null;
 }

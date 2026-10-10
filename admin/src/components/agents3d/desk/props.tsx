@@ -1,6 +1,6 @@
 "use client";
 
-import { type ThreeEvent, useFrame } from "@react-three/fiber";
+import { type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -9,6 +9,7 @@ import { fileKey, type Snapshot, type Timeline, type TLCommit } from "@/lib/agen
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
+import { useStableHandler, useWantFrame } from "../frame-governor";
 import { OverlayLabel } from "../overlay-label";
 import { realAge } from "../parts";
 import type { Selection } from "../scene";
@@ -16,6 +17,8 @@ import { DistrictLabels } from "./district-labels";
 import { BEACON, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
 
 const stop = (e: ThreeEvent<MouseEvent>) => e.stopPropagation();
+/** The lamp's bulb: bright enough to bloom. */
+const BULB = new THREE.Color("#fff1c9").multiplyScalar(2.5);
 
 /** A rounded box geometry, built once per size. */
 const rounded = new Map<string, RoundedBoxGeometry>();
@@ -104,6 +107,7 @@ export function Papers() {
 
 export function Mug({ reduced }: { reduced: boolean }) {
   const steam = useRef<(THREE.Mesh | null)[]>([]);
+  // The steam asks for no frames of its own: it drifts only while the table is drawn anyway.
   useFrame(({ clock }) => {
     steam.current.forEach((m, i) => {
       if (!m) return;
@@ -161,7 +165,7 @@ export function Lamp() {
         </mesh>
         <mesh position={[0, -0.25, 0]}>
           <sphereGeometry args={[0.25, 16, 12]} />
-          <meshBasicMaterial color={new THREE.Color("#fff1c9").multiplyScalar(2.5)} toneMapped={false} />
+          <meshBasicMaterial color={BULB} toneMapped={false} />
         </mesh>
       </group>
       <pointLight position={[1.6, 3.0, 1.4]} color="#ffcf8a" intensity={9} distance={16} decay={1.6} />
@@ -190,6 +194,12 @@ export function CommitTower({
   const shown = commits.slice(-TOWER_MAX);
   const refs = useRef<(THREE.Mesh | null)[]>([]);
   const geo = useMemo(() => new RoundedBoxGeometry(BLOCK.w, BLOCK.h, BLOCK.w, 2, 0.05), []);
+  const want = useWantFrame();
+  // One handler for every block (named by its hash), so re-renders don't redraw.
+  const pick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    stop(e);
+    onSelect({ kind: "commit", hash: e.eventObject.name });
+  });
   useFrame(() => {
     const t = clock.now();
     shown.forEach((c, i) => {
@@ -197,7 +207,9 @@ export function CommitTower({
       if (!m) return;
       const age = realAge(clock, t, c.ms);
       const y = 0.2 + i * (BLOCK.h + 0.01) + BLOCK.h / 2;
-      m.position.y = reduced || age > 1200 || age < 0 ? y : y + (1 - age / 1200) ** 2 * 3;
+      const dropping = !reduced && age >= 0 && age <= 1200;
+      m.position.y = dropping ? y + (1 - age / 1200) ** 2 * 3 : y;
+      if (dropping) want(30);
     });
   });
   return (
@@ -216,10 +228,8 @@ export function CommitTower({
           position={[0, 0.2 + i * (BLOCK.h + 0.01) + BLOCK.h / 2, 0]}
           rotation-y={(i % 4) * 0.08 - 0.12}
           castShadow
-          onClick={(e) => {
-            stop(e);
-            onSelect({ kind: "commit", hash: c.hash });
-          }}
+          name={c.hash}
+          onClick={pick}
         >
           <Clay color={colorOf(c.node)} />
         </mesh>
@@ -238,6 +248,7 @@ export function OriginBeacon({ commits, clock, reduced }: { commits: TLCommit[];
   const lamp = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Mesh>(null);
   const col = useMemo(() => new THREE.Color(), []);
+  const want = useWantFrame();
   useFrame(({ clock: c3 }) => {
     const t = clock.now();
     let flash = 0;
@@ -247,6 +258,8 @@ export function OriginBeacon({ commits, clock, reduced }: { commits: TLCommit[];
       if (age >= 0 && age < 3500) flash = Math.max(flash, 1 - age / 3500);
     }
     const idle = reduced ? 0.4 : 0.35 + Math.sin(c3.elapsedTime * 1.5) * 0.1;
+    // A push's flash asks for frames; the idle glow pulses only while the table is drawn anyway.
+    if (flash > 0) want(reduced ? 10 : 30);
     if (lamp.current) (lamp.current.material as THREE.MeshBasicMaterial).color.copy(col.set("#06b6d4").multiplyScalar(1 + idle + flash * 3));
     if (halo.current) {
       halo.current.scale.setScalar(1 + flash * 2.5);
@@ -335,6 +348,19 @@ export function MiniCityView({
   const [hover, setHover] = useState<number | null>(null);
   const hovered = hover !== null && hover < layout.buildings.length ? { b: layout.buildings[hover], top: mini.top(hover) } : null;
   const geo = useMemo(() => new RoundedBoxGeometry(1, 1, 1, 1, 0.12), []);
+  // The buildings are written in place (not through props): a write that changes something asks for a frame.
+  const invalidate = useThree((s) => s.invalidate);
+  // The colours last written, per building, for the mesh they were written to.
+  const written = useRef<{ m: THREE.InstancedMesh | null; rgb: Float64Array }>({ m: null, rgb: new Float64Array(0) });
+  const onClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    stop(e);
+    if (e.instanceId !== undefined && e.instanceId < layout.buildings.length) onSelect({ kind: "file", key: layout.buildings[e.instanceId].key });
+  });
+  const onPointerMove = useStableHandler((e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHover(e.instanceId ?? null);
+  });
+  const onPointerOut = useStableHandler(() => setHover(null));
   const dirty = useMemo(() => {
     const s = new Set<string>();
     for (const r of tl.repos) for (const d of r.dirty) s.add(fileKey(r.id, d.p));
@@ -353,22 +379,37 @@ export function MiniCityView({
     });
     m.instanceMatrix.needsUpdate = true;
     m.computeBoundingSphere();
-  }, [layout, mini]);
+    invalidate();
+  }, [layout, mini, invalidate]);
 
   useEffect(() => {
     const m = ref.current;
     if (!m) return;
     const c = new THREE.Color();
+    const w = written.current;
+    if (w.m !== m || w.rgb.length !== layout.buildings.length * 3) {
+      w.m = m;
+      w.rgb = new Float64Array(layout.buildings.length * 3).fill(-1);
+    }
+    let changed = false;
     layout.buildings.forEach((b, i) => {
       const h = snap.holders.get(b.key);
       const ed = editing.get(b.key);
       if (ed) c.set(ed).multiplyScalar(1.6);
       else if (h?.length) c.set(h.length > 1 ? CLASH : colorOf(h[0]));
       else c.set(EXT[b.ext] ?? DEFAULT_EXT).multiplyScalar(dirty.has(b.key) ? 1 : 0.85);
+      const o = i * 3;
+      if (w.rgb[o] === c.r && w.rgb[o + 1] === c.g && w.rgb[o + 2] === c.b) return;
+      w.rgb[o] = c.r;
+      w.rgb[o + 1] = c.g;
+      w.rgb[o + 2] = c.b;
       m.setColorAt(i, c);
+      changed = true;
     });
+    if (!changed) return;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
-  }, [layout, snap, editing, colorOf, dirty]);
+    invalidate();
+  }, [layout, snap, editing, colorOf, dirty, invalidate]);
 
   const flags = [...snap.holders.entries()].flatMap(([k, holders]) => {
     const i = layout.index.get(k);
@@ -395,15 +436,9 @@ export function MiniCityView({
           args={[geo, undefined, layout.buildings.length]}
           castShadow
           receiveShadow
-          onClick={(e) => {
-            stop(e);
-            if (e.instanceId !== undefined) onSelect({ kind: "file", key: layout.buildings[e.instanceId].key });
-          }}
-          onPointerMove={(e) => {
-            e.stopPropagation();
-            setHover(e.instanceId ?? null);
-          }}
-          onPointerOut={() => setHover(null)}
+          onClick={onClick}
+          onPointerMove={onPointerMove}
+          onPointerOut={onPointerOut}
         >
           <meshPhysicalMaterial roughness={0.55} clearcoat={0.15} />
         </instancedMesh>

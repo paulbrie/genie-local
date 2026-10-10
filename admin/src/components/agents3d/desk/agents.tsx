@@ -1,6 +1,6 @@
 "use client";
 
-import { useFrame, useThree } from "@react-three/fiber";
+import { type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -9,6 +9,7 @@ import { fileKey, lastBefore, type Snapshot, TASK_COLORS, type Timeline, type TL
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
+import { useStableHandler, useWantFrame } from "../frame-governor";
 import { OverlayLabel } from "../overlay-label";
 import type { Positions } from "../parts";
 import type { Selection } from "../scene";
@@ -31,6 +32,32 @@ const THROW = { from: 0.15, to: 0.6 };
 const THROW_MESSAGES = true;
 /** A pose change blends over this long (real ms). */
 const BLEND_MS = 500;
+/**
+ * Frames on demand: asked for while anyone works, plays a beat, changes pose or turns.
+ * An idle table is a still picture (idle agents hold their pose without sway or
+ * breathing); a change the clock alone brings (a nap, the next idle pose, a held
+ * change of activity) draws just the frames it needs.
+ */
+const BUSY_FPS = 30;
+/** Idle, napping or waiting, with nothing playing: the agent holds still. */
+const calmDoing = (d: Doing) => d === "idle" || d === "nap" || d === "wait";
+
+/**
+ * What the agents show at t as far as the clock alone changes it (no new data,
+ * no camera): their activity, a beat starting or ending, the idle variant and
+ * a glance at the whiteboard. A tick that changes this asks for a frame.
+ */
+function clockSig(cast: TLAgent[], beats: Map<string, Beat[]>, snap: Snapshot, clock: Clock, real: number): string {
+  return cast
+    .map((a) => {
+      const d = doingAt(a, snap.t, snap.live);
+      const b = d.asleep || d.doing === "wait" ? null : beatAt(beats.get(a.key) ?? [], snap.t);
+      const idle = d.doing === "idle" || d.doing === "nap" ? idlePose(hash(a.key), real, d.doing === "nap", d.asleep) : "";
+      const glance = snap.tasks.some((x) => x.worker === a.key && !x.guessed && realAge(clock, snap.t, x.since) >= 0 && realAge(clock, snap.t, x.since) < 4000);
+      return `${d.doing}${d.asleep ? "z" : ""}:${b ? b.beat.start : ""}:${idle}:${glance ? "g" : ""}`;
+    })
+    .join("|");
+}
 /** At most this many speech bubbles per agent, newest on top. */
 const BUBBLES = 1;
 
@@ -355,6 +382,17 @@ export function DeskAgents({
   }, [lives, positions]);
 
   const camera = useThree((s) => s.camera);
+  const wantFrame = useWantFrame();
+  const invalidate = useThree((s) => s.invalidate);
+  // Each tick (a render at snapshot rate): a frame only if the clock changed what shows.
+  const sig = useRef("");
+  useEffect(() => {
+    const next = clockSig(cast, beats, snap, clock, performance.now());
+    if (next !== sig.current) {
+      sig.current = next;
+      invalidate();
+    }
+  });
   const flying = useRef<THREE.InstancedMesh>(null);
   const confetti = useRef<THREE.InstancedMesh>(null);
   const tmp = useMemo(
@@ -369,6 +407,9 @@ export function DeskAgents({
     const secs = reduced ? 0 : real / 1000;
     let flyN = 0;
     let confettiN = 0;
+    let busy = false;
+    // The soonest held change of activity (MIN_HOLD_MS), in real ms from now.
+    let heldMs = Infinity;
 
     lives.forEach((l, i) => {
       const a = cast[i];
@@ -379,7 +420,7 @@ export function DeskAgents({
         l.doing = d.doing;
         l.asleep = d.asleep;
         l.doingSince = real;
-      }
+      } else if (d.doing !== l.doing || d.asleep !== l.asleep) heldMs = Math.min(heldMs, MIN_HOLD_MS - (real - l.doingSince) + 1);
       // Asleep or waiting for its user, nothing plays (no dances or throws) until it acts.
       const b = l.asleep || l.doing === "wait" ? null : beatAt(beats.get(l.key) ?? [], t);
       const beat = b?.beat ?? null;
@@ -464,6 +505,8 @@ export function DeskAgents({
       }
       l.lidOpen = reduced ? wantLid : l.lidOpen + Math.sign(wantLid - l.lidOpen) * Math.min(Math.abs(wantLid - l.lidOpen), dt * 2);
       l.lid.rotation.x = -Math.PI / 2 + 0.03 + (Math.PI / 2 + 0.17) * l.lidOpen;
+      const calm = !beat && calmDoing(l.doing);
+      if (!calm || l.lidOpen !== wantLid) busy = true;
 
       // Blend into a new pose from wherever the joints were.
       readJoints(l.avatar, l.prev);
@@ -475,11 +518,12 @@ export function DeskAgents({
         }
         l.pose = pose;
       }
-      const hop = applyPose(l.avatar, pose, secs + (l.seed % 1000) / 100, pk, false, reduced, true);
+      const hop = applyPose(l.avatar, pose, secs + (l.seed % 1000) / 100, pk, false, reduced || calm, true);
       if (l.from && real - l.blendT0 < BLEND_MS) {
         readJoints(l.avatar, l.cur);
         const x = (real - l.blendT0) / BLEND_MS;
         blendJoints(l.avatar, l.from, l.cur, x * x * (3 - 2 * x));
+        busy = true;
       }
       // Turn the upper body towards what it throws at, waves to or glances at (eased).
       // Looking up at the camera, the head does most of the turn and tilts up; the body follows a little.
@@ -503,11 +547,13 @@ export function DeskAgents({
       l.avatar.joints.body.rotation.y += l.twist;
       l.avatar.joints.head.rotation.y += l.gazeY;
       l.avatar.joints.head.rotation.x += l.gazeX;
+      if (Math.abs(want - l.twist) + Math.abs(gazeY - l.gazeY) + Math.abs(gazeX - l.gazeX) > 1e-3) busy = true;
       // Dances stand up on the chair (their lift is in avatar units); other hops stay small.
       l.avatar.root.position.y = isDance(pose) ? hop * S : hop * 0.35;
       // The thought cloud: in while thinking, out otherwise, facing the camera.
       l.cloud.target = THINK_POSES.includes(pose) ? 1 : 0;
       l.cloud.update(secs + (l.seed % 100) / 10, dt, reduced);
+      if (l.cloud.fading) busy = true;
       l.cloud.group.rotation.y = Math.atan2(camera.position.x - l.seat.x, camera.position.z - l.seat.z);
       if (beat?.kind === "carry") {
         l.avatar.props.envelopeMat.color.set(beat.color);
@@ -560,6 +606,8 @@ export function DeskAgents({
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    if (busy || flyN > 0 || confettiN > 0) wantFrame(BUSY_FPS);
+    else if (heldMs < Infinity) wantFrame(1000 / Math.max(1, heldMs));
   });
 
   // Speech bubbles: each agent's newest message, for BUBBLE_MS + linger (re-derived at snapshot rate); a newer one replaces it.
@@ -595,22 +643,25 @@ export function DeskAgents({
     }
   }
 
+  // One handler for every agent (named by key on what was clicked), so re-renders don't redraw.
+  const pick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    const key = e.eventObject.name;
+    if (onAgentClick) onAgentClick(key);
+    else onSelect({ kind: "agent", key });
+  });
+
   return (
     <group>
       {lives.map((l, i) => {
         const a = cast[i];
-        const pick = (e: { stopPropagation: () => void }) => {
-          e.stopPropagation();
-          if (onAgentClick) onAgentClick(l.key);
-          else onSelect({ kind: "agent", key: l.key });
-        };
         return (
           <group key={l.key}>
-            <group position={[l.seat.x, SEAT_Y, l.seat.z]} rotation-y={l.seat.yaw} onClick={pick}>
+            <group name={l.key} position={[l.seat.x, SEAT_Y, l.seat.z]} rotation-y={l.seat.yaw} onClick={pick}>
               <primitive object={l.avatar.root} />
               <primitive object={l.chair} />
             </group>
-            <primitive object={l.laptop} onClick={pick} />
+            <primitive object={l.laptop} name={l.key} onClick={pick} />
             {/* the thought cloud, over the head, turned to the camera each frame */}
             <primitive object={l.cloud.group} position={[l.seat.x, HEAD_Y - 0.15 * S, l.seat.z]} scale={S * 0.55} />
             <OverlayLabel position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>

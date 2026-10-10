@@ -14,6 +14,8 @@ export type ThoughtCloud = {
   group: THREE.Group;
   /** Show it (1) or hide it (0); faded linearly over `FADE_S` by `update`. */
   target: number;
+  /** Still fading in or out (frames on demand: keep asking while it does). */
+  readonly fading: boolean;
   update: (t: number, dt: number, still: boolean) => void;
   dispose: () => void;
 };
@@ -60,6 +62,9 @@ export function makeThoughtCloud(): ThoughtCloud {
   const api: ThoughtCloud = {
     group,
     target: 0,
+    get fading() {
+      return alpha !== api.target;
+    },
     update(t, _dt, still) {
       // Linear on real time: `dt` is capped at 0.1 s per frame, so at a low frame
       // rate a frame-step fade would drag on for seconds.

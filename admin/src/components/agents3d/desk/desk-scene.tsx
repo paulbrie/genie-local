@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
+import { useFrameOnResize, useWantFrame } from "../frame-governor";
 import { Follow, type Positions, useSeen } from "../parts";
 import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
@@ -48,11 +49,14 @@ export default function DeskScene(props: SceneProps) {
   }, [board.col]);
   return (
     <div className="relative h-full w-full">
+      {/* Frames on demand: whatever animates asks for them (useWantFrame). With bloom the
+          composer antialiases (4× MSAA), so the canvas doesn't; `gl` is read once, hence the key. */}
       <Canvas
-        key={props.frameKey ?? ""}
+        key={`${props.frameKey ?? ""}:${bloom ? "bloom" : "aa"}`}
+        frameloop="demand"
         shadows={{ type: THREE.PCFShadowMap }}
         camera={{ position: [0, 25, 45], fov: 40, near: 0.1, far: 400 }}
-        gl={{ antialias: true }}
+        gl={{ antialias: !bloom }}
         dpr={[1, 1.5]}
         scene={{ environmentIntensity: 0.3 }}
         onPointerMissed={() => {
@@ -82,8 +86,8 @@ export default function DeskScene(props: SceneProps) {
         <Stage {...props} board={board} onBoard={onBoard} guests={guests} />
         <OrbitControls makeDefault target={[0, 6, -6]} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
         {bloom && (
-          <EffectComposer>
-            <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} />
+          <EffectComposer multisampling={4}>
+            <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} resolutionScale={0.5} />
           </EffectComposer>
         )}
       </Canvas>
@@ -115,6 +119,8 @@ type BoardFocus = { n: number; col: number };
 function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) => void; guests: boolean }) {
   const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, linger, board, onBoard, guests } = props;
   const positions = useRef<Positions>(new Map());
+  // A still scene would stay blank after a resize (it clears the canvas): redraw once.
+  useFrameOnResize();
   const colorOf = useMemo(() => {
     const m = new Map(tl.agents.map((a) => [a.key, a.color]));
     return (k: string) => m.get(k) ?? "#94a3b8";
@@ -203,6 +209,7 @@ function FlyTo({
 }) {
   const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
   const camera = useThree((s) => s.camera);
+  const want = useWantFrame();
   const f = useRef({ active: false, t0: 0, fromPos: new THREE.Vector3(), fromTarget: new THREE.Vector3(), toPos: new THREE.Vector3(), toTarget: new THREE.Vector3() });
 
   const start = (toPos: THREE.Vector3, toTarget: THREE.Vector3) => {
@@ -219,6 +226,7 @@ function FlyTo({
       controls.target.copy(toTarget);
       controls.update();
     }
+    want(60);
   };
 
   useEffect(() => {
@@ -259,6 +267,7 @@ function FlyTo({
     controls.target.lerpVectors(flight.fromTarget, flight.toTarget, ease(x));
     controls.update();
     if (x >= 1) flight.active = false;
+    else want(60);
   });
   return null;
 }

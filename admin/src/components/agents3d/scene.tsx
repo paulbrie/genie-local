@@ -11,6 +11,7 @@ import type { CityLayout } from "@/lib/city-layout";
 
 import { CityView } from "./city-view";
 import type { Clock } from "./clock";
+import { useFrameOnResize, useWantFrame } from "./frame-governor";
 import { Follow, type Positions } from "./parts";
 import { Planet, planetFor, SkyDome, WorldLights } from "./sky";
 import type { PaneView } from "./use-panes";
@@ -64,8 +65,11 @@ export default function Scene(props: SceneProps) {
       // Remount on a new project selection, so the camera re-frames it.
       key={props.frameKey ?? ""}
       camera={{ position: cam.position, fov: 50, near: 0.5, far: 9000 }}
+      // Frames on demand: drawn when something moves or changes (frame-governor.ts).
+      frameloop="demand"
       gl={{ antialias: true }}
-      dpr={[1, 2]}
+      // 1.5 is sharp enough for this scene on a 2× screen at ~56% of the pixels.
+      dpr={[1, 1.5]}
       onPointerMissed={() => onSelect(null)}
       onCreated={({ gl }) => {
         (gl as THREE.WebGLRenderer).setClearColor("#03050a");
@@ -87,7 +91,7 @@ export default function Scene(props: SceneProps) {
         maxDistance={maxDist}
       />
       {bloom && (
-        <EffectComposer>
+        <EffectComposer multisampling={4}>
           <Bloom mipmapBlur luminanceThreshold={0.85} luminanceSmoothing={0.2} intensity={1.4} />
         </EffectComposer>
       )}
@@ -98,6 +102,7 @@ export default function Scene(props: SceneProps) {
 /** The city plus the follow camera. Inside the Canvas, so it remounts (fresh positions) with it. */
 function Stage(props: SceneProps) {
   const positions = useRef<Positions>(new Map());
+  useFrameOnResize();
   return (
     <>
       <CityView {...props} positions={positions} />
@@ -118,6 +123,7 @@ const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2
 function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { positions: React.RefObject<Positions> }) {
   const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
   const camera = useThree((s) => s.camera);
+  const want = useWantFrame();
   const flightRef = useRef({
     active: false,
     t0: 0,
@@ -156,6 +162,7 @@ function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { posit
       controls.update();
       flight.active = false;
     }
+    want(60);
     // Only a new flight (n) starts this; snapshot ticks must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo?.n, controls]);
@@ -169,6 +176,7 @@ function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { posit
     controls.target.lerpVectors(flight.fromTarget, flight.toTarget, k);
     controls.update();
     if (x >= 1) flight.active = false;
+    else want(60);
   });
   return null;
 }

@@ -11,6 +11,7 @@ import { fileKey, lastBefore, type Snapshot, type TLAgent, toolKind } from "@/li
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "../clock";
+import { useWantFrame } from "../frame-governor";
 import { laptopTop, type MiniCities, PLATE_H, seatAt } from "./world";
 
 /**
@@ -123,6 +124,7 @@ export function DeskLinks({
   const ctl = useMemo(() => new THREE.Vector3(), []);
   const p = useMemo(() => new THREE.Vector3(), []);
   const m4 = useMemo(() => new THREE.Matrix4(), []);
+  const want = useWantFrame();
 
   useFrame(() => {
     const t = clock.now();
@@ -230,6 +232,8 @@ export function DeskLinks({
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
+    // Recent touches pulse and fade (held ones are steady): frames until the last is gone.
+    if (na > 0) want(reduced ? 10 : 30);
   });
 
   return (

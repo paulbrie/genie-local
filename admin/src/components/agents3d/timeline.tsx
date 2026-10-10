@@ -147,6 +147,10 @@ export function EditorTimeline({
   useEffect(() => {
     let raf = 0;
     let lastDraw = 0;
+    // What the last drawing showed (view to the pixel, playhead, its label): an unchanged one isn't redrawn.
+    let lastKey = "";
+    let lastSec = NaN;
+    let label = "";
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
       // Reduced motion: redraw at ~4 Hz instead of every frame.
@@ -158,6 +162,7 @@ export function EditorTimeline({
       if (c.width !== Math.round(width * dpr) || c.height !== Math.round(height * dpr)) {
         c.width = Math.round(width * dpr);
         c.height = Math.round(height * dpr);
+        lastKey = ""; // resizing cleared it
       }
       const ctx = c.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -173,6 +178,14 @@ export function EditorTimeline({
       const a = v.end - sp;
       const b = v.end;
       const X = (ms: number) => ((ms - a) / (b - a)) * width;
+      if (Math.floor(t / 1000) !== lastSec) {
+        lastSec = Math.floor(t / 1000);
+        label = new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      }
+      // Live, the view slides a pixel every span/width ms (seconds, on a wide window): draw then, not 60× a second.
+      const key = `${Math.round((b / (b - a)) * width)}|${Math.round(X(t))}|${label}|${clock.live}`;
+      if (key === lastKey) return;
+      lastKey = key;
       const msPerPx = (b - a) / width;
       const H: Hit[] = [];
 
@@ -334,7 +347,6 @@ export function EditorTimeline({
       ctx.lineTo(px - 5, 6);
       ctx.closePath();
       ctx.fill();
-      const label = new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       ctx.font = "10px ui-monospace, monospace";
       const lw = ctx.measureText(label).width + 8;
       const lx = Math.min(Math.max(px + 7, 0), width - lw);

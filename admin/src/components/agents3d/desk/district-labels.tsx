@@ -6,6 +6,7 @@ import type * as THREE from "three";
 
 import type { CityLayout } from "@/lib/city-layout";
 
+import { useWantFrame } from "../frame-governor";
 import { OverlayLabel } from "../overlay-label";
 import { districtSpots, type MiniCities, nearestSpots } from "./world";
 
@@ -25,6 +26,7 @@ const LABEL_STYLE = { pointerEvents: "none" } as const;
  */
 export const DistrictLabels = memo(function DistrictLabels({ layout, mini, reduced }: { layout: CityLayout; mini: MiniCities; reduced: boolean }) {
   const camera = useThree((s) => s.camera);
+  const wantFrame = useWantFrame();
   const spots = useMemo(() => districtSpots(layout, mini), [layout, mini]);
   const pool = useMemo(
     () => ({
@@ -83,6 +85,8 @@ export const DistrictLabels = memo(function DistrictLabels({ layout, mini, reduc
         if (el) el.style.opacity = String(a);
       }
       if (a === 0 && !want) p.spot[s] = -1;
+      // Still fading: frames until it's done (camera moves bring their own).
+      if (a !== want) wantFrame(30);
     }
   });
 

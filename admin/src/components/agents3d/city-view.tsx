@@ -8,10 +8,11 @@ import { editor, fileKey, type Snapshot, type Timeline, type TLCommit } from "@/
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "./clock";
+import { useStableHandler, useWantFrame } from "./frame-governor";
 import { OverlayLabel } from "./overlay-label";
 import { Lightning, type Strike, tailFade } from "./lightning";
 import type { PaneView } from "./use-panes";
-import { AgentLabel, CommitTower, MessageArcs, type Positions, realAge, useSeen } from "./parts";
+import { AgentLabel, ANIM_FPS, CommitTower, editId, keyOf, MessageArcs, type Positions, realAge, useSeen } from "./parts";
 import type { Selection } from "./scene";
 
 const EXT_COLORS: Record<string, string> = {
@@ -39,6 +40,19 @@ const GREY = new THREE.Color("#94a3b8");
 
 const EDIT_PULSE_MS = 3500;
 const BEAMS = 24;
+
+/**
+ * What the 3D city shows of a snapshot (busy, focus, holders): when it is the
+ * same, a new snapshot (4 a second) needs no frame. In replay every time
+ * counts (pulses and bolts depend on it).
+ */
+function sceneSig(snap: Snapshot): string {
+  let s = snap.live ? "L" : `R${snap.t}`;
+  for (const [k, a] of snap.agents) s += `|${k}:${a.busy ? 1 : 0}:${a.focus ?? ""}`;
+  for (const [k, h] of snap.holders) s += `|h${k}:${h.join(",")}`;
+  for (const k of snap.maybe.keys()) s += `|m${k}`;
+  return s + `|c${snap.commits.length}`;
+}
 
 export function CityView({
   tl,
@@ -82,7 +96,7 @@ export function CityView({
   const seenEdit = useSeen();
   useEffect(() => {
     seenMsg.mark(tl.messages.map((m) => m.id));
-    seenEdit.mark(tl.edits.map((e) => `${e.fileKey}@${e.ms}`));
+    seenEdit.mark(tl.edits.map((e) => keyOf(e, editId)));
   }, [tl, seenMsg, seenEdit]);
 
   const baseColors = useMemo(
@@ -95,6 +109,7 @@ export function CityView({
     return s;
   }, [tl]);
   const agentColor = useMemo(() => new Map(tl.agents.map((a) => [a.key, new THREE.Color(a.color)])), [tl]);
+  const ringColor = useMemo(() => new Map(tl.agents.map((a) => [a.key, new THREE.Color(a.color).multiplyScalar(1.4)])), [tl]);
 
   // Static matrices.
   useEffect(() => {
@@ -160,30 +175,50 @@ export function CityView({
   const strikes = useRef<Strike[]>([]);
   const strikeR = 7 * droneScale;
   const target = useMemo(() => new THREE.Vector3(), []);
+  // Per-frame scratch, reused.
+  const pulse = useMemo(() => new Map<number, { k: number; node: string | null }>(), []);
+  const focusOf = useMemo(() => new Map<number, string>(), []);
 
-  useFrame((state, dt) => {
+  // Frames on demand: a frame for whatever changed that the frame loop below reads.
+  const invalidate = useThree((s) => s.invalidate);
+  const want = useWantFrame();
+  const sig = sceneSig(snap);
+  useEffect(() => invalidate(), [invalidate, tl, sig, selected, hover, reduced, linger, layout]);
+
+  useFrame((state, frameDt) => {
     const isFar = camera.position.length() > farAt;
     if (isFar !== far) setFar(isFar);
     const t = clock.now();
     const time = state.clock.elapsedTime;
+    // The first frame after a still spell would see a dt of seconds: cap it.
+    const dt = Math.min(frameDt, 0.1);
     const mesh = bRef.current;
     const live = clock.live;
+    // A playing replay moves on its own; so do the effects below while they last.
+    let fps = !live && clock.playing ? ANIM_FPS : 0;
 
-    // Recent edits per building → pulse strength.
-    const pulse = new Map<number, { k: number; node: string | null }>();
+    // Recent edits per building → pulse strength (entries reused while they last).
+    for (const p of pulse.values()) p.k = 0;
     for (let i = tl.edits.length - 1, n = 0; i >= 0 && n < 400; i--, n++) {
       const e = tl.edits[i];
-      const age = realAge(clock, t, seenEdit.eff(`${e.fileKey}@${e.ms}`, e.ms, live));
+      const age = realAge(clock, t, seenEdit.eff(keyOf(e, editId), e.ms, live));
       if (age < 0 || age > EDIT_PULSE_MS + linger) continue;
       const bi = index.get(e.fileKey);
       if (bi === undefined) continue;
       // Decays to 40% over the pulse, then holds and fades out over the linger.
       const k = (1 - 0.6 * Math.min(1, age / EDIT_PULSE_MS)) * tailFade(age, EDIT_PULSE_MS, linger);
-      if ((pulse.get(bi)?.k ?? 0) < k) pulse.set(bi, { k, node: editor(tl, snap, e) });
+      const p = pulse.get(bi);
+      if (!p) pulse.set(bi, { k, node: editor(tl, snap, e) });
+      else if (p.k < k) {
+        p.k = k;
+        p.node = editor(tl, snap, e);
+      }
     }
+    for (const [bi, p] of pulse) if (p.k <= 0) pulse.delete(bi);
+    if (pulse.size || strikes.current.length) fps = Math.max(fps, ANIM_FPS);
 
     if (mesh) {
-      const focusOf = new Map<number, string>();
+      focusOf.clear();
       for (const [key, s] of snap.agents) {
         const bi = s.focus ? index.get(s.focus) : undefined;
         if (bi !== undefined) focusOf.set(bi, key);
@@ -197,9 +232,12 @@ export function CityView({
         // Only guessed holders: a soft grey tint, never a clash.
         if (!h && snap.maybe.has(b.key)) tmpC.lerp(GREY, 0.55);
         if (h && h.length > 1) {
+          // A clash flashes (frames while it lasts).
           tmpC.copy(RED).multiplyScalar(reduced ? 2 : 1.2 + Math.abs(Math.sin(time * 9)) * 2.2);
+          if (!reduced) fps = Math.max(fps, ANIM_FPS);
         } else if (h && h.length === 1) {
-          tmpC.copy(agentColor.get(h[0]) ?? WHITE).multiplyScalar(reduced ? 1.8 : 1.5 + Math.sin(time * 2 + i) * 0.25);
+          // A held file glows steadily: claims stay open for hours, a pulse would draw all that time.
+          tmpC.copy(agentColor.get(h[0]) ?? WHITE).multiplyScalar(reduced ? 1.8 : 1.6);
         }
         const f = focusOf.get(i);
         if (f && !(h && h.length)) tmpC.lerp(agentColor.get(f) ?? WHITE, 0.6).multiplyScalar(1.3);
@@ -219,7 +257,7 @@ export function CityView({
     }
 
     // Beams over the strongest pulses.
-    const top = [...pulse.entries()].sort((a, b) => b[1].k - a[1].k).slice(0, BEAMS);
+    const top = pulse.size ? [...pulse.entries()].sort((a, b) => b[1].k - a[1].k).slice(0, BEAMS) : [];
     beams.forEach((m, j) => {
       const e = top[j];
       if (!e) {
@@ -250,8 +288,13 @@ export function CityView({
         const off = (idx % 4) * 0.8;
         target.set(b.x + off * droneScale, b.h + 6 * droneScale, b.z + off * droneScale);
       } else target.copy(homes.get(a.key)!);
-      if (!reduced) target.y += Math.sin(time * 1.4 + idx) * 0.35;
+      // A busy drone bobs and spins its ring; an idle one holds still (no frames needed).
+      if (s?.busy && !reduced) {
+        target.y += Math.sin(time * 1.4 + idx) * 0.35;
+        fps = Math.max(fps, ANIM_FPS);
+      }
       g.position.lerp(target, reduced ? 1 : Math.min(1, dt * 2.2));
+      if (g.position.distanceToSquared(target) > 1e-4) fps = Math.max(fps, ANIM_FPS);
       positions.current?.set(a.key, g.position);
       const ring = g.children[1] as THREE.Mesh;
       if (ring && s?.busy && !reduced) ring.rotation.z += dt * 2.5;
@@ -260,12 +303,23 @@ export function CityView({
       mat.color.set(a.color).multiplyScalar(s?.busy ? 2.4 + (reduced ? 0 : Math.sin(time * 4) * 0.4) : 0.45);
       idx++;
     }
+    if (fps) want(fps);
   });
 
-  const onMove = (e: ThreeEvent<PointerEvent>) => {
+  const onMove = useStableHandler((e: ThreeEvent<PointerEvent>) => {
     e.stopPropagation();
     setHover(e.instanceId ?? null);
-  };
+  });
+  const onOut = useStableHandler(() => setHover(null));
+  const onBuildingClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    if (e.instanceId !== undefined) onSelect({ kind: "file", key: buildings[e.instanceId].key });
+  });
+  // The drone's group is named after its agent.
+  const onDroneClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    onSelect({ kind: "agent", key: e.eventObject.name });
+  });
 
   const hb = hover !== null ? buildings[hover] : null;
   const colorOf = (node: string) => tl.byKey.get(node)?.color ?? "#94a3b8";
@@ -289,11 +343,8 @@ export function CityView({
         ref={bRef}
         args={[undefined, undefined, Math.max(buildings.length, 1)]}
         onPointerMove={onMove}
-        onPointerOut={() => setHover(null)}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (e.instanceId !== undefined) onSelect({ kind: "file", key: buildings[e.instanceId].key });
-        }}
+        onPointerOut={onOut}
+        onClick={onBuildingClick}
       >
         <boxGeometry />
         <meshStandardMaterial toneMapped={false} roughness={0.55} metalness={0.15} />
@@ -329,12 +380,10 @@ export function CityView({
             if (g) drones.current.set(a.key, g);
             else drones.current.delete(a.key);
           }}
+          name={a.key}
           position={homes.get(a.key)!.toArray()}
           scale={droneScale}
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect({ kind: "agent", key: a.key });
-          }}
+          onClick={onDroneClick}
         >
           <mesh>
             <sphereGeometry args={[1.1, 24, 24]} />
@@ -342,7 +391,7 @@ export function CityView({
           </mesh>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
             <torusGeometry args={[1.9, 0.12, 8, 48, Math.PI * 1.6]} />
-            <meshBasicMaterial color={new THREE.Color(a.color).multiplyScalar(1.4)} toneMapped={false} />
+            <meshBasicMaterial color={ringColor.get(a.key)} toneMapped={false} />
           </mesh>
           <AgentLabel
             name={a.name}

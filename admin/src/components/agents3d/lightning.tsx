@@ -7,11 +7,13 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 
+import type { AgentEvent } from "@/lib/agents3d-types";
 import { editor, fileKey, lastBefore, type Snapshot, type Timeline, toolKind } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 
 import type { Clock } from "./clock";
-import { type Positions, realAge, useSeen } from "./parts";
+import { useWantFrame } from "./frame-governor";
+import { ANIM_FPS, editId, keyOf, type Positions, realAge, useSeen } from "./parts";
 
 /** A touched file keeps its bolt this long (real ms) before the linger starts. */
 const HOLD_MS = 6000;
@@ -70,6 +72,9 @@ type Bolt = {
 };
 
 type Burst = { born: number; x: number; y: number; z: number; color: THREE.Color; vel: Float32Array };
+
+/** A tool call's id for the "seen" tracker (cached per event with keyOf). */
+const callId = (e: AgentEvent & { ms: number }, agent: string) => `${agent}@${e.ms}@${e.tool}`;
 
 const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 
@@ -183,8 +188,8 @@ export function Lightning({
   const seenEv = useSeen();
   const seenMsg = useSeen();
   useEffect(() => {
-    seenEv.mark(tl.agents.flatMap((a) => a.events.map((e) => `${a.key}@${e.ms}@${e.tool}`)));
-    seenEv.mark(tl.edits.map((e) => `${e.fileKey}@${e.ms}`));
+    seenEv.mark(tl.agents.flatMap((a) => a.events.map((e) => keyOf(e, (x) => callId(x, a.key)))));
+    seenEv.mark(tl.edits.map((e) => keyOf(e, editId)));
     seenMsg.mark(tl.messages.map((m) => m.id));
   }, [tl, seenEv, seenMsg]);
 
@@ -244,6 +249,7 @@ export function Lightning({
     [],
   );
   const order = useMemo<number[]>(() => [], []);
+  const want = useWantFrame();
 
   useFrame(() => {
     const t = clock.now();
@@ -283,7 +289,7 @@ export function Lightning({
         if (!e.repo || !e.path) continue;
         const kind = toolKind(e.tool);
         if (kind !== "edit" && kind !== "read") continue;
-        const age = realAge(clock, t, seenEv.eff(`${a.key}@${e.ms}@${e.tool}`, e.ms, live));
+        const age = realAge(clock, t, seenEv.eff(keyOf(e, (x) => callId(x, a.key)), e.ms, live));
         if (age < 0 || age > HOLD_MS + linger) continue;
         const fk = fileKey(e.repo, e.path);
         const prev = targets.get(fk);
@@ -293,7 +299,7 @@ export function Lightning({
       for (let i = lastBefore(tl.edits, t), k = 0; i >= 0 && k < 120; i--, k++) {
         const e = tl.edits[i];
         if (e.node && e.node !== a.key) continue;
-        const age = realAge(clock, t, seenEv.eff(`${e.fileKey}@${e.ms}`, e.ms, live));
+        const age = realAge(clock, t, seenEv.eff(keyOf(e, editId), e.ms, live));
         if (age < 0 || age > HOLD_MS + linger) continue;
         if (!e.node && editor(tl, snap, e) !== a.key) continue;
         const prev = targets.get(e.fileKey);
@@ -431,10 +437,12 @@ export function Lightning({
     const cols = sparks.geometry.getAttribute("color") as THREE.BufferAttribute;
     const pa = pos.array as Float32Array;
     const ca = cols.array as Float32Array;
+    let sparking = false;
     for (let s = 0; s < BURSTS; s++) {
       const bu = bursts[s];
       const age = (now - bu.born) / 1000;
       const alive = age >= 0 && age < life;
+      if (alive) sparking = true;
       for (let j = 0; j < SPARKS; j++) {
         const o = (s * SPARKS + j) * 3;
         if (!alive) {
@@ -453,6 +461,8 @@ export function Lightning({
     pos.needsUpdate = true;
     cols.needsUpdate = true;
     (sparks.material as THREE.PointsMaterial).size = 0.45 * scale;
+    // Bolts flicker and fade, sparks fall: frames until the last is gone.
+    if (n > 0 || sparking) want(ANIM_FPS);
   });
 
   useEffect(

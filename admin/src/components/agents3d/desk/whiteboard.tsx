@@ -7,6 +7,7 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 
 import type { Snapshot, TLTask } from "@/lib/agents3d-timeline";
 
+import { useStableHandler, useWantFrame } from "../frame-governor";
 import type { Selection } from "../scene";
 import { ServerGauges } from "./gauges";
 import { BOARD, TABLE } from "./world";
@@ -247,6 +248,11 @@ function PostIt({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const flight = useRef<{ from: THREE.Vector3; to: THREE.Vector3; t0: number } | null>(null);
+  const want = useWantFrame();
+  const onClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    onSelect({ kind: "task", key: p.task.key });
+  });
   // Redrawn when the elapsed text changes (about once a minute live; faster in replay).
   const eText = elapsed?.text ?? "";
   const eColor = elapsed?.color ?? "";
@@ -262,7 +268,8 @@ function PostIt({
       m.position.copy(to);
       flight.current = null;
     } else if (m.position.distanceToSquared(to) > 1e-4) flight.current = { from: m.position.clone(), to, t0: performance.now() };
-  }, [p.x, p.y, reduced]);
+    want(60);
+  }, [p.x, p.y, reduced, want]);
 
   useFrame(() => {
     const m = ref.current;
@@ -276,7 +283,7 @@ function PostIt({
     if (k >= 1) {
       m.rotation.z = p.tilt;
       flight.current = null;
-    }
+    } else want(60);
   });
 
   return (
@@ -285,10 +292,7 @@ function PostIt({
       geometry={noteGeo}
       rotation-z={p.tilt}
       castShadow
-      onClick={(e: ThreeEvent<MouseEvent>) => {
-        e.stopPropagation();
-        onSelect({ kind: "task", key: p.task.key });
-      }}
+      onClick={onClick}
     >
       <meshStandardMaterial map={tex} roughness={0.9} />
     </mesh>
@@ -315,6 +319,13 @@ export function Whiteboard({
   onColumnClick: (col: number) => void;
 }) {
   const events = useMemo(() => new Map(tasks.map((t) => [t.key, t.events])), [tasks]);
+  // A heading flies to its column; anywhere else on the board, to the whole board.
+  const onBoard = useStableHandler((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    const uv = e.uv;
+    if (uv && uv.y > 1 - HEADER_H / BOARD.h) onColumnClick(Math.min(2, Math.floor(uv.x * 3)));
+    else onBoardClick();
+  });
   // Recomputed only when a task's column or text changes, not on every snapshot.
   const sig = snap.tasks.map((t) => `${t.key}:${t.state}:${t.since}`).join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -339,13 +350,7 @@ export function Whiteboard({
       <mesh
         position={[0, 0, -0.03]}
         receiveShadow
-        onClick={(e: ThreeEvent<MouseEvent>) => {
-          e.stopPropagation();
-          // A heading flies to its column; anywhere else on the board, to the whole board.
-          const uv = e.uv;
-          if (uv && uv.y > 1 - HEADER_H / BOARD.h) onColumnClick(Math.min(2, Math.floor(uv.x * 3)));
-          else onBoardClick();
-        }}
+        onClick={onBoard}
       >
         <planeGeometry args={[BOARD.w, BOARD.h]} />
         {/* Matte, so the lamp and the room don't wash out the headings up close. */}

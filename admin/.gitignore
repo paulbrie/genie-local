@@ -17,6 +17,8 @@
 /.next/
 /.next-prod/
 /.next-dev/
+# other distDirs (APP_DIST_DIR, e.g. a check build in .next-prodtest)
+/.next-*/
 /out/
 
 # production
