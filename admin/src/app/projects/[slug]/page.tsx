@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { AppPortForm } from "@/components/app-port-form";
 import { DeleteProjectButton } from "@/components/delete-project-button";
+import { GitGraphView } from "@/components/git-graph";
 import { NotesPanel } from "@/components/notes-panel";
 import { appLabel } from "@/components/project-card";
 import { RescanProjectButton } from "@/components/rescan-project-button";
@@ -39,10 +40,18 @@ export const dynamic = "force-dynamic";
 
 export default async function ProjectPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const { slug } = await params;
+  // ?tab=git&app=<app>&commit=<hash> opens the git history on that commit
+  // (the Comms page links commits mentioned between sessions here).
+  const query = await searchParams;
+  const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+  const commit = one(query.commit);
+  const gitApp = one(query.app);
   const detail = await getProjectDetail(slug);
   if (!detail) notFound();
 
@@ -51,6 +60,7 @@ export default async function ProjectPage({
     getNotes(project.id),
     getTasks(project.id),
   ]);
+  const hasGit = apps.some(({ app }) => app.isGit);
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 space-y-6 p-6">
@@ -104,11 +114,12 @@ export default async function ProjectPage({
         )}
       </section>
 
-      {/* Project-level notes & tasks */}
-      <Tabs defaultValue="notes">
+      {/* Project-level notes, tasks & git history */}
+      <Tabs defaultValue={hasGit && one(query.tab) === "git" ? "git" : "notes"}>
         <TabsList>
           <TabsTrigger value="notes">Notes ({notes.length})</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({tasks.length})</TabsTrigger>
+          {hasGit && <TabsTrigger value="git">Git</TabsTrigger>}
         </TabsList>
         <TabsContent value="notes" className="pt-4">
           <NotesPanel slug={project.slug} notes={notes} />
@@ -116,6 +127,15 @@ export default async function ProjectPage({
         <TabsContent value="tasks" className="pt-4">
           <TaskList slug={project.slug} tasks={tasks} />
         </TabsContent>
+        {hasGit && (
+          <TabsContent value="git" className="pt-4">
+            <GitGraphView
+              projectSlug={project.slug}
+              initialApp={gitApp}
+              initialCommit={commit && /^[0-9a-f]{4,40}$/i.test(commit) ? commit : undefined}
+            />
+          </TabsContent>
+        )}
       </Tabs>
     </main>
   );

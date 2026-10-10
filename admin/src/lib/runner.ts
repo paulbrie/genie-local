@@ -337,7 +337,25 @@ function childEnv(port: number | null): NodeJS.ProcessEnv {
   // admin-owned vars so each app loads its own from .env.local; also keeps the
   // admin's credentials (ADMIN_USER/PASSWORD, APP_ENC_KEY) out of child apps.
   // PUBLIC_HOST is intentionally kept — apps use it (basePath, allowedDevOrigins).
-  for (const key of ["DATABASE_URL", "PROJECTS_ROOT", "APP_ENC_KEY", "ADMIN_USER", "ADMIN_PASSWORD"]) {
+  //
+  // Also strip the admin's own Next config knobs (set on admin.service:
+  // APP_BASE_PATH/NEXT_PUBLIC_BASE_PATH=/admin, APP_DIST_DIR=.next-prod,
+  // APP_PUBLIC_HOSTS). Project apps follow the same convention of deriving their
+  // basePath from `process.env.NEXT_PUBLIC_BASE_PATH ?? '/projects/<mount>'`, so
+  // an inherited `/admin` would make them build/serve under /admin (assets under
+  // /admin/_next) and 404 at their real mount path. Dropping these lets each app
+  // fall back to its own default.
+  for (const key of [
+    "DATABASE_URL",
+    "PROJECTS_ROOT",
+    "APP_ENC_KEY",
+    "ADMIN_USER",
+    "ADMIN_PASSWORD",
+    "APP_BASE_PATH",
+    "NEXT_PUBLIC_BASE_PATH",
+    "APP_DIST_DIR",
+    "APP_PUBLIC_HOSTS",
+  ]) {
     delete env[key];
   }
   env.FORCE_COLOR = "0";

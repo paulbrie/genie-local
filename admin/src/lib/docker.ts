@@ -153,6 +153,62 @@ export async function listDocker(): Promise<DockerSnapshot> {
   }
 }
 
+export type DockerStatsSummary = {
+  available: boolean;
+  running: number;
+  memBytes: number;
+};
+
+/**
+ * Lightweight running-container summary for the sidebar badge: how many
+ * containers are up and their combined memory usage. A single
+ * `docker stats --no-stream` lists only running containers, so the line count
+ * is the running total and the `MemUsage` "used" side sums to the memory.
+ * Slower than a plain `ps` (~1s), so it gets its own endpoint/poll. Never throws.
+ */
+export async function dockerStatsSummary(): Promise<DockerStatsSummary> {
+  try {
+    const { stdout } = await pexec(
+      DOCKER,
+      ["stats", "--no-stream", "--format", "{{.MemUsage}}"],
+      EXEC_OPTS,
+    );
+    let running = 0;
+    let memBytes = 0;
+    for (const line of stdout.split("\n")) {
+      const t = line.trim();
+      if (!t) continue;
+      running++;
+      // "12.34MiB / 7.67GiB" — take the used side (before the slash).
+      memBytes += parseSize(t.split("/")[0]?.trim() ?? "");
+    }
+    return { available: true, running, memBytes };
+  } catch {
+    return { available: false, running: 0, memBytes: 0 };
+  }
+}
+
+/** Parse a docker size string ("1.5GiB", "512MiB", "0B", "1.2GB") to bytes. */
+function parseSize(s: string): number {
+  const m = /^([\d.]+)\s*([KMGT]?i?B)?$/i.exec(s);
+  if (!m) return 0;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n)) return 0;
+  const unit = (m[2] || "B").toLowerCase();
+  const mult: Record<string, number> = {
+    b: 1,
+    kb: 1e3,
+    mb: 1e6,
+    gb: 1e9,
+    tb: 1e12,
+    kib: 1024,
+    mib: 1024 ** 2,
+    gib: 1024 ** 3,
+    tib: 1024 ** 4,
+  };
+  return n * (mult[unit] ?? 1);
+}
+
 const CONTAINER_ARGS: Record<ContainerAction, string[]> = {
   start: ["start"],
   stop: ["stop"],

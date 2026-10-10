@@ -18,6 +18,7 @@ import {
   LogOut,
   UsersRound,
   MessagesSquare,
+  Network,
   PanelLeftClose,
   PanelLeftOpen,
   ScrollText,
@@ -61,6 +62,7 @@ const NAV: NavItem[] = [
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/docker", label: "Docker", icon: Container },
   { href: "/services", label: "Services", icon: Server },
+  { href: "/nginx", label: "Nginx", icon: Network },
   { href: "/railway", label: "Railway", icon: TrainFront },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
@@ -102,6 +104,10 @@ export function AppSidebar() {
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
   const [chromeCount, setChromeCount] = useState<number | null>(null);
+  const [dockerStats, setDockerStats] = useState<{
+    running: number;
+    memBytes: number;
+  } | null>(null);
   const [runs] = useSubject(activeRuns);
   // Currently-active runs (kept fresh by <RunDock>), shown as sub-items.
   const liveRuns = runs.filter(
@@ -153,6 +159,38 @@ export function AppSidebar() {
     };
     void load();
     const id = setInterval(load, 7000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [pathname]);
+
+  // Live running-container count + memory, shown as a badge on the Docker item.
+  // `docker stats` is slower than a plain list, so this polls on its own timer.
+  useEffect(() => {
+    if (pathname === "/login") return;
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`${BASE_PATH}/api/docker/stats`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          if (active) setDockerStats(null);
+          return;
+        }
+        const json = await res.json();
+        if (active)
+          setDockerStats({
+            running: json.running ?? 0,
+            memBytes: json.memBytes ?? 0,
+          });
+      } catch {
+        /* ignore */
+      }
+    };
+    void load();
+    const id = setInterval(load, 10000);
     return () => {
       active = false;
       clearInterval(id);
@@ -244,6 +282,8 @@ export function AppSidebar() {
             );
           const active = isActive(item, pathname);
           const Icon = item.icon;
+          // Numeric count drives the collapsed-rail pill; Docker also gets a
+          // wider text badge (count · memory) in the expanded sidebar.
           const badge =
             item.href === "/chrome" && chromeCount
               ? chromeCount
@@ -251,7 +291,13 @@ export function AppSidebar() {
                 ? liveRuns.length
                 : item.href === "/terminals" && workingTerms.length
                   ? workingTerms.length
-                  : null;
+                  : item.href === "/docker" && dockerStats?.running
+                    ? dockerStats.running
+                    : null;
+          const badgeText =
+            item.href === "/docker" && dockerStats?.running
+              ? `${dockerStats.running} · ${fmtBytes(dockerStats.memBytes)}`
+              : badge;
           return (
             <div key={item.href}>
               <Link
@@ -279,8 +325,8 @@ export function AppSidebar() {
                       {badge}
                     </span>
                   ) : (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium text-primary">
-                      {badge}
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium whitespace-nowrap text-primary">
+                      {badgeText}
                     </span>
                   ))}
               </Link>
@@ -407,6 +453,14 @@ const TERM_DOT: Record<"idle" | "busy", { dot: string; ping: string | null }> = 
   idle: { dot: "bg-muted-foreground/40", ping: null },
   busy: { dot: "bg-emerald-500", ping: "bg-emerald-400" },
 };
+
+/** Compact byte size for the Docker badge: 1_610_612_736 → "1.5 GB". */
+function fmtBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
 
 /** Compact token count: 1_234 → "1.2k", 2_500_000 → "2.5M". */
 function fmtTokens(n: number): string {
