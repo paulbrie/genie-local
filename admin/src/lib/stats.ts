@@ -3,11 +3,15 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
 
+import { coreBusyPercent, parseProcStat, type CoreTimes } from "@/lib/proc-stat";
+
 const STATS_FILE = process.env.STATS_FILE ?? "/run/genie/stats.jsonl";
 
 export type SystemStats = {
   cpuPercent: number;
   cpuCores: number;
+  /** Busy % per core (cpu0…), since the previous request (≥ 1 s before); null on the first one or if unreadable. */
+  cpuPerCore: number[] | null;
   memPercent: number;
   memUsedBytes: number;
   memTotalBytes: number;
@@ -87,13 +91,37 @@ async function readLatestRecord(): Promise<RawRecord | null> {
   }
 }
 
+/**
+ * Per-core busy %, read by the admin itself from /proc/stat (genie's collector
+ * has the total only): each call is compared with the last reading kept here,
+ * if it is at least 1 s old; a closer call gets the last result again.
+ */
+const PER_CORE_MIN_MS = 1000;
+let lastCores: { at: number; cores: CoreTimes[] } | null = null;
+let lastPerCore: number[] | null = null;
+
+async function readPerCore(): Promise<number[] | null> {
+  const now = Date.now();
+  if (lastCores && now - lastCores.at < PER_CORE_MIN_MS) return lastPerCore;
+  let cores: CoreTimes[];
+  try {
+    cores = parseProcStat(await fs.readFile("/proc/stat", "utf8"));
+  } catch {
+    return null;
+  }
+  lastPerCore = lastCores ? coreBusyPercent(lastCores.cores, cores) : null;
+  lastCores = { at: now, cores };
+  return lastPerCore;
+}
+
 /** CPU/mem/disk summary for the top toolbar. */
 export async function readLatestStats(): Promise<SystemStats | null> {
-  const rec = await readLatestRecord();
+  const [rec, cpuPerCore] = await Promise.all([readLatestRecord(), readPerCore()]);
   if (!rec) return null;
   const s = rec.stats;
   return {
     cpuPercent: s.cpuPercent,
+    cpuPerCore,
     // The admin runs on the host it monitors, so the local core count matches
     // the CPU% being reported. Falls back to 0 on the rare empty cpus() result.
     cpuCores: cpus().length || 0,
