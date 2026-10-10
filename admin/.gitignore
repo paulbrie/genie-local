@@ -21,6 +21,9 @@
 /.next-*/
 /out/
 
+# generated from the DB by the dashboard (nginx's per-app include; install.sh creates it header-only)
+/nginx/projects.conf
+
 # production
 /build
 

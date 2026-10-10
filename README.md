@@ -309,7 +309,7 @@ Both are granted through `/etc/sudoers.d/admin-supervisor`.
 │   │                         stats-history.mjs (cron sampler)
 │   ├── ops/                  systemd units, admin-ctl, ft-nginx-reload, sudoers,
 │   │                         reference nginx site
-│   ├── nginx/projects.conf   GENERATED per-app nginx locations (included by the site)
+│   ├── nginx/projects.conf   GENERATED per-app nginx locations (included by the site; not in git)
 │   ├── docs/                 Architecture diagram (Mermaid source + PNG)
 │   └── AGENTS.md / CLAUDE.md Notes for coding agents working on the app
 ├── agents/                   Markdown agents (*.md) and pipelines/ (*.md)
@@ -668,6 +668,11 @@ server {
     include /opt/project/admin/nginx/projects.conf;
 }
 EOF
+# The include target must exist for `nginx -t` (header only until a port is set).
+mkdir -p /opt/project/admin/nginx
+[ -f /opt/project/admin/nginx/projects.conf ] || \
+  echo "# GENERATED from the admin DB (apps.port). Empty until a project port is set." \
+    > /opt/project/admin/nginx/projects.conf
 sudo ln -sf /etc/nginx/sites-available/ft-admin /etc/nginx/sites-enabled/ft-admin
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
@@ -677,9 +682,10 @@ sudo nginx -t && sudo systemctl reload nginx
   would shadow the login page.
 - If nginx is directly internet-facing, terminate TLS here (certbot or similar)
   or put a TLS proxy in front, since `X-Forwarded-Proto` is hardcoded to `https`.
-- `admin/nginx/projects.conf` ships empty (header only) so the `include` is
-  always valid. It is regenerated from the database whenever you save an app
-  port in the UI.
+- `admin/nginx/projects.conf` is not in git (generated, and ignored): it is
+  created header-only above (and by `install.sh`) so the `include` is always
+  valid, then regenerated from the database whenever you save an app port in
+  the UI.
 
 **12. Start**
 
