@@ -77,6 +77,15 @@ export function laptopAt(seat: Seat): XZ {
   return { x: seat.x + seat.nx * inward, z: seat.z + seat.nz * inward };
 }
 
+/** An agent's browser window (T102): standing on the table between its laptop and the cities, facing the camera. */
+export const BROWSER = { w: 2.4, h: 1.6, r: TABLE.r - 3.8 };
+export function browserAt(seat: Seat): XZ {
+  const inward = TABLE.r + AVATAR_SCALE * 0.32 - BROWSER.r;
+  return { x: seat.x + seat.nx * inward, z: seat.z + seat.nz * inward };
+}
+/** Browsers nobody at the table owns: a cascade in the front gap, between the papers and the commit tower. */
+export const UNOWNED_BROWSERS = polar(deg(163), TABLE.r - 3.7);
+
 /** Top of the laptop's lid, where its threads to the cities start. */
 export function laptopTop(seat: Seat): THREE.Vector3 {
   const c = laptopAt(seat);

@@ -7,11 +7,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 
+import type { BrowserSession } from "@/lib/browsers";
+
 import { useFrameOnResize, useWantFrame } from "../frame-governor";
 import { Follow, type Positions, useSeen } from "../parts";
+import { useBrowsers } from "../use-browsers";
 import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
+import { DeskBrowsers } from "./browsers";
 import { CommitTower, DeskTop, Lamp, MiniCityView, Mug, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
 import { GAUGE_COLUMN_W } from "./gauges";
@@ -24,6 +28,8 @@ import { BOARD, miniCities } from "./world";
  * props); its own canvas, room lighting and camera, no sky or planet.
  */
 const GUESTS_KEY = "admin.agents3d.desk.guests";
+/** The default camera; Escape with nothing open flies back to it (resetCam). */
+const HOME = { pos: new THREE.Vector3(0, 25, 45), target: new THREE.Vector3(0, 6, -6) };
 
 export default function DeskScene(props: SceneProps) {
   const { bloom, onSelect } = props;
@@ -39,13 +45,16 @@ export default function DeskScene(props: SceneProps) {
   const [board, setBoard] = useState<BoardFocus>({ n: 0, col: -1 });
   const onBoard = (col: number) => setBoard((b) => ({ n: b.n + 1, col }));
   // Esc (or a click on the background) from a column close-up goes back to the whole board.
+  // Captured and marked as used, so the view's own Escape (back to the default camera) waits for the next press.
   useEffect(() => {
     if (board.col < 0) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setBoard((b) => ({ n: b.n + 1, col: -1 }));
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      setBoard((b) => ({ n: b.n + 1, col: -1 }));
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [board.col]);
   return (
     <div className="relative h-full w-full">
@@ -55,7 +64,7 @@ export default function DeskScene(props: SceneProps) {
         key={`${props.frameKey ?? ""}:${bloom ? "bloom" : "aa"}`}
         frameloop="demand"
         shadows={{ type: THREE.PCFShadowMap }}
-        camera={{ position: [0, 25, 45], fov: 40, near: 0.1, far: 400 }}
+        camera={{ position: HOME.pos.toArray(), fov: 40, near: 0.1, far: 400 }}
         gl={{ antialias: !bloom }}
         dpr={[1, 1.5]}
         scene={{ environmentIntensity: 0.3 }}
@@ -84,7 +93,7 @@ export default function DeskScene(props: SceneProps) {
         />
         <directionalLight position={[8, 6, -10]} intensity={0.8} color="#bcd4ff" />
         <Stage {...props} board={board} onBoard={onBoard} guests={guests} />
-        <OrbitControls makeDefault target={[0, 6, -6]} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
+        <OrbitControls makeDefault target={HOME.target.toArray()} enableDamping maxPolarAngle={Math.PI / 2.1} minDistance={5} maxDistance={90} />
         {bloom && (
           <EffectComposer multisampling={4}>
             <Bloom mipmapBlur luminanceThreshold={0.9} luminanceSmoothing={0.2} intensity={0.9} resolutionScale={0.5} />
@@ -115,9 +124,10 @@ function Room() {
 }
 
 type BoardFocus = { n: number; col: number };
+const NO_BROWSERS: BrowserSession[] = [];
 
 function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) => void; guests: boolean }) {
-  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, linger, board, onBoard, guests } = props;
+  const { tl, snap, clock, layout, reduced, selected, onSelect, onAgentClick, followKey, flyTo, resetCam, linger, board, onBoard, guests } = props;
   const positions = useRef<Positions>(new Map());
   // A still scene would stay blank after a resize (it clears the canvas): redraw once.
   useFrameOnResize();
@@ -149,6 +159,8 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
     .join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cast = useMemo(() => castAt(tl, snap.t, snap.live, guests), [tl, castKey]);
+  // Who has a browser open (polled every 5 s, live only: a replay shows the past, browsers are now).
+  const browsers = useBrowsers(snap.live);
   return (
     <>
       <DeskTop />
@@ -167,6 +179,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         onBoardClick={() => onBoard(-1)}
         onColumnClick={onBoard}
       />
+      <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} colorOf={colorOf} />
       <DeskLinks cast={cast} snap={snap} clock={clock} layout={layout} mini={mini} linger={linger} colorOf={colorOf} reduced={reduced} />
       <DeskAgents
         cast={cast}
@@ -187,7 +200,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         positions={positions}
       />
       <Follow positions={positions} followKey={followKey} reduced={reduced} />
-      <FlyTo flyTo={flyTo} board={board} positions={positions} reduced={reduced} />
+      <FlyTo flyTo={flyTo} resetCam={resetCam} board={board} positions={positions} reduced={reduced} />
     </>
   );
 }
@@ -195,14 +208,16 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
 const FLY_MS = 800;
 const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
 
-/** Eases the camera to an agent (close enough to see what it's acting out), or to the whiteboard. */
+/** Eases the camera to an agent (close enough to see what it's acting out), to the whiteboard, or home. */
 function FlyTo({
   flyTo,
+  resetCam,
   board,
   positions,
   reduced,
 }: {
   flyTo?: SceneProps["flyTo"];
+  resetCam?: number;
   board: BoardFocus;
   positions: React.RefObject<Positions>;
   reduced: boolean;
@@ -242,6 +257,13 @@ function FlyTo({
     // Only a new flight (n) starts this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo?.n, controls]);
+
+  // Each new value (Escape with nothing open) flies back to the default camera.
+  useEffect(() => {
+    if (resetCam) start(HOME.pos, HOME.target);
+    // Only a new request starts this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetCam, controls]);
 
   useEffect(() => {
     if (!board.n) return;
