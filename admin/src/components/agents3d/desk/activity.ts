@@ -121,6 +121,8 @@ export function beatAt(beats: Beat[], t: number): { beat: Beat; k: number } | nu
 
 /** `wait`: live, the session waits for its user (a permission prompt or a question). */
 export type Doing = "type" | "read" | "run" | "think" | "idle" | "nap" | "wait";
+/** What a wait is for: an answer to a question (AskUserQuestion, or a plain question ending its turn) or the user's OK on a permission prompt. */
+export type WaitFor = "question" | "permission";
 
 /** Tool activity within this window decides what an agent is doing. */
 const WINDOW_MS = 60_000;
@@ -137,7 +139,7 @@ export const SLEEP_AFTER_MS = 30_000;
  */
 export function asleepAt(a: TLAgent, t: number, live: boolean): boolean {
   if (a.node.guest || !a.node.live) return false;
-  if (live && (a.node.status === "busy" || a.node.status === "waiting")) return false;
+  if (live && (a.node.status === "busy" || a.node.status === "waiting" || a.node.asking)) return false;
   const i = lastBefore(a.events, t);
   return i < 0 || t - a.events[i].ms > SLEEP_AFTER_MS;
 }
@@ -147,16 +149,20 @@ export function doingAt(
   a: TLAgent,
   t: number,
   live: boolean,
-): { doing: Doing; asleep: boolean; tool: string | null; repo: string | null; path: string | null } {
+): { doing: Doing; asleep: boolean; tool: string | null; repo: string | null; path: string | null; waitFor: WaitFor | null } {
   const i = lastBefore(a.events, t);
   const last = i >= 0 ? a.events[i] : null;
-  // The status says what it waits on only as "its user": no peer (say Alice) is named.
-  if (live && a.node.status === "waiting") return { doing: "wait", asleep: false, tool: last?.tool ?? null, repo: null, path: null };
-  if (asleepAt(a, t, live)) return { doing: "nap", asleep: true, tool: null, repo: null, path: null };
+  // The status says what it waits on only as "its user": no peer (say Alice) is named. Its last call
+  // tells a question (AskUserQuestion) from a permission prompt (any other tool).
+  if (live && a.node.status === "waiting")
+    return { doing: "wait", asleep: false, tool: last?.tool ?? null, repo: null, path: null, waitFor: last?.tool === "AskUserQuestion" ? "question" : "permission" };
+  // Its turn ended asking the user in plain words, and it sits at its prompt (Alex's node.asking).
+  if (live && a.node.asking && a.node.status !== "busy") return { doing: "wait", asleep: false, tool: last?.tool ?? null, repo: null, path: null, waitFor: "question" };
+  if (asleepAt(a, t, live)) return { doing: "nap", asleep: true, tool: null, repo: null, path: null, waitFor: null };
   const since = last ? t - last.ms : Infinity;
   if (since > IDLE_MS) {
-    if (live && a.node.status === "busy") return { doing: "think", asleep: false, tool: null, repo: null, path: null };
-    return { doing: since > NAP_MS ? "nap" : "idle", asleep: false, tool: null, repo: null, path: null };
+    if (live && a.node.status === "busy") return { doing: "think", asleep: false, tool: null, repo: null, path: null, waitFor: null };
+    return { doing: since > NAP_MS ? "nap" : "idle", asleep: false, tool: null, repo: null, path: null, waitFor: null };
   }
   const score = { type: 0, read: 0, run: 0, think: 0 };
   let repo: string | null = null;
@@ -176,21 +182,18 @@ export function doingAt(
     }
   }
   const doing = (Object.keys(score) as (keyof typeof score)[]).reduce((x, y) => (score[y] > score[x] ? y : x), "think");
-  return { doing: score[doing] > 0 ? doing : "think", asleep: false, tool: last?.tool ?? null, repo, path };
-}
-
-/** The sign over an agent's head: "?" while it waits for its user or is blocked, "z z Z" while it naps. */
-export function headCue(doing: Doing | undefined, beat: BeatKind | null | undefined, napping: boolean): string | null {
-  if (beat === "blocked" || (doing === "wait" && !beat)) return "?";
-  return napping && !beat ? "z z Z" : null;
+  return { doing: score[doing] > 0 ? doing : "think", asleep: false, tool: last?.tool ?? null, repo, path, waitFor: null };
 }
 
 /**
- * Waiting on a question to its user (its last call is AskUserQuestion), not on a
- * permission prompt (any other last call). A plain question at the end of a turn
- * isn't a wait at all (the session goes idle), so it can't be told from the data.
+ * The sign over an agent's head: "?" while it waits on its user's answer or is
+ * blocked, "!" while it waits on their OK (a permission prompt), "z z Z" while it naps.
  */
-export const asksUser = (doing: Doing, tool: string | null) => doing === "wait" && tool === "AskUserQuestion";
+export function headCue(doing: Doing | undefined, beat: BeatKind | null | undefined, napping: boolean, waitFor: WaitFor | null = null): string | null {
+  if (beat === "blocked") return "?";
+  if (doing === "wait" && !beat) return waitFor === "permission" ? "!" : "?";
+  return napping && !beat ? "z z Z" : null;
+}
 
 /** A wave to its user lasts this long (real ms). */
 export const WAVE_MS = 1500;
@@ -206,7 +209,7 @@ function waveRand(seed: number, n: number): number {
 }
 
 /**
- * An agent waiting on its user's answer waves: at once when the wait starts
+ * An agent waiting on its user (an answer or an OK) waves: at once when the wait starts
  * (`since`, real ms), then again every 6–8 s (random per agent, repeatable),
  * WAVE_MS each, until it acts (the caller stops asking). On the wall clock.
  * `inMs`: real ms until this changes (the wave ends or the next one starts),

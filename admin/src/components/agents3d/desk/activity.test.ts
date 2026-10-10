@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { TLAgent } from "@/lib/agents3d-timeline";
 import type { CommsNode } from "@/lib/claude-comms-parse";
 
-import { asksUser, asleepAt, doingAt, gazeAt, headCue, SLEEP_AFTER_MS, WAVE_MS, waveAt } from "./activity";
+import { asleepAt, doingAt, gazeAt, headCue, SLEEP_AFTER_MS, WAVE_MS, waveAt } from "./activity";
 import { idlePose } from "./poses";
 
 const T0 = 1_700_000_000_000;
@@ -142,20 +142,39 @@ describe("waving to the user while waiting", () => {
   });
 });
 
-describe("question or permission prompt", () => {
-  it("waves only for a question (AskUserQuestion as the last call while waiting)", () => {
-    assert.equal(asksUser("wait", "AskUserQuestion"), true);
-    assert.equal(asksUser("wait", "Bash"), false);
-    assert.equal(asksUser("wait", null), false);
-    assert.equal(asksUser("idle", "AskUserQuestion"), false);
+describe("asking for the user's attention (T111)", () => {
+  /** Tom with his last call `tool` 5 s ago, and the node's status / asking. */
+  const tom = (tool: string, node: Partial<CommsNode>) => {
+    const a = agent([T0 - 5 * S], node);
+    a.events[0] = { ...a.events[0], tool };
+    return a;
+  };
+  it("(a) a question through AskUserQuestion: waits, looks at the camera, \"?\"", () => {
+    const d = doingAt(tom("AskUserQuestion", { status: "waiting" }), T0, true);
+    assert.deepEqual([d.doing, d.waitFor], ["wait", "question"]);
+    assert.equal(gazeAt(d.doing), "camera");
+    assert.equal(headCue(d.doing, null, false, d.waitFor), "?");
   });
-  it("the wait's last call comes through doingAt, and acting ends it", () => {
-    const a = agent([T0 - 5 * S]);
-    a.events[0] = { ...a.events[0], tool: "AskUserQuestion" };
-    const waiting = { ...a, node: { ...a.node, status: "waiting" as const } };
-    const d = doingAt(waiting, T0, true);
-    assert.equal(asksUser(d.doing, d.tool), true);
-    const acted = doingAt({ ...waiting, node: { ...waiting.node, status: "busy" as const } }, T0, true);
-    assert.equal(asksUser(acted.doing, acted.tool), false);
+  it("(b) a plain question ending its turn (node.asking): the same, and it doesn't fall asleep", () => {
+    const a = tom("Bash", { status: "idle", asking: new Date(T0 - 60 * S).toISOString() });
+    const d = doingAt(a, T0 + 10 * 60 * S, true);
+    assert.deepEqual([d.doing, d.waitFor, d.asleep], ["wait", "question", false]);
+    assert.equal(asleepAt(a, T0 + 10 * 60 * S, true), false);
+    assert.equal(headCue(d.doing, null, false, d.waitFor), "?");
+  });
+  it("(c) a permission prompt (waiting, any other last call): waits and looks too, with \"!\"", () => {
+    const d = doingAt(tom("Bash", { status: "waiting" }), T0, true);
+    assert.deepEqual([d.doing, d.waitFor], ["wait", "permission"]);
+    assert.equal(gazeAt(d.doing), "camera");
+    assert.equal(headCue(d.doing, null, false, d.waitFor), "!");
+  });
+  it("acting ends it at once; replay shows none of it", () => {
+    for (const node of [{ status: "busy" as const }, { status: "busy" as const, asking: new Date(T0).toISOString() }]) {
+      const d = doingAt(tom("AskUserQuestion", node), T0, true);
+      assert.equal(d.doing === "wait", false);
+      assert.equal(d.waitFor, null);
+    }
+    assert.equal(doingAt(tom("Bash", { status: "waiting" }), T0, false).waitFor, null);
+    assert.equal(doingAt(tom("Bash", { status: "idle", asking: null }), T0, true).waitFor, null);
   });
 });

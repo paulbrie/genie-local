@@ -13,7 +13,7 @@ import { useStableHandler, useWantFrame } from "../frame-governor";
 import { OverlayLabel } from "../overlay-label";
 import type { Positions } from "../parts";
 import type { Selection } from "../scene";
-import { asksUser, type Beat, beatAt, type Doing, doingAt, gazeAt, headCue, waveAt } from "./activity";
+import { type Beat, beatAt, type Doing, doingAt, gazeAt, headCue, type WaitFor, waveAt } from "./activity";
 import { type Avatar, disposeAvatar, makeAvatar } from "./avatar";
 import { lookFor } from "./identity";
 import { applyPose, DANCES, idlePose, isDance, type Pose, THINK_POSES } from "./poses";
@@ -151,7 +151,7 @@ const EYE_REACH = { x: 0.035, y: 0.028 };
 /** The head's turn and tilt for the eyes' full range, when it follows a long hold (radians, times HEAD_SHARE). */
 const HEAD_REACH = { yaw: 0.9, pitch: 0.7 };
 
-export type Activity = { doing: Doing; repo: string | null; path: string | null; beat: Beat | null };
+export type Activity = { doing: Doing; repo: string | null; path: string | null; beat: Beat | null; waitFor: WaitFor | null };
 
 /** What each agent is acting out at snapshot time (for labels and the city). */
 export function activitiesAt(tl: Timeline, beats: Map<string, Beat[]>, t: number, live: boolean): Map<string, Activity> {
@@ -159,7 +159,7 @@ export function activitiesAt(tl: Timeline, beats: Map<string, Beat[]>, t: number
   for (const a of tl.agents) {
     const d = doingAt(a, t, live);
     const still = d.asleep || d.doing === "wait";
-    out.set(a.key, { doing: d.doing, repo: d.repo, path: d.path, beat: still ? null : (beatAt(beats.get(a.key) ?? [], t)?.beat ?? null) });
+    out.set(a.key, { doing: d.doing, repo: d.repo, path: d.path, beat: still ? null : (beatAt(beats.get(a.key) ?? [], t)?.beat ?? null), waitFor: d.waitFor });
   }
   return out;
 }
@@ -503,8 +503,8 @@ export function DeskAgents({
             l.thinkPose = THINK_POSES[hash(`${l.key}@${Math.floor(l.doingSince)}`) % THINK_POSES.length];
           }
           pose = l.thinkPose;
-        } else if (asksUser(l.doing, d.tool)) {
-          // Asking its user a question: a wave now and then (waveAt), still in between; a permission prompt just waits.
+        } else if (l.doing === "wait") {
+          // Waiting on its user (a question or a permission prompt): a wave now and then (waveAt), still in between.
           const w = waveAt(l.seed, l.doingSince, real);
           pose = w.waving ? "hail" : "wait";
           nextMs = Math.min(nextMs, w.inMs + 1);
@@ -746,9 +746,11 @@ function DeskLabel({
     : idle
       ? (IDLE_TEXT[idle] ?? "")
       : act
-      ? `${DOING_TEXT[act.doing]}${file && (act.doing === "type" || act.doing === "read") ? ` ${file}` : ""}`
+      ? act.waitFor === "permission"
+        ? "needs your OK"
+        : `${DOING_TEXT[act.doing]}${file && (act.doing === "type" || act.doing === "read") ? ` ${file}` : ""}`
       : "";
-  const bubble = headCue(act?.doing, beat?.kind, idle === "nap");
+  const bubble = headCue(act?.doing, beat?.kind, idle === "nap", act?.waitFor ?? null);
   const task = snapAgent?.task;
   return (
     <div style={{ transform: "translateY(-50%)" }} className="flex flex-col items-center gap-0.5">
@@ -761,7 +763,7 @@ function DeskLabel({
       {/* Always rendered (hidden when empty), so the label keeps one shape as it changes. */}
       <div
         className={`rounded-full bg-white px-1.5 text-[11px] font-bold leading-4 shadow ${bubble ? "" : "invisible"} ${
-          bubble === "?" ? "text-red-500" : "text-slate-500"
+          bubble === "?" ? "text-red-500" : bubble === "!" ? "text-amber-500" : "text-slate-500"
         }`}
       >
         {bubble ?? "·"}
