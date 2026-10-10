@@ -66,7 +66,8 @@ export const CHAIR_R = TABLE.r + AVATAR_SCALE * 0.32 + AVATAR_SCALE * (0.2 + 0.5
 /** Free floor for walking: a ring around the chairs, clear to the whiteboard; and the strip in front of the board. */
 export const WALK = { r0: CHAIR_R + 0.5, r1: CHAIR_R + 3.5 };
 /** Where the bookshelf stands (T95): on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
-export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 1.4 - 9.8 / 2, z: BOARD.z + 1, w: 9.8, d: 2.6 };
+// (well left of the board and a little forward: from the default camera it stands clear of the back-left seats, T133)
+export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 10.5 - 9.8 / 2, z: BOARD.z + 3, w: 9.8, d: 2.6 };
 /**
  * The bookshelf (T133: 1.4× T95's): a shelf per project on the table (shelf.ts), `gap` the room between two
  * boards; it grows taller with the projects, up to MAX_SHELVES, the top one still in reach of a person.
