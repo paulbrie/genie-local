@@ -16,6 +16,7 @@ import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
 import { DeskBrowsers } from "./browsers";
+import { DeskPlanes } from "./paper-planes";
 import { Bookshelf } from "./bookshelf";
 import { DeskTop, Lamp, MiniCityView, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
@@ -227,6 +228,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         walker={walker}
         bookColor={bookColor}
       />
+      <DeskPlanes cast={cast} messages={tl.messages} eff={(id, ms) => seen.eff(id, ms, live)} clock={clock} colorOf={colorOf} reduced={reduced} />
       <Follow positions={positions} followKey={followKey} reduced={reduced} />
       <FlyTo flyTo={flyTo} resetCam={resetCam} board={board} positions={positions} reduced={reduced} />
     </>

@@ -30,8 +30,8 @@ const S = AVATAR_SCALE;
 const HEAD_Y = SEAT_Y + 2.45 * S;
 /** Thrown things (messages, flags, commit blocks) are in flight over this part of a beat. */
 const THROW = { from: 0.15, to: 0.6 };
-/** Messages also fly as envelopes, alongside the speech bubbles. */
-const THROW_MESSAGES = true;
+/** Messages fly as paper planes (paper-planes.tsx, T106), not as thrown envelopes. */
+const THROW_MESSAGES = false;
 /** A pose change blends over this long (real ms). */
 const BLEND_MS = 500;
 /**
@@ -647,10 +647,8 @@ export function DeskAgents({
       l.cloud.update(secs + (l.seed % 100) / 10, dt, reduced);
       if (l.cloud.fading) busy = true;
       l.cloud.group.rotation.y = Math.atan2(camera.position.x - l.seat.x, camera.position.z - l.seat.z);
-      if (beat?.kind === "carry") {
-        l.avatar.props.envelopeMat.color.set(beat.color);
-        l.avatar.props.envelopeMat.emissive.set(beat.color);
-      }
+      // A message's throw: the paper plane leaves the hand (paper-planes.tsx), so no envelope in it.
+      if (beat?.kind === "carry" && !THROW_MESSAGES) l.avatar.props.envelope.visible = false;
 
       // The laptop screen: code scrolling in the agent's colour while it types.
       const sc = l.doing === "type" && !beat ? colorOf(l.key) : SCREEN_COLOR[l.doing];
