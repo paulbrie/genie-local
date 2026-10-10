@@ -73,8 +73,8 @@ export function Lightning({
   const seenEv = useSeen();
   const seenMsg = useSeen();
   useEffect(() => {
-    seenEv.mark(tl.agents.flatMap((a) => a.events.map((e) => keyOf(e, (x) => callId(x, a.key)))));
-    seenEv.mark(tl.edits.map((e) => keyOf(e, editId)));
+    // One call: the first one counts as "already there at load"; a second would make every past edit fresh.
+    seenEv.mark([...tl.agents.flatMap((a) => a.events.map((e) => keyOf(e, (x) => callId(x, a.key)))), ...tl.edits.map((e) => keyOf(e, editId))]);
     seenMsg.mark(tl.messages.map((m) => m.id));
   }, [tl, seenEv, seenMsg]);
 

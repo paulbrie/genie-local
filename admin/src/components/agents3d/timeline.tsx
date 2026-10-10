@@ -7,11 +7,11 @@ import { BUSY_MS, lastBefore, TASK_COLORS, type Snapshot, type Timeline } from "
 import { TAG_COLORS } from "@/lib/comms-colors";
 
 import type { Clock } from "./clock";
+import { busyTop, labelInk, laneTop, packLanes, rowHeight, rowTops, TASK_LANE_H } from "./timeline-layout";
 import type { Selection } from "./scene";
 
 const HEAD_W = 168; // transport + track headers
 const RULER_H = 22;
-const ROW_H = 20;
 const PAD = 4;
 const ZOOM_H = 20;
 const MIN_SPAN = 2 * 60_000;
@@ -121,8 +121,6 @@ export function EditorTimeline({
   }, []);
 
   const agents = tl.agents;
-  // The extra row at the bottom holds the zoom slider under the track headers.
-  const height = collapsed ? RULER_H + 6 : RULER_H + PAD + agents.length * ROW_H + PAD + ZOOM_H;
   const winStart = Math.max(tl.start, tl.end - winSpan);
 
   // Static per-timeline data: task clips by worker.
@@ -142,6 +140,22 @@ export function EditorTimeline({
     }
     return out;
   }, [tl]);
+
+  // Track layout (timeline-layout.ts): each agent's overlapping clips in stacked lanes, rows as tall as they need.
+  // Only clips that reach into the window take lanes (the view never goes before its start), so a row
+  // isn't tall for tasks long gone, and panning or zooming inside the window never changes the layout.
+  const layout = useMemo(() => {
+    const laneOf = new Map<string, number>();
+    const heights = agents.map((ag) => {
+      const clips = (taskClips.get(ag.key) ?? []).filter((c) => (c.segs[c.segs.length - 1].e ?? Infinity) >= winStart);
+      const { lane, lanes } = packLanes(clips.map((c) => ({ s: c.segs[0].s, e: c.segs[c.segs.length - 1].e })));
+      clips.forEach((c, i) => laneOf.set(c.key, lane[i]));
+      return rowHeight(lanes);
+    });
+    return { laneOf, heights, tops: rowTops(heights, RULER_H + PAD) };
+  }, [agents, taskClips, winStart]);
+  // The extra row at the bottom holds the zoom slider under the track headers.
+  const height = collapsed ? RULER_H + 6 : RULER_H + PAD + layout.heights.reduce((a, h) => a + h, 0) + PAD + ZOOM_H;
 
   // Draw loop.
   useEffect(() => {
@@ -232,11 +246,13 @@ export function EditorTimeline({
 
       if (!collapsed) {
         agents.forEach((ag, row) => {
-          const y = RULER_H + PAD + row * ROW_H;
+          const y = layout.tops[row];
+          const rowH = layout.heights[row];
           if (row % 2) {
             ctx.fillStyle = "rgba(255,255,255,0.02)";
-            ctx.fillRect(0, y, width, ROW_H);
+            ctx.fillRect(0, y, width, rowH);
           }
+          const by = busyTop(y, rowH);
           // Busy "waveform" along the bottom of the row.
           const gap = Math.max(BUSY_MS, msPerPx * 3);
           for (const r of busyRuns(ag.events, a, b, gap)) {
@@ -245,13 +261,15 @@ export function EditorTimeline({
             const dens = Math.min(1, r.n / Math.max(1, (r.e - r.s) / 60_000 + 1) / 6);
             ctx.globalAlpha = 0.35 + dens * 0.55;
             ctx.fillStyle = ag.color;
-            roundRect(ctx, x0, y + ROW_H - 7, x1 - x0, 5, 2);
+            roundRect(ctx, x0, by, x1 - x0, 5, 2);
             ctx.fill();
             ctx.globalAlpha = 1;
-            H.push({ x0, x1, y0: y + ROW_H - 8, y1: y + ROW_H, kind: "agent", key: ag.key, text: `${ag.name} · busy · ${r.n} tool calls` });
+            H.push({ x0, x1, y0: by - 1, y1: by + 7, kind: "agent", key: ag.key, text: `${ag.name} · busy · ${r.n} tool calls` });
           }
           // Task clips.
           for (const clip of taskClips.get(ag.key) ?? []) {
+            // Its lane: overlapping clips stack instead of drawing over each other.
+            const ly = laneTop(y, layout.laneOf.get(clip.key) ?? 0);
             const x0c = X(clip.segs[0].s);
             const lastSeg = clip.segs[clip.segs.length - 1];
             const x1c = X(lastSeg.e ?? Math.max(t, lastSeg.s));
@@ -263,7 +281,7 @@ export function EditorTimeline({
               const col = TASK_COLORS[sg.state as keyof typeof TASK_COLORS] ?? "#64748b";
               ctx.globalAlpha = clip.guessed ? 0.35 : sg.state === "dispatched" ? 0.45 : 0.8;
               ctx.fillStyle = col;
-              roundRect(ctx, sx, y + 2, ex - sx, ROW_H - 11, 3);
+              roundRect(ctx, sx, ly, ex - sx, TASK_LANE_H, 4);
               ctx.fill();
               if (sg.state === "blocked" && pattern.current) {
                 ctx.globalAlpha = 0.9;
@@ -273,24 +291,31 @@ export function EditorTimeline({
               ctx.globalAlpha = 1;
             }
             ctx.strokeStyle = "rgba(0,0,0,0.5)";
-            roundRect(ctx, x0c, y + 2, x1c - x0c, ROW_H - 11, 3);
+            roundRect(ctx, x0c, ly, x1c - x0c, TASK_LANE_H, 4);
             ctx.stroke();
+            // The label inside the bar: centred, padded, cut with an ellipsis, in an ink that reads on the
+            // colour under it (the segment where the label starts).
             const label = `${clip.id ?? "·"} ${clip.title}`;
-            const w = x1c - Math.max(x0c, 0) - 6;
-            if (w > 18) {
+            const lx = Math.max(x0c, 0) + 6;
+            const w = x1c - lx - 6;
+            if (w > 14) {
+              const under = clip.segs.find((sg) => X(sg.e ?? Math.max(t, sg.s)) > lx) ?? clip.segs[0];
+              const alpha = clip.guessed ? 0.35 : under.state === "dispatched" ? 0.45 : 0.8;
               ctx.save();
               ctx.beginPath();
-              ctx.rect(Math.max(x0c, 0) + 3, y + 2, w, ROW_H - 11);
+              ctx.rect(lx, ly, w, TASK_LANE_H);
               ctx.clip();
-              ctx.fillStyle = "rgba(255,255,255,0.92)";
-              ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+              ctx.fillStyle = labelInk(TASK_COLORS[under.state as keyof typeof TASK_COLORS] ?? "#64748b", alpha);
+              ctx.font = "500 11px ui-sans-serif, system-ui, sans-serif";
               let text = label;
-              while (text.length > 2 && ctx.measureText(text).width > w) text = text.slice(0, -2);
-              if (text !== label) text = `${text.slice(0, -1)}…`;
-              ctx.fillText(text, Math.max(x0c, 0) + 4, y + 2 + (ROW_H - 11) / 2);
+              if (ctx.measureText(text).width > w) {
+                while (text.length > 1 && ctx.measureText(`${text}…`).width > w) text = text.slice(0, -1);
+                text = `${text.trimEnd()}…`;
+              }
+              ctx.fillText(text, lx, ly + TASK_LANE_H / 2 + 0.5);
               ctx.restore();
             }
-            H.push({ x0: x0c, x1: x1c, y0: y + 2, y1: y + ROW_H - 9, kind: "task", key: clip.key, text: label });
+            H.push({ x0: x0c, x1: x1c, y0: ly, y1: ly + TASK_LANE_H, kind: "task", key: clip.key, text: label });
           }
         });
 
@@ -301,7 +326,7 @@ export function EditorTimeline({
           const row = rowOf.get(m.from);
           if (row === undefined) continue;
           const x = X(m.ms);
-          const y = RULER_H + PAD + row * ROW_H;
+          const y = layout.tops[row];
           ctx.fillStyle = m.color;
           ctx.fillRect(Math.round(x) - 1, y, 2, 6);
           H.push({ x0: x - 3, x1: x + 3, y0: y - 1, y1: y + 7, kind: "message", id: m.id, text: `${tl.byKey.get(m.from)?.name} → ${tl.byKey.get(m.to)?.name}: ${m.label}` });
@@ -313,7 +338,8 @@ export function EditorTimeline({
             const row = rowOf.get(cm.node);
             if (row === undefined) continue;
             const x = X(ms);
-            const y = RULER_H + PAD + row * ROW_H + ROW_H / 2 - 3;
+            // on the busy band, under the task lanes
+            const y = busyTop(layout.tops[row], layout.heights[row]) + 2;
             ctx.fillStyle = pushed ? TAG_COLORS.PUSHED : TAG_COLORS.COMMIT;
             ctx.beginPath();
             ctx.moveTo(x, y - 4);
@@ -361,7 +387,7 @@ export function EditorTimeline({
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [tl, clock, width, height, span, winStart, collapsed, reduced, taskClips, agents]);
+  }, [tl, clock, width, height, span, winStart, collapsed, reduced, taskClips, agents, layout]);
 
   const viewRange = useRef({ a: 0, b: 1 });
   const msAt = (x: number) => {
@@ -420,7 +446,8 @@ export function EditorTimeline({
   const btn = "grid size-7 place-items-center rounded hover:bg-white/10 disabled:opacity-40";
   const live = clock.live;
   return (
-    <div ref={wrap} className="relative flex select-none overflow-hidden rounded-md border border-white/10 bg-[#0b0f17] text-[11px] text-slate-300 shadow-lg">
+    // (taller than 45% of the screen with many agents: the headers and the canvas scroll together)
+    <div ref={wrap} className="relative flex max-h-[45vh] select-none overflow-x-hidden overflow-y-auto rounded-md border border-white/10 bg-[#0b0f17] text-[11px] text-slate-300 shadow-lg">
       <div className="flex shrink-0 flex-col border-r border-white/10" style={{ width: HEAD_W }}>
         <div className="flex items-center gap-0.5 px-1" style={{ height: RULER_H + (collapsed ? 6 : PAD) }}>
           <button type="button" className={btn} title="Window start" onClick={() => { view.current.follow = true; clock.seek(winStart); }}>
@@ -459,7 +486,7 @@ export function EditorTimeline({
           </button>
         </div>
         {!collapsed &&
-          agents.map((ag) => {
+          agents.map((ag, row) => {
             const s = snap.agents.get(ag.key);
             return (
               <button
@@ -468,7 +495,8 @@ export function EditorTimeline({
                 onClick={() => onAgentClick(ag.key)}
                 title="Fly to this agent; click again to follow"
                 className="flex items-center gap-1.5 truncate px-2 text-left hover:bg-white/5"
-                style={{ height: ROW_H }}
+                // (as tall as its lanes on the canvas, so they line up)
+                style={{ height: layout.heights[row] }}
               >
                 <span className="size-2 shrink-0 rounded-sm" style={{ background: ag.color, boxShadow: s?.busy ? `0 0 6px ${ag.color}` : undefined }} />
                 <span className="truncate">{ag.name}</span>
