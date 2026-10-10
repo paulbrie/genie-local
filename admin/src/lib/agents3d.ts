@@ -8,13 +8,16 @@ import { promisify } from "node:util";
 
 import { getCommsModel, repoFor, type RepoInfo } from "@/lib/claude-comms";
 import type { Agents3DModel, AgentEvent, RepoLayout } from "@/lib/agents3d-types";
+import { inHiddenDir, withoutHiddenDirs } from "@/lib/hidden-dirs";
 
 /**
  * Data for the 3D agents views: the comms model, each session's tool calls
  * mapped onto repo-relative paths, and the layout (tracked files + sizes,
  * uncommitted files) of every repo the sessions work in. Paths outside a git
  * repo are dropped; tool inputs other than Edit/Write/Read file paths never
- * reach this module.
+ * reach this module. Files in hidden folders (.next/, src/.cache/…) are left
+ * out of the layouts unless asked for (lib/hidden-dirs.ts), before the
+ * MAX_FILES cap, so they never crowd out the rest.
  */
 
 const execFileAsync = promisify(execFile);
@@ -24,9 +27,11 @@ const MAX_FILES = 8000;
 const MAX_UNTRACKED = 400;
 const STATUS_TTL = 5_000;
 
-type LayoutCache = { head: string; files: RepoLayout["files"]; truncated: boolean };
+/** Every tracked file at HEAD (the cap is applied per request, after the hidden-folder filter). */
+type LayoutCache = { head: string; files: RepoLayout["files"] };
 const treeCache = new Map<string, LayoutCache>();
-const statusCache = new Map<string, { at: number; dirty: RepoLayout["dirty"]; untracked: RepoLayout["files"] }>();
+type StatusCache = { at: number; dirty: RepoLayout["dirty"]; untracked: RepoLayout["files"]; untrackedHidden: RepoLayout["files"] };
+const statusCache = new Map<string, StatusCache>();
 const dirRepo = new Map<string, RepoInfo | null>();
 
 async function repoOfFile(file: string): Promise<RepoInfo | null> {
@@ -53,7 +58,7 @@ async function trackedFiles(top: string): Promise<LayoutCache> {
   try {
     head = (await git(top, ["rev-parse", "HEAD"])).trim();
   } catch {
-    return { head: "", files: [], truncated: false };
+    return { head: "", files: [] };
   }
   const cached = treeCache.get(top);
   if (cached && cached.head === head) return cached;
@@ -72,16 +77,18 @@ async function trackedFiles(top: string): Promise<LayoutCache> {
     /* empty layout */
   }
   files.sort((a, b) => a.p.localeCompare(b.p));
-  const layout = { head, files: files.slice(0, MAX_FILES), truncated: files.length > MAX_FILES };
+  const layout = { head, files };
   treeCache.set(top, layout);
   return layout;
 }
 
-async function repoStatus(top: string): Promise<{ dirty: RepoLayout["dirty"]; untracked: RepoLayout["files"] }> {
+async function repoStatus(top: string): Promise<StatusCache> {
   const c = statusCache.get(top);
   if (c && Date.now() - c.at < STATUS_TTL) return c;
   const dirty: RepoLayout["dirty"] = [];
   const untracked: RepoLayout["files"] = [];
+  // (kept apart, each with its own cap, so an untracked hidden folder can't use up the shown files' share)
+  const untrackedHidden: RepoLayout["files"] = [];
   try {
     const out = await git(top, ["status", "--porcelain=v1", "-z", "-uall"]);
     const recs = out.split("\0");
@@ -95,7 +102,8 @@ async function repoStatus(top: string): Promise<{ dirty: RepoLayout["dirty"]; un
       try {
         const st = await fs.stat(path.join(top, p));
         dirty.push({ p, m: Math.round(st.mtimeMs) });
-        if (code === "??" && untracked.length < MAX_UNTRACKED) untracked.push({ p, s: st.size });
+        const list = inHiddenDir(p) ? untrackedHidden : untracked;
+        if (code === "??" && list.length < MAX_UNTRACKED) list.push({ p, s: st.size });
       } catch {
         dirty.push({ p, m: 0 }); // deleted
       }
@@ -103,12 +111,12 @@ async function repoStatus(top: string): Promise<{ dirty: RepoLayout["dirty"]; un
   } catch {
     /* not a repo any more */
   }
-  const entry = { at: Date.now(), dirty, untracked };
+  const entry = { at: Date.now(), dirty, untracked, untrackedHidden };
   statusCache.set(top, entry);
   return entry;
 }
 
-export async function getAgents3DModel(days: number): Promise<Agents3DModel> {
+export async function getAgents3DModel(days: number, { showHidden = false }: { showHidden?: boolean } = {}): Promise<Agents3DModel> {
   const comms = await getCommsModel(days, { activity: true });
   const { activity: rawActivity = {}, ...commsRest } = comms;
 
@@ -153,20 +161,22 @@ export async function getAgents3DModel(days: number): Promise<Agents3DModel> {
   const layouts: RepoLayout[] = [];
   for (const r of chosen) {
     const [tree, status] = await Promise.all([trackedFiles(r.top), repoStatus(r.top)]);
-    const known = new Set(tree.files.map((f) => f.p));
+    const tracked = withoutHiddenDirs(tree.files, showHidden);
+    const known = new Set(tracked.map((f) => f.p));
+    const untracked = showHidden ? [...status.untracked, ...status.untrackedHidden] : status.untracked;
     layouts.push({
       id: r.top,
       name: r.project ? (r.app ? `${r.project}/${r.app}` : r.project) : path.basename(r.top),
       project: r.project,
       app: r.app,
-      files: [...tree.files, ...status.untracked.filter((f) => !known.has(f.p))],
-      dirty: status.dirty,
-      truncated: tree.truncated,
+      files: [...tracked.slice(0, MAX_FILES), ...untracked.filter((f) => !known.has(f.p))],
+      dirty: withoutHiddenDirs(status.dirty, showHidden),
+      truncated: tracked.length > MAX_FILES,
     });
   }
 
   const reposVersion = createHash("sha1")
-    .update(layouts.map((l) => `${l.id}:${treeCache.get(l.id)?.head}:${l.dirty.map((d) => `${d.p}@${d.m}`).join(",")}`).join("|"))
+    .update((showHidden ? "dot|" : "") + layouts.map((l) => `${l.id}:${treeCache.get(l.id)?.head}:${l.dirty.map((d) => `${d.p}@${d.m}`).join(",")}`).join("|"))
     .digest("hex")
     .slice(0, 12);
 

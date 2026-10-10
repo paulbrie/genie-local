@@ -57,6 +57,7 @@ const WINDOWS = [
 ];
 const WINDOW_KEY = "admin.agents3d.window";
 const TERMINALS_KEY = "admin.agents3d.terminals";
+const HIDDEN_DIRS_KEY = "admin.agents3d.hiddenDirs";
 
 function subscribeReduced(f: () => void) {
   const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -88,6 +89,20 @@ export function Agents3DView() {
   useEffect(() => {
     if (localStorage.getItem(TERMINALS_KEY) === "0") setTerminals(false); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
+  // Folders starting with "." (.next, .claude…) in the cities: off by default; remembered, ?dot=1 deep-links it.
+  const [showHidden, setShowHidden] = useState(false);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get("dot");
+    if ((q ?? localStorage.getItem(HIDDEN_DIRS_KEY)) === "1") setShowHidden(true); // eslint-disable-line react-hooks/set-state-in-effect
+  }, []);
+  const pickShowHidden = (on: boolean) => {
+    setShowHidden(on);
+    localStorage.setItem(HIDDEN_DIRS_KEY, on ? "1" : "0");
+    const url = new URL(window.location.href);
+    if (on) url.searchParams.set("dot", "1");
+    else url.searchParams.delete("dot");
+    window.history.replaceState(window.history.state, "", url);
+  };
   useEffect(() => {
     const w = Number(localStorage.getItem(WINDOW_KEY));
     if (WINDOWS.some((x) => x.hours === w)) setHours(w); // eslint-disable-line react-hooks/set-state-in-effect
@@ -209,7 +224,7 @@ export function Agents3DView() {
   useEffect(() => hydrateCommsPrefs(), []);
   const tick = useSyncExternalStore(clock.subscribe, clock.getTick, () => 0);
 
-  const { model, error } = useAgents3D(hours, true);
+  const { model, error } = useAgents3D(hours, true, showHidden);
   const pickWindow = (h: number) => {
     setHours(h);
     localStorage.setItem(WINDOW_KEY, String(h));
@@ -312,6 +327,8 @@ export function Agents3DView() {
           projects={projects}
           hidden={hidden}
           onChange={(ids) => setCommsPrefs({ ...commsPrefs.getValue(), hiddenProjects: [...ids] })}
+          showHidden={showHidden}
+          onShowHidden={pickShowHidden}
         />
         <div className="flex rounded-md border">
           {WINDOWS.map((w) => (
@@ -890,15 +907,19 @@ function MsgList({ tl, list, onOpen }: { tl: Timeline; list: Timeline["messages"
   );
 }
 
-/** Toolbar dropdown: tick the projects to show; All / None, and "only" per row. */
+/** Toolbar dropdown: tick the projects to show; All / None, and "only" per row; hidden folders in the cities. */
 function ProjectsFilter({
   projects,
   hidden,
   onChange,
+  showHidden,
+  onShowHidden,
 }: {
   projects: ProjectInfo[];
   hidden: Set<string>;
   onChange: (hidden: Set<string>) => void;
+  showHidden: boolean;
+  onShowHidden: (on: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const shown = projects.filter((p) => !hidden.has(p.id)).length;
@@ -945,6 +966,13 @@ function ProjectsFilter({
                 </li>
               ))}
             </ul>
+            <label
+              className="flex cursor-pointer items-center gap-2 border-t px-2 py-1.5 text-xs"
+              title="Folders whose name starts with a dot (.next, .git, .claude, .turbo…), at any depth"
+            >
+              <input type="checkbox" checked={showHidden} onChange={(e) => onShowHidden(e.target.checked)} />
+              Show hidden folders <span className="text-muted-foreground">(.next, .claude…)</span>
+            </label>
           </div>
         </>
       )}

@@ -12,8 +12,9 @@ const noStore = { headers: { "Cache-Control": "no-store" } };
  * calls per session (tool name, time, repo-relative path for Edit/Write/Read)
  * and repo layouts.
  *
- * GET /api/agents3d?hours=8&v=<version>&rv=<reposVersion>&since=<iso>
+ * GET /api/agents3d?hours=8&v=<version>&rv=<reposVersion>&since=<iso>&dot=1
  *   hours  the time window, 1 h to 30 d (or days=, the older form)
+ *   dot    1: files in hidden folders (.next/, .claude/…) too; left out by default
  *   v      unchanged → `{ unchanged: true }`
  *   rv     repos unchanged → `repos: null`
  *   since  only tool calls at or after this time (`partial: true`)
@@ -22,7 +23,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const hours = Number(searchParams.get("hours")) || (Number(searchParams.get("days")) || 1) * 24;
   const days = Math.min(Math.max(hours, 1), 30 * 24) / 24;
-  const model = await getAgents3DModel(days);
+  const model = await getAgents3DModel(days, { showHidden: searchParams.get("dot") === "1" });
   if (searchParams.get("v") === model.version)
     return NextResponse.json({ unchanged: true, version: model.version } satisfies Agents3DResponse, noStore);
 
