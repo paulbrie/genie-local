@@ -1,0 +1,127 @@
+/**
+ * What the 2D Ops view shows (T163), from the same timeline and snapshot as the 3D views: each agent's card (what it
+ * does, on which file, its task, its last hour), the tasks' bars per agent, the latest messages, and which files are
+ * lit (touched lately, held, or claimed twice). Pure, and steady between the clock's ticks: anything that ages is
+ * counted on whole steps (10 s, 3 min), so a quiet team gives the same model, and the view draws nothing.
+ */
+import { fileKey, toolKind, type Snapshot, type Timeline, type ToolKind } from "@/lib/agents3d-timeline";
+import type { TaskState, TagName } from "@/lib/claude-comms-parse";
+import { doingAt, type Doing, type WaitFor } from "../desk/activity";
+
+/** how long a touched file stays lit */
+export const LIT_MS = 5 * 60_000;
+/** how long a message shows as an arc */
+export const MSG_MS = 2 * 60_000;
+/** the cards' activity bars: this many buckets of this long, ending now */
+export const SPARK_N = 20;
+export const SPARK_MS = 3 * 60_000;
+/** the swimlanes' span */
+export const LANE_MS = 60 * 60_000;
+/** what ages is counted on these steps (ms) */
+const STEP = 10_000;
+
+export type LitKind = "edit" | "read" | "held" | "clash";
+
+export type OpsAgent = {
+  key: string;
+  name: string;
+  color: string;
+  doing: Doing;
+  waitFor: WaitFor | null;
+  busy: boolean;
+  lastTool: string | null;
+  lastKind: ToolKind | null;
+  /** the file it works on (fileKey), if laid out */
+  focus: string | null;
+  /** repo-relative path of what it works on, for the card */
+  focusPath: string | null;
+  task: { id: string | null; title: string; state: TaskState } | null;
+  managing: number;
+  /** tool calls per SPARK_MS bucket, oldest first */
+  spark: number[];
+};
+export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
+export type OpsMsg = { id: string; from: string; to: string; tag: TagName | null; color: string; label: string; ms: number };
+export type OpsModel = {
+  /** the time shown, on a STEP */
+  t: number;
+  live: boolean;
+  agents: OpsAgent[];
+  /** each agent's task bars over the last LANE_MS (as worker) */
+  bars: Map<string, OpsBar[]>;
+  msgs: OpsMsg[];
+  /** fileKey → why it is lit, and by whom (the agent's key, for held files) */
+  lit: Map<string, { kind: LitKind; by: string | null }>;
+  counts: Record<TaskState, number>;
+};
+
+const RANK: Record<LitKind, number> = { read: 0, edit: 1, held: 2, clash: 3 };
+
+/** the Ops view's model at the snapshot's time (named agents only, as the Table seats them) */
+export function opsModel(tl: Timeline, snap: Snapshot): OpsModel {
+  const t = Math.floor(snap.t / STEP) * STEP;
+  const lit = new Map<string, { kind: LitKind; by: string | null }>();
+  const light = (k: string, kind: LitKind, by: string | null) => {
+    const cur = lit.get(k);
+    if (!cur || RANK[kind] > RANK[cur.kind]) lit.set(k, { kind, by });
+  };
+  const agents: OpsAgent[] = [];
+  const spark0 = Math.floor(snap.t / SPARK_MS) * SPARK_MS - (SPARK_N - 1) * SPARK_MS;
+  for (const a of tl.agents) {
+    if (a.node.guest) continue;
+    const s = snap.agents.get(a.key);
+    const d = doingAt(a, snap.t, snap.live);
+    const spark = new Array<number>(SPARK_N).fill(0);
+    for (let i = a.events.length - 1; i >= 0; i--) {
+      const e = a.events[i];
+      if (e.ms > snap.t) continue;
+      if (e.ms < spark0) break;
+      spark[Math.floor((e.ms - spark0) / SPARK_MS)]++;
+      if (t - e.ms < LIT_MS && e.repo && e.path) {
+        const k = toolKind(e.tool), fk = fileKey(e.repo, e.path);
+        if ((k === "edit" || k === "read") && tl.files.has(fk)) light(fk, k, a.key);
+      }
+    }
+    agents.push({
+      key: a.key,
+      name: a.name,
+      color: a.color,
+      doing: d.doing,
+      waitFor: d.waitFor,
+      busy: s?.busy ?? false,
+      lastTool: s?.lastTool ?? null,
+      lastKind: s?.lastTool ? toolKind(s.lastTool) : null,
+      focus: s?.focus ?? null,
+      focusPath: s?.focus ? s.focus.split("\n")[1] : d.path,
+      task: s?.task ? { id: s.task.id, title: s.task.title, state: s.task.state } : null,
+      managing: s?.managing ?? 0,
+      spark,
+    });
+  }
+  // (edits seen on disk, by whoever)
+  for (const e of tl.edits) if (e.ms <= snap.t && t - e.ms < LIT_MS && tl.files.has(e.fileKey)) light(e.fileKey, "edit", e.node);
+  for (const [k, by] of snap.holders) if (tl.files.has(k)) light(k, by.length > 1 ? "clash" : "held", by[0] ?? null);
+
+  const bars = new Map<string, OpsBar[]>();
+  for (const task of tl.tasks) {
+    if (task.guessed) continue;
+    const ev = task.events.filter((e) => e.ms <= snap.t);
+    if (!ev.length) continue;
+    const last = ev[ev.length - 1];
+    const end = last.state === "done" || last.state === "cancelled" ? last.ms : null;
+    if (end !== null && end < snap.t - LANE_MS) continue;
+    const list = bars.get(task.worker) ?? [];
+    list.push({ key: task.key, id: task.id, title: task.title, state: last.state, from: ev[0].ms, to: end });
+    bars.set(task.worker, list);
+  }
+  const counts: Record<TaskState, number> = { dispatched: 0, in_progress: 0, blocked: 0, done: 0, cancelled: 0 };
+  for (const x of snap.tasks) if (!x.guessed) counts[x.state]++;
+  const msgs = tl.messages
+    .filter((m) => m.ms <= snap.t && t - m.ms < MSG_MS)
+    .slice(-6)
+    .map((m) => ({ id: m.id, from: m.from, to: m.to, tag: m.tag, color: m.color, label: m.label, ms: m.ms }));
+  return { t, live: snap.live, agents, bars, msgs, lit, counts };
+}
+
+/** a short key of what the lit layer shows: the same key, nothing to draw again */
+export const litKey = (lit: OpsModel["lit"]) => [...lit].map(([k, v]) => `${k}=${v.kind}:${v.by ?? ""}`).sort().join("|");

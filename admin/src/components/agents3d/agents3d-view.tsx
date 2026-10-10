@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Armchair, Building2, ChevronDown, ChevronRight, Maximize2, Minimize2, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Armchair, Box, Building2, ChevronDown, ChevronRight, LayoutGrid, Maximize2, Minimize2, PanelRightClose, PanelRightOpen } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSubject } from "subjecto/react";
@@ -33,6 +33,8 @@ import { Clock } from "./clock";
 import { EditorTimeline } from "./timeline";
 import { escapeAction } from "./escape";
 import { useLowPower } from "./low-power";
+import { opsModel } from "./ops/model";
+import { OpsView } from "./ops/ops-view";
 import type { SceneProps, Selection } from "./scene";
 import { useAgents3D } from "./use-agents3d";
 import { type PaneView, usePanes } from "./use-panes";
@@ -46,6 +48,8 @@ const DeskScene = dynamic(() => import("./desk/desk-scene"), {
   loading: () => <div className="grid h-full place-items-center text-sm text-white/60">Loading the desk…</div>,
 });
 const MODE_KEY = "admin.agents3d.mode";
+/** 2D (the Ops view, the default: T163) or 3D (City / Table) */
+const VIEW_KEY = "admin.agents3d.view";
 const PANEL_KEY = "admin.agents3d.panel";
 const FOLDS_KEY = "admin.agents3d.folds";
 
@@ -122,6 +126,23 @@ export function Agents3DView() {
     const m = new URLSearchParams(window.location.search).get("mode") ?? localStorage.getItem(MODE_KEY);
     setMode(m === "desk" ? "desk" : "city"); // eslint-disable-line react-hooks/set-state-in-effect
   }, []);
+  // 2D (Ops: cards, swimlanes and the isometric map; cheap, the default) or 3D (City / Table): remembered;
+  // ?view=2d|3d deep-links it, and ?mode= alone asks for 3D.
+  const [view, setView] = useState<"2d" | "3d" | null>(null);
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const v = q.get("view") ?? (q.has("mode") ? "3d" : localStorage.getItem(VIEW_KEY));
+    setView(v === "3d" ? "3d" : "2d"); // eslint-disable-line react-hooks/set-state-in-effect
+  }, []);
+  const pickView = (v: "2d" | "3d") => {
+    setView(v);
+    localStorage.setItem(VIEW_KEY, v);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("view")) {
+      url.searchParams.set("view", v);
+      window.history.replaceState(window.history.state, "", url);
+    }
+  };
   const pickMode = (m: "city" | "desk") => {
     setMode(m);
     localStorage.setItem(MODE_KEY, m);
@@ -133,8 +154,10 @@ export function Agents3DView() {
     }
   };
   const modeRef = useRef(mode);
+  const viewRef = useRef(view);
   useEffect(() => {
     modeRef.current = mode;
+    viewRef.current = view;
   });
   // The side panel: collapsed to a rail, and which of its sections are folded.
   const [panelOpen, setPanelOpen] = useState(true);
@@ -215,7 +238,7 @@ export function Agents3DView() {
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         toggleRef.current();
-      } else if ((e.key === "t" || e.key === "T") && modeRef.current) {
+      } else if ((e.key === "t" || e.key === "T") && modeRef.current && viewRef.current === "3d") {
         e.preventDefault();
         pickModeRef.current(modeRef.current === "desk" ? "city" : "desk");
       } else if (e.key === "Escape") {
@@ -294,6 +317,9 @@ export function Agents3DView() {
     [tl, tick, clock],
   );
 
+  // The 2D view's model, from the same snapshot (T163)
+  const ops = useMemo(() => (tl && snap && view === "2d" ? opsModel(tl, snap) : null), [tl, snap, view]);
+
   const followKey = useMemo(() => {
     if (!snap || !tl) return null;
     const key =
@@ -358,6 +384,29 @@ export function Agents3DView() {
             </button>
           ))}
         </div>
+        <div className="flex rounded-md border" role="group" aria-label="2D or 3D">
+          {(
+            [
+              ["2d", "2D", LayoutGrid, "Ops: the agents' cards and tasks, the repos as an isometric map (light on the machine)"],
+              ["3d", "3D", Box, "The 3D City or Table"],
+            ] as const
+          ).map(([v, label, Icon, title]) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => pickView(v)}
+              aria-pressed={view === v}
+              title={title}
+              className={`flex items-center gap-1 px-2 py-1 text-xs ${view === v ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
+            >
+              <Icon className="size-3.5" aria-hidden />
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* (the camera's and the 3D drawing's controls: 3D only) */}
+        {view === "3d" && (
+        <>
         <div className="flex rounded-md border" role="group" aria-label="View (T)">
           {(
             [
@@ -410,6 +459,8 @@ export function Agents3DView() {
           <input type="checkbox" checked={lowPower} onChange={(e) => setLowPower(e.target.checked)} />
           Low power
         </label>
+        </>
+        )}
         <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Live tmux pane of each agent in its card (redacted)">
           <input
             type="checkbox"
@@ -421,6 +472,7 @@ export function Agents3DView() {
           />
           Terminals
         </label>
+        {view === "3d" && (
         <label className="flex items-center gap-1 text-xs text-muted-foreground" title="How long lightning lingers, fading, after an operation">
           Linger
           <input
@@ -439,6 +491,7 @@ export function Agents3DView() {
           />
           <span className="w-7 font-mono">{lingerS}s</span>
         </label>
+        )}
         <Link href="/comms" className="ml-auto text-xs text-muted-foreground underline underline-offset-2">
           2D view: Comms
         </Link>
@@ -482,7 +535,16 @@ export function Agents3DView() {
           }`}
         >
           {error && <p className="absolute top-2 left-2 z-10 text-xs text-destructive">Error: {error}</p>}
-          {tl && snap && mode ? (
+          {tl && snap && view === "2d" ? (
+            <OpsView
+              model={ops!}
+              layout={layout}
+              selectedAgent={selected?.kind === "agent" ? selected.key : null}
+              onAgentClick={onAgentClick}
+              onMessage={setOpenMsg}
+              onFile={(key) => setSelected({ kind: "file", key })}
+            />
+          ) : tl && snap && mode && view === "3d" ? (
             <SceneOrDesk
               mode={mode}
               tl={tl}
@@ -505,7 +567,7 @@ export function Agents3DView() {
           ) : (
             <div className="grid h-full place-items-center text-sm text-white/60">Loading agents…</div>
           )}
-          <Legend />
+          {view === "3d" && <Legend />}
           {tl && tl.hiddenMessages > 0 && (
             <p className="pointer-events-none absolute top-2 right-2 rounded bg-black/50 px-2 py-0.5 text-[10px] text-white/70">
               {tl.hiddenMessages} message{tl.hiddenMessages === 1 ? "" : "s"} to or from hidden projects not shown

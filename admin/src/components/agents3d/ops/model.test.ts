@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import { fileKey, snapshotAt, type Timeline, type TLAgent } from "@/lib/agents3d-timeline";
+import type { CommsNode } from "@/lib/claude-comms-parse";
+import { litKey, opsModel } from "./model";
+
+const T = Date.parse("2026-10-10T12:00:00Z");
+const node = (key: string, guest = false): CommsNode => ({
+  key, sessionId: null, shortId: key, name: key, names: [], cwd: "/r", gitBranch: null, live: true, status: "idle", asking: null,
+  tmux: null, sockets: [], role: "peer", sent: 0, received: 0, lastActivity: null, sessions: [], guest,
+});
+const agent = (key: string, events: [number, string, string | null][], guest = false): TLAgent => ({
+  key, name: key, role: "peer", color: "#123456", node: node(key, guest), repo: "/r", cwdRel: "",
+  events: events.map(([ago, tool, path]) => ({ t: new Date(T - ago).toISOString(), ms: T - ago, tool, repo: "/r", path })).sort((x, y) => x.ms - y.ms),
+});
+const tl = (agents: TLAgent[], more: Partial<Timeline> = {}): Timeline => ({
+  start: T - 3_600_000, end: T, agents, byKey: new Map(agents.map((a) => [a.key, a])), messages: [], claims: [], edits: [], commits: [], tasks: [],
+  files: new Set(["a.ts", "b.ts", "c.ts"].map((p) => fileKey("/r", p))), repos: [], ...more,
+});
+
+describe("opsModel (T163)", () => {
+  it("lights files touched in the last 5 minutes (an edit over a read), not older ones; guests left out", () => {
+    const t = tl([agent("Bob", [[60_000, "Read", "a.ts"], [30_000, "Edit", "a.ts"], [20_000, "Read", "b.ts"], [10 * 60_000, "Edit", "c.ts"]]), agent("guest", [[1000, "Edit", "c.ts"]], true)]);
+    const m = opsModel(t, snapshotAt(t, T, false));
+    assert.deepEqual(m.agents.map((a) => a.key), ["Bob"]);
+    assert.deepEqual([...m.lit].map(([k, v]) => [k.split("\n")[1], v.kind, v.by]).sort(), [["a.ts", "edit", "Bob"], ["b.ts", "read", "Bob"]]);
+  });
+  it("marks a file claimed by two agents as a clash, by one as held", () => {
+    const claims = [
+      { ms: T - 5000, node: "Bob", action: "claim" as const, fileKey: fileKey("/r", "a.ts"), path: "a.ts", guessed: false },
+      { ms: T - 4000, node: "Ann", action: "claim" as const, fileKey: fileKey("/r", "a.ts"), path: "a.ts", guessed: false },
+      { ms: T - 3000, node: "Ann", action: "claim" as const, fileKey: fileKey("/r", "b.ts"), path: "b.ts", guessed: false },
+    ];
+    const t = tl([agent("Bob", []), agent("Ann", [])], { claims });
+    const m = opsModel(t, snapshotAt(t, T, false));
+    assert.equal(m.lit.get(fileKey("/r", "a.ts"))?.kind, "clash");
+    assert.deepEqual(m.lit.get(fileKey("/r", "b.ts")), { kind: "held", by: "Ann" });
+  });
+  it("is the same between the clock's ticks when nothing happens (nothing to draw)", () => {
+    const t = tl([agent("Bob", [[10_000, "Edit", "a.ts"], [15_000, "Bash", null]])]);
+    const at = (dt: number) => opsModel(t, snapshotAt(t, T + dt, false));
+    const a = at(0), b = at(250), c = at(750);
+    assert.equal(litKey(a.lit), litKey(b.lit));
+    assert.equal(litKey(b.lit), litKey(c.lit));
+    assert.deepEqual(a.agents, b.agents);
+    assert.equal(a.t, c.t);
+  });
+  it("counts the cards' activity in 3-minute steps over the last hour", () => {
+    // (steps on the clock's 3-minute marks: at 12:00 the newest step is 12:00–12:03, so the last minute counts in the one before)
+    const t = tl([agent("Bob", [[10_000, "Edit", "a.ts"], [20_000, "Read", "a.ts"], [50 * 60_000, "Bash", null], [65 * 60_000, "Bash", null]])]);
+    const s = opsModel(t, snapshotAt(t, T, false)).agents[0].spark;
+    assert.equal(s.length, 20);
+    assert.equal(s[18], 2);
+    assert.equal(s.reduce((x, y) => x + y, 0), 3);
+  });
+});
