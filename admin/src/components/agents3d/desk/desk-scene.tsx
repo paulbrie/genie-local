@@ -13,7 +13,7 @@ import { useFrameOnResize, useWantFrame } from "../frame-governor";
 import { Follow, type Positions, useSeen } from "../parts";
 import { useBrowsers } from "../use-browsers";
 import type { SceneProps } from "../scene";
-import { rawBeats, scheduleBeats } from "./activity";
+import { rawBeats, scheduleBeats, seenIds } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
 import { DeskBrowsers } from "./browsers";
 import { DeskPlanes } from "./paper-planes";
@@ -146,11 +146,12 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
   }, [layout]);
 
   // Beats: one-shot animations, queued per agent (see activity.ts). In live mode a
-  // beat is due when its event was first seen, as data arrives up to a poll late.
+  // beat is due when its event was first seen, as data arrives up to a poll late; so
+  // are the messages' bubbles and paper planes. Marked in one call (see seenIds).
   const seen = useSeen();
   const raw = useMemo(() => {
     const r = rawBeats(tl);
-    seen.mark([...r.values()].flatMap((list) => list.map((x) => x.id)));
+    seen.mark(seenIds(r, tl.messages));
     return r;
   }, [tl, seen]);
   const live = clock.live;

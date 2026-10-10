@@ -46,6 +46,19 @@ type Raw = Omit<Beat, "start" | "end" | "count" | "at"> & { ms: number };
 const SKIP_CARRY = new Set(["CLAIM", "RELEASE", "COMMIT", "PUSHED"]);
 
 /** Every one-shot event per agent, unscheduled. Depends only on the timeline. */
+/**
+ * Everything the Table times from when the page first saw it, for one call of the
+ * "seen" tracker: the beats' ids and the messages' (speech bubbles, paper planes).
+ * One call, so all of it present on load counts as already there (a tracker's
+ * first call primes it; ids marked later are "just seen").
+ */
+export function seenIds(raw: Map<string, { id: string }[]>, messages: { id: string }[]): string[] {
+  const out: string[] = [];
+  for (const list of raw.values()) for (const b of list) out.push(b.id);
+  for (const m of messages) out.push(m.id);
+  return out;
+}
+
 export function rawBeats(tl: Timeline): Map<string, Raw[]> {
   const out = new Map<string, Raw[]>();
   const add = (key: string, r: Raw) => {

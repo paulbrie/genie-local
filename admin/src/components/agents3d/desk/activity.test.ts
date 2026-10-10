@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { TLAgent } from "@/lib/agents3d-timeline";
 import type { CommsNode } from "@/lib/claude-comms-parse";
 
-import { asleepAt, doingAt, gazeAt, headCue, SLEEP_AFTER_MS, WAVE_MS, waveAt } from "./activity";
+import { asleepAt, doingAt, gazeAt, headCue, seenIds, SLEEP_AFTER_MS, WAVE_MS, waveAt } from "./activity";
 import { idlePose } from "./poses";
 
 const T0 = 1_700_000_000_000;
@@ -176,5 +176,30 @@ describe("asking for the user's attention (T111)", () => {
     }
     assert.equal(doingAt(tom("Bash", { status: "waiting" }), T0, false).waitFor, null);
     assert.equal(doingAt(tom("Bash", { status: "idle", asking: null }), T0, true).waitFor, null);
+  });
+});
+
+describe("what the Table times from when it was first seen (T123)", () => {
+  it("the beats and the messages, in one list for one call of the tracker", () => {
+    const raw = new Map([
+      ["s:tom", [{ id: "m:1" }, { id: "k:abc" }]],
+      ["s:bob", [{ id: "c:x" }]],
+    ]);
+    assert.deepEqual(seenIds(raw, [{ id: "1" }, { id: "2" }]), ["m:1", "k:abc", "c:x", "1", "2"]);
+    assert.deepEqual(seenIds(new Map(), []), []);
+  });
+  it("a message present on load counts as already there; a later one is timed from when it was seen", () => {
+    // The tracker's contract (parts.tsx): the first mark() primes (time 0), later ones stamp now.
+    const seen = new Map<string, number>();
+    let primed = false;
+    const mark = (ids: string[], now: number) => {
+      for (const id of ids) if (!seen.has(id)) seen.set(id, primed ? now : 0);
+      primed = true;
+    };
+    const eff = (id: string, ms: number) => Math.max(ms, seen.get(id) ?? 0);
+    mark(seenIds(new Map([["s:tom", [{ id: "m:old" }]]]), [{ id: "old" }]), 5000);
+    mark(seenIds(new Map(), [{ id: "old" }, { id: "new" }]), 9000);
+    assert.equal(eff("old", 1000), 1000);
+    assert.equal(eff("new", 7000), 9000, "arrived a poll late: its plane starts when the page saw it");
   });
 });
