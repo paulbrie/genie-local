@@ -63,6 +63,12 @@ export type CommsNode = {
   live: boolean;
   /** idle / busy / waiting, from the session registry while it runs. */
   status: string | null;
+  /**
+   * When its last turn ended by asking the user something in plain words (a "?" in the last
+   * paragraph, not in code, quotes or links: lib/asking.ts) and it sits idle since; null otherwise.
+   * AskUserQuestion and permission prompts show as status "waiting" instead.
+   */
+  asking: string | null;
   tmux: string | null;
   sockets: string[];
   role: CommsRole;

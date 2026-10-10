@@ -75,7 +75,7 @@ describe("task parsing, as we write", () => {
 const node = (sid: string, name: string, o: Partial<CommsNode> = {}): CommsNode => ({
   key: `s:${sid}`, sessionId: sid, shortId: sid.slice(0, 8), name, names: [{ name, at: null }], cwd: "/opt/project/projects/trafficsim",
   gitBranch: null, live: false, status: null, tmux: null, sockets: [], role: "peer", sent: 0, received: 0,
-  lastActivity: null, sessions: [sid], guest: false, ...o,
+  lastActivity: null, sessions: [sid], guest: false, asking: null, ...o,
 });
 
 describe("one agent per name", () => {

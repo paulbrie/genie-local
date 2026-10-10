@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { asksUser } from "@/lib/asking";
 import { CLAUDE_HOME } from "@/lib/claude";
 import {
   type ActivityEvent,
@@ -49,7 +50,9 @@ export const DEFAULT_DAYS = 7;
 const MAX_ACTIVITY = 20_000;
 
 // Only lines containing one of these can matter; the rest are never JSON-parsed.
+// ('"type":"text"': an assistant's words, to tell when a turn ended on a question to the user.)
 const NEEDLES = [
+  '"type":"text"',
   '"SendMessage"',
   '"kind":"peer"',
   "cross-session-message",
@@ -96,6 +99,8 @@ type FileState = {
   renames: { name: string; ts: string | null }[];
   /** Every tool call, oldest first (file only for FILE_TOOLS). */
   activity: ActivityEvent[];
+  /** The last assistant entry was text asking the user something (lib/asking.ts): when; else null. */
+  ask: { ts: string | null } | null;
 };
 
 const fileStates = new Map<string, FileState>();
@@ -130,6 +135,19 @@ function ingestLine(st: FileState, line: string): void {
   const content = msg?.content;
 
   if (obj.type === "assistant" && Array.isArray(content)) {
+    // A turn's last assistant entry decides whether it ended on a question: text asking
+    // something sets it, anything after (a tool call, more text) replaces it.
+    if (!obj.isSidechain) {
+      let text: string | null = null;
+      let tools = false;
+      for (const raw of content) {
+        const b = raw as Record<string, unknown>;
+        if (b?.type === "tool_use") tools = true;
+        else if (b?.type === "text" && typeof b.text === "string") text = b.text;
+      }
+      if (tools) st.ask = null;
+      else if (text !== null) st.ask = asksUser(text) ? { ts } : null;
+    }
     for (const raw of content) {
       const b = raw as Record<string, unknown>;
       if (b?.type !== "tool_use") continue;
@@ -247,6 +265,7 @@ async function refreshFile(abs: string, sessionId: string): Promise<FileState | 
       seenIn: new Set(),
       renames: [],
       activity: [],
+      ask: null,
     };
     fileStates.set(abs, st);
   }
@@ -605,6 +624,9 @@ async function assemble(
         gitBranch: st?.gitBranch ?? null,
         live: !!reg,
         status: reg?.status ?? null,
+        // Asking the user in plain words: the turn ended on a question and the session sits
+        // at its prompt (not busy; "waiting" is a permission prompt or AskUserQuestion).
+        asking: reg && st?.ask && reg.status !== "busy" && reg.status !== "waiting" ? (st.ask.ts ?? st.lastTs) : null,
         tmux: reg?.tmux ?? null,
         sockets: [],
         role: "peer",
@@ -634,6 +656,7 @@ async function assemble(
         gitBranch: null,
         live: false,
         status: null,
+        asking: null,
         tmux: null,
         sockets: id.startsWith("uds:") ? [id] : [],
         role: "peer",
