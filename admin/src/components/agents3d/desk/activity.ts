@@ -185,5 +185,42 @@ export function headCue(doing: Doing | undefined, beat: BeatKind | null | undefi
   return napping && !beat ? "z z Z" : null;
 }
 
+/**
+ * Waiting on a question to its user (its last call is AskUserQuestion), not on a
+ * permission prompt (any other last call). A plain question at the end of a turn
+ * isn't a wait at all (the session goes idle), so it can't be told from the data.
+ */
+export const asksUser = (doing: Doing, tool: string | null) => doing === "wait" && tool === "AskUserQuestion";
+
+/** A wave to its user lasts this long (real ms). */
+export const WAVE_MS = 1500;
+/** Between the starts of two waves: 6–8 s, per agent and per wave. */
+const WAVE_EVERY = { min: 6000, max: 8000 };
+
+/** A repeatable 0–1 from an agent's seed and a wave's number. */
+function waveRand(seed: number, n: number): number {
+  let h = (seed ^ Math.imul(n + 1, 0x9e3779b1)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+  return ((h ^ (h >>> 16)) >>> 0) / 2 ** 32;
+}
+
+/**
+ * An agent waiting on its user's answer waves: at once when the wait starts
+ * (`since`, real ms), then again every 6–8 s (random per agent, repeatable),
+ * WAVE_MS each, until it acts (the caller stops asking). On the wall clock.
+ * `inMs`: real ms until this changes (the wave ends or the next one starts),
+ * so the scene asks for a frame then and draws nothing in between.
+ */
+export function waveAt(seed: number, since: number, now: number): { waving: boolean; inMs: number } {
+  if (now < since) return { waving: false, inMs: since - now };
+  let start = since;
+  for (let n = 0; ; n++) {
+    const next = start + WAVE_EVERY.min + (WAVE_EVERY.max - WAVE_EVERY.min) * waveRand(seed, n);
+    if (now < next) return now < start + WAVE_MS ? { waving: true, inMs: start + WAVE_MS - now } : { waving: false, inMs: next - now };
+    start = next;
+  }
+}
+
 /** Where an agent looks up to, besides its work: the camera (its user, who the prompt is for) while it waits. */
 export const gazeAt = (doing: Doing): "camera" | null => (doing === "wait" ? "camera" : null);

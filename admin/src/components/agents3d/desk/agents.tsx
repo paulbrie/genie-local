@@ -13,7 +13,7 @@ import { useStableHandler, useWantFrame } from "../frame-governor";
 import { OverlayLabel } from "../overlay-label";
 import type { Positions } from "../parts";
 import type { Selection } from "../scene";
-import { type Beat, beatAt, type Doing, doingAt, gazeAt, headCue } from "./activity";
+import { asksUser, type Beat, beatAt, type Doing, doingAt, gazeAt, headCue, waveAt } from "./activity";
 import { type Avatar, disposeAvatar, makeAvatar } from "./avatar";
 import { lookFor } from "./identity";
 import { applyPose, DANCES, idlePose, isDance, type Pose, THINK_POSES } from "./poses";
@@ -408,8 +408,8 @@ export function DeskAgents({
     let flyN = 0;
     let confettiN = 0;
     let busy = false;
-    // The soonest held change of activity (MIN_HOLD_MS), in real ms from now.
-    let heldMs = Infinity;
+    // The soonest change the clock alone brings (a held change of activity, a wave), in real ms from now.
+    let nextMs = Infinity;
 
     lives.forEach((l, i) => {
       const a = cast[i];
@@ -420,7 +420,7 @@ export function DeskAgents({
         l.doing = d.doing;
         l.asleep = d.asleep;
         l.doingSince = real;
-      } else if (d.doing !== l.doing || d.asleep !== l.asleep) heldMs = Math.min(heldMs, MIN_HOLD_MS - (real - l.doingSince) + 1);
+      } else if (d.doing !== l.doing || d.asleep !== l.asleep) nextMs = Math.min(nextMs, MIN_HOLD_MS - (real - l.doingSince) + 1);
       // Asleep or waiting for its user, nothing plays (no dances or throws) until it acts.
       const b = l.asleep || l.doing === "wait" ? null : beatAt(beats.get(l.key) ?? [], t);
       const beat = b?.beat ?? null;
@@ -494,6 +494,11 @@ export function DeskAgents({
             l.thinkPose = THINK_POSES[hash(`${l.key}@${Math.floor(l.doingSince)}`) % THINK_POSES.length];
           }
           pose = l.thinkPose;
+        } else if (asksUser(l.doing, d.tool)) {
+          // Asking its user a question: a wave now and then (waveAt), still in between; a permission prompt just waits.
+          const w = waveAt(l.seed, l.doingSince, real);
+          pose = w.waving ? "hail" : "wait";
+          nextMs = Math.min(nextMs, w.inMs + 1);
         } else pose = l.doing;
       }
 
@@ -505,7 +510,7 @@ export function DeskAgents({
       }
       l.lidOpen = reduced ? wantLid : l.lidOpen + Math.sign(wantLid - l.lidOpen) * Math.min(Math.abs(wantLid - l.lidOpen), dt * 2);
       l.lid.rotation.x = -Math.PI / 2 + 0.03 + (Math.PI / 2 + 0.17) * l.lidOpen;
-      const calm = !beat && calmDoing(l.doing);
+      const calm = !beat && calmDoing(l.doing) && pose !== "hail";
       if (!calm || l.lidOpen !== wantLid) busy = true;
 
       // Blend into a new pose from wherever the joints were.
@@ -607,7 +612,7 @@ export function DeskAgents({
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
     if (busy || flyN > 0 || confettiN > 0) wantFrame(BUSY_FPS);
-    else if (heldMs < Infinity) wantFrame(1000 / Math.max(1, heldMs));
+    else if (nextMs < Infinity) wantFrame(1000 / Math.max(1, nextMs));
   });
 
   // Speech bubbles: each agent's newest message, for BUBBLE_MS + linger (re-derived at snapshot rate); a newer one replaces it.

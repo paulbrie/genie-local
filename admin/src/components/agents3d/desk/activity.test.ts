@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { TLAgent } from "@/lib/agents3d-timeline";
 import type { CommsNode } from "@/lib/claude-comms-parse";
 
-import { asleepAt, doingAt, gazeAt, headCue, SLEEP_AFTER_MS } from "./activity";
+import { asksUser, asleepAt, doingAt, gazeAt, headCue, SLEEP_AFTER_MS, WAVE_MS, waveAt } from "./activity";
 import { idlePose } from "./poses";
 
 const T0 = 1_700_000_000_000;
@@ -100,5 +100,62 @@ describe("waiting for its user (status waiting)", () => {
     assert.equal(headCue("nap", null, true), "z z Z");
     assert.equal(headCue("idle", null, false), null);
     assert.equal(headCue("wait", "carry", false), null);
+  });
+});
+
+describe("waving to the user while waiting", () => {
+  const since = 50_000;
+  /** The waves' start times over `ms` of waiting, sampled every 10 ms. */
+  const starts = (seed: number, ms: number) => {
+    const out: number[] = [];
+    let was = false;
+    for (let t = since; t < since + ms; t += 10) {
+      const w = waveAt(seed, since, t).waving;
+      if (w && !was) out.push(t - since);
+      was = w;
+    }
+    return out;
+  };
+  it("waves at once, for WAVE_MS, then holds still", () => {
+    assert.equal(waveAt(7, since, since).waving, true);
+    assert.equal(waveAt(7, since, since + WAVE_MS - 1).waving, true);
+    assert.equal(waveAt(7, since, since + WAVE_MS).waving, false);
+    assert.equal(waveAt(7, since, since).inMs, WAVE_MS);
+  });
+  it("again every 6–8 s, repeatable, different per agent", () => {
+    const a = starts(7, 60_000);
+    assert.equal(a[0], 0);
+    for (let i = 1; i < a.length; i++) assert.ok(a[i] - a[i - 1] >= 6000 && a[i] - a[i - 1] <= 8010, `gap ${a[i] - a[i - 1]}`);
+    assert.ok(a.length >= 8 && a.length <= 11);
+    assert.deepEqual(starts(7, 60_000), a);
+    assert.notDeepEqual(starts(8, 60_000), a);
+  });
+  it("tells when it next changes, so nothing is drawn in between", () => {
+    const t = since + WAVE_MS + 100;
+    const w = waveAt(7, since, t);
+    assert.equal(w.waving, false);
+    assert.equal(waveAt(7, since, t + w.inMs).waving, true);
+    assert.equal(waveAt(7, since, t + w.inMs - 1).waving, false);
+  });
+  it("a wait that hasn't started yet doesn't wave", () => {
+    assert.deepEqual(waveAt(7, since, since - 500), { waving: false, inMs: 500 });
+  });
+});
+
+describe("question or permission prompt", () => {
+  it("waves only for a question (AskUserQuestion as the last call while waiting)", () => {
+    assert.equal(asksUser("wait", "AskUserQuestion"), true);
+    assert.equal(asksUser("wait", "Bash"), false);
+    assert.equal(asksUser("wait", null), false);
+    assert.equal(asksUser("idle", "AskUserQuestion"), false);
+  });
+  it("the wait's last call comes through doingAt, and acting ends it", () => {
+    const a = agent([T0 - 5 * S]);
+    a.events[0] = { ...a.events[0], tool: "AskUserQuestion" };
+    const waiting = { ...a, node: { ...a.node, status: "waiting" as const } };
+    const d = doingAt(waiting, T0, true);
+    assert.equal(asksUser(d.doing, d.tool), true);
+    const acted = doingAt({ ...waiting, node: { ...waiting.node, status: "busy" as const } }, T0, true);
+    assert.equal(asksUser(acted.doing, acted.tool), false);
   });
 });

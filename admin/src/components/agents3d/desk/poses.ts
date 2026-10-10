@@ -20,6 +20,8 @@ export type Pose =
   | "blocked"
   | "nap"
   | "wait"
+  /** Waiting on its user, waving to them: seated upright, the right hand up and waving. */
+  | "hail"
   // Seated states: the idle variants…
   | "sip"
   | "pencil"
@@ -349,6 +351,12 @@ export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: b
       j.body.rotation.x = -0.06;
       j.armL.rotation.set(-1.05, 0, 0.22);
       j.armR.rotation.set(-1.05, 0, -0.22);
+      break;
+    case "hail":
+      // As in wait, the right hand raised and waving side to side.
+      j.body.rotation.x = -0.06;
+      j.armL.rotation.set(-1.05, 0, 0.22);
+      j.armR.rotation.set(0, 0, 2.6 + s(9) * 0.35);
       break;
     case "nap":
       for (const e of j.eyes) e.scale.y = 0.008;
