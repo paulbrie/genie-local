@@ -98,3 +98,14 @@ describe("who walks (T95)", () => {
     assert.equal(walkerOf([{ name: "Bob", role: "peer" }]), -1);
   });
 });
+
+describe("how high Alice reaches (T133)", () => {
+  it("the trip takes the newest book's shelf height", () => {
+    const run = new ShelfRun();
+    run.update(["a"], 0, true, seat, () => 0.2);
+    run.update(["a", "b", "c"], 100, true, seat, (h) => (h === "c" ? 0.9 : 0.1));
+    assert.equal(tripOf(run)?.reach, 0.9);
+    assert.equal(tripAt(tripOf(run)!, 100 + tripMs(tripOf(run)!) / 2)!.reach, 0.9);
+    assert.equal(makeTrip(seat, ["x"], 0).reach, 0.5);
+  });
+});

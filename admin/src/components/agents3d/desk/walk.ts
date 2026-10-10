@@ -50,6 +50,8 @@ export function shelfPath(seat: Seat): XZ[] {
 export type Trip = {
   start: number;
   books: string[];
+  /** How high the books go: 0 the bottom shelf (bend) .. 1 the top (reach up). */
+  reach: number;
   seat: Seat;
   pts: XZ[];
   /** Distance along the path at each point. */
@@ -57,11 +59,11 @@ export type Trip = {
   len: number;
 };
 
-export function makeTrip(seat: Seat, books: string[], start: number): Trip {
+export function makeTrip(seat: Seat, books: string[], start: number, reach = 0.5): Trip {
   const pts = shelfPath(seat);
   const cum = [0];
   for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z));
-  return { start, books, seat, pts, cum, len: cum[cum.length - 1] };
+  return { start, books, reach, seat, pts, cum, len: cum[cum.length - 1] };
 }
 
 const walkMs = (t: Trip) => (t.len / WALK_SPEED) * 1000;
@@ -81,6 +83,8 @@ export type TripPose = {
   moving: boolean;
   /** Still holding the books (until they're on the shelf). */
   carrying: boolean;
+  /** How high they go (the trip's `reach`). */
+  reach: number;
 };
 
 /** Where along the path, distance `d` from the seat: the point and the way it faces going outwards. */
@@ -100,28 +104,28 @@ export function tripAt(t: Trip, now: number): TripPose | null {
   let ms = now - t.start;
   const w = walkMs(t);
   if (ms < 0) return null;
-  if (ms < STAND_MS) return { phase: "stand", x: t.seat.x, z: t.seat.z, yaw: t.seat.yaw, k: ms / STAND_MS, walked: 0, moving: false, carrying: true };
+  if (ms < STAND_MS) return { phase: "stand", x: t.seat.x, z: t.seat.z, yaw: t.seat.yaw, k: ms / STAND_MS, walked: 0, moving: false, carrying: true, reach: t.reach };
   ms -= STAND_MS;
   if (ms < w) {
     const d = (ms / w) * t.len;
     const p = along(t, d);
-    return { phase: "out", x: p.x, z: p.z, yaw: p.yaw, k: ms / w, walked: d, moving: true, carrying: true };
+    return { phase: "out", x: p.x, z: p.z, yaw: p.yaw, k: ms / w, walked: d, moving: true, carrying: true, reach: t.reach };
   }
   ms -= w;
   const end = t.pts[t.pts.length - 1];
   if (ms < PLACE_MS) {
     const k = ms / PLACE_MS;
     // Facing the shelf (it's behind the spot, towards -z).
-    return { phase: "place", x: end.x, z: end.z, yaw: Math.PI, k, walked: t.len, moving: false, carrying: k < PLACED_AT };
+    return { phase: "place", x: end.x, z: end.z, yaw: Math.PI, k, walked: t.len, moving: false, carrying: k < PLACED_AT, reach: t.reach };
   }
   ms -= PLACE_MS;
   if (ms < w) {
     const d = t.len - (ms / w) * t.len;
     const p = along(t, d);
-    return { phase: "back", x: p.x, z: p.z, yaw: p.yaw + Math.PI, k: ms / w, walked: t.len + (t.len - d), moving: true, carrying: false };
+    return { phase: "back", x: p.x, z: p.z, yaw: p.yaw + Math.PI, k: ms / w, walked: t.len + (t.len - d), moving: true, carrying: false, reach: t.reach };
   }
   ms -= w;
-  if (ms < SIT_MS) return { phase: "sit", x: t.seat.x, z: t.seat.z, yaw: t.seat.yaw, k: smooth(ms / SIT_MS), walked: 2 * t.len, moving: false, carrying: false };
+  if (ms < SIT_MS) return { phase: "sit", x: t.seat.x, z: t.seat.z, yaw: t.seat.yaw, k: smooth(ms / SIT_MS), walked: 2 * t.len, moving: false, carrying: false, reach: t.reach };
   return null;
 }
 
@@ -148,7 +152,7 @@ export class ShelfRun {
    * of who shelves them (null: nobody at the table). In replay nothing walks:
    * the books are as of the scrubber's time, and going live again starts afresh.
    */
-  update(hashes: string[], now: number, live: boolean, walker: Seat | null) {
+  update(hashes: string[], now: number, live: boolean, walker: Seat | null, reachOf: (hash: string) => number = () => 0.5) {
     if (!live || !this.primed) {
       this.known = new Set(hashes);
       this.pending = [];
@@ -169,7 +173,8 @@ export class ShelfRun {
       this.trip = null;
     }
     if (!this.trip && this.pending.length && walker) {
-      this.trip = makeTrip(walker, this.pending, now);
+      // (the books go to the newest one's shelf height: one trip, one reach)
+      this.trip = makeTrip(walker, this.pending, now, reachOf(this.pending[this.pending.length - 1]));
       this.pending = [];
     }
     if (!walker && this.pending.length) {

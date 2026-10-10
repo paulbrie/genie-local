@@ -464,7 +464,7 @@ export function DeskAgents({
           l.pose = walkPose;
         }
         // The walk cycle runs on ground covered, so the feet don't slide at any speed.
-        const hop = applyPose(l.avatar, walkPose, tp.moving ? tp.walked / STRIDE_V : secs, tp.k, tp.moving, reduced, tp.phase === "sit");
+        const hop = applyPose(l.avatar, walkPose, tp.moving ? tp.walked / STRIDE_V : secs, tp.k, tp.moving, reduced, tp.phase === "sit", tp.reach);
         if (l.from && real - l.blendT0 < BLEND_MS) {
           readJoints(l.avatar, l.cur);
           const x = (real - l.blendT0) / BLEND_MS;

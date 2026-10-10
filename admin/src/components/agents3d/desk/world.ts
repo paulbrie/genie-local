@@ -66,9 +66,12 @@ export const CHAIR_R = TABLE.r + AVATAR_SCALE * 0.32 + AVATAR_SCALE * (0.2 + 0.5
 /** Free floor for walking: a ring around the chairs, clear to the whiteboard; and the strip in front of the board. */
 export const WALK = { r0: CHAIR_R + 0.5, r1: CHAIR_R + 3.5 };
 /** Where the bookshelf stands (T95): on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
-export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 5, z: BOARD.z + 1, w: 7, d: 2 };
-/** The bookshelf: as tall as a person reaches, its shelves (boards) and the room for books on each. */
-export const SHELF = { ...SHELF_SPOT, h: PERSON_H * 0.95, shelves: 5, board: 0.14, side: 0.18 };
+export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 1.4 - 9.8 / 2, z: BOARD.z + 1, w: 9.8, d: 2.6 };
+/**
+ * The bookshelf (T133: 1.4× T95's): a shelf per project on the table (shelf.ts), `gap` the room between two
+ * boards; it grows taller with the projects, up to MAX_SHELVES, the top one still in reach of a person.
+ */
+export const SHELF = { ...SHELF_SPOT, gap: 1.55, board: 0.18, side: 0.24 };
 /** Where someone stands to shelve a book: in front of the shelf, facing it. */
 export const SHELF_STAND = { x: SHELF_SPOT.x, z: SHELF_SPOT.z + SHELF_SPOT.d / 2 + AVATAR_SCALE * 0.45 };
 

@@ -86,7 +86,7 @@ function stand(j: Avatar["joints"]) {
  * Apply a pose. `t` real seconds, `k` progress 0..1 through a one-shot. Returns a vertical hop.
  * `seated`: on a chair at the table (feet on the floor; napping is head-down on the arms).
  */
-export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: boolean, still: boolean, seated = false): number {
+export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: boolean, still: boolean, seated = false, reach = 0.5): number {
   const j = a.joints;
   const p = a.props;
   const s = (f: number, ph = 0) => (still ? 0 : Math.sin(t * f + ph));
@@ -362,19 +362,26 @@ export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: b
       j.armL.rotation.set(-1.15, 0, -0.32);
       j.armR.rotation.set(-1.15, 0, 0.32);
       break;
-    case "shelve":
+    case "shelve": {
+      // `reach`: the shelf's height, 0 (the bottom: bend over, arms low) .. 1 (the top: arms high, head up).
+      const lift = 0.35 + reach * 1.35;
+      const bend = Math.max(0, 0.4 - reach) * 1.1;
+      const look = 0.3 - reach * 0.6;
       if (k < 0.6) {
         const up = Math.sin((k / 0.6) * Math.PI * 0.5);
-        j.armL.rotation.set(-1.15 - up * 0.95, 0, -0.32 + up * 0.12);
-        j.armR.rotation.set(-1.15 - up * 0.95, 0, 0.32 - up * 0.12);
-        j.head.rotation.x = -0.25 * up;
+        j.armL.rotation.set(-1.15 - up * lift, 0, -0.32 + up * 0.12);
+        j.armR.rotation.set(-1.15 - up * lift, 0, 0.32 - up * 0.12);
+        j.body.rotation.x = bend * up;
+        j.head.rotation.x = look * up;
       } else {
         const down = (k - 0.6) / 0.4;
-        j.armL.rotation.set(-2.1 + down * 1.9, 0, -0.2 + down * 0.1);
-        j.armR.rotation.set(-2.1 + down * 1.9, 0, 0.2 - down * 0.1);
-        j.head.rotation.x = -0.25 * (1 - down);
+        j.armL.rotation.set(-1.15 - lift + down * (lift + 0.95), 0, -0.2 + down * 0.1);
+        j.armR.rotation.set(-1.15 - lift + down * (lift + 0.95), 0, 0.2 - down * 0.1);
+        j.body.rotation.x = bend * (1 - down);
+        j.head.rotation.x = look * (1 - down);
       }
       break;
+    }
     case "hail":
       // As in wait, the right hand raised and waving side to side.
       j.body.rotation.x = -0.06;

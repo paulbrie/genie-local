@@ -18,6 +18,7 @@ import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agen
 import { DeskBrowsers } from "./browsers";
 import { DeskPlanes } from "./paper-planes";
 import { Bookshelf } from "./bookshelf";
+import { shelfRows, tableOrder } from "./shelf";
 import { DeskTop, Lamp, MiniCityView, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
 import { GAUGE_COLUMN_W } from "./gauges";
@@ -168,8 +169,9 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
     .join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cast = useMemo(() => castAt(tl, snap.t, snap.live, guests), [tl, castKey]);
-  // The commits' books and Alice's walks to the shelf with them (T95).
+  // The commits' books and Alice's walks to the shelf with them (T95): a shelf per project on the table, in its order (T133).
   const run = useMemo(() => new ShelfRun(), []);
+  const shelves = useMemo(() => shelfRows(tableOrder(layout.cities, mini.plates)), [layout, mini]);
   const walker = walkerOf(cast);
   const walkerSeat = walker >= 0 ? seatAt(walker, cast.length) : null;
   const commitBy = useMemo(() => new Map(snap.commits.map((c) => [c.hash, c.node])), [snap.commits]);
@@ -207,7 +209,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
       />
       <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} />
       {/* Before the agents: its frame moves the shelving on, which the walker then follows. */}
-      <Bookshelf commits={snap.commits} live={snap.live} walker={walkerSeat} run={run} colorOf={colorOf} onSelect={onSelect} />
+      <Bookshelf commits={snap.commits} rows={shelves} live={snap.live} walker={walkerSeat} run={run} colorOf={colorOf} onSelect={onSelect} />
       <DeskAgents
         cast={cast}
         messages={tl.messages}
