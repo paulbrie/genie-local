@@ -23,6 +23,10 @@ export type Pose =
   | "wait"
   /** Waiting on its user, waving to them: seated upright, the right hand up and waving. */
   | "hail"
+  /** Carrying books in both hands, held in front (T95; walks with them). */
+  | "haul"
+  /** Putting books on a shelf: both hands reach up and forward, then come down (`k`). */
+  | "shelve"
   // Seated states: the idle variants…
   | "sip"
   | "pencil"
@@ -353,6 +357,23 @@ export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: b
       j.body.rotation.x = -0.06;
       j.armL.rotation.set(-1.05, 0, 0.22);
       j.armR.rotation.set(-1.05, 0, -0.22);
+      break;
+    case "haul":
+      j.armL.rotation.set(-1.15, 0, -0.32);
+      j.armR.rotation.set(-1.15, 0, 0.32);
+      break;
+    case "shelve":
+      if (k < 0.6) {
+        const up = Math.sin((k / 0.6) * Math.PI * 0.5);
+        j.armL.rotation.set(-1.15 - up * 0.95, 0, -0.32 + up * 0.12);
+        j.armR.rotation.set(-1.15 - up * 0.95, 0, 0.32 - up * 0.12);
+        j.head.rotation.x = -0.25 * up;
+      } else {
+        const down = (k - 0.6) / 0.4;
+        j.armL.rotation.set(-2.1 + down * 1.9, 0, -0.2 + down * 0.1);
+        j.armR.rotation.set(-2.1 + down * 1.9, 0, 0.2 - down * 0.1);
+        j.head.rotation.x = -0.25 * (1 - down);
+      }
       break;
     case "hail":
       // As in wait, the right hand raised and waving side to side.

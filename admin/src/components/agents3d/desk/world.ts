@@ -54,21 +54,23 @@ export const SEAT_Y = FLOOR_Y + SEAT_HIP - BODY.hip * AVATAR_SCALE;
 const polar = (phi: number, r: number) => ({ x: r * Math.sin(phi), z: -r * Math.cos(phi) });
 const deg = (d: number) => (d * Math.PI) / 180;
 
-// Props on the free ring: the front gap holds the low ones (tower, papers, beacon, mug); the tall lamp
-// stands at the back, between the seats, where it hides nothing.
-export const TOWER = polar(deg(146), TABLE.r - 3.5);
+// Props on the free ring: the front gap holds the low ones (papers, beacon); the tall lamp stands at
+// the back, between the seats, where it hides nothing. Commits are books on the shelf (T95).
 export const PAPERS = polar(deg(180), TABLE.r - 3.1);
 export const BEACON = polar(deg(-146), TABLE.r - 3.5);
 export const LAMP = polar(0, TABLE.r - 2.1);
-export const MUG = polar(deg(-164), TABLE.r - 2.2);
 /** The whiteboard stands behind the table, its bottom above a standing avatar's head, so it reads over the back seats. */
 export const BOARD = { x: 0, z: -TABLE.r - 9, w: 28, h: 13, y: 8.5 };
 /** How far from the table's centre a chair reaches (its back and its foot, behind the seat). */
 export const CHAIR_R = TABLE.r + AVATAR_SCALE * 0.32 + AVATAR_SCALE * (0.2 + 0.5);
 /** Free floor for walking: a ring around the chairs, clear to the whiteboard; and the strip in front of the board. */
 export const WALK = { r0: CHAIR_R + 0.5, r1: CHAIR_R + 3.5 };
-/** Where T95's bookshelf will stand: on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
+/** Where the bookshelf stands (T95): on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
 export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 5, z: BOARD.z + 1, w: 7, d: 2 };
+/** The bookshelf: as tall as a person reaches, its shelves (boards) and the room for books on each. */
+export const SHELF = { ...SHELF_SPOT, h: PERSON_H * 0.95, shelves: 5, board: 0.14, side: 0.18 };
+/** Where someone stands to shelve a book: in front of the shelf, facing it. */
+export const SHELF_STAND = { x: SHELF_SPOT.x, z: SHELF_SPOT.z + SHELF_SPOT.d / 2 + AVATAR_SCALE * 0.45 };
 
 export const PLATE_H = 0.12;
 

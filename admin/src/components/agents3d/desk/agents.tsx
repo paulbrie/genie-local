@@ -19,8 +19,9 @@ import { lookFor } from "./identity";
 import { applyPose, DANCES, idlePose, isDance, type Pose, THINK_POSES } from "./poses";
 import { glanceAt } from "./glance";
 import { makeThoughtCloud, type ThoughtCloud } from "./thought";
+import { type ShelfRun, STRIDE_V, tripAt } from "./walk";
 import { realAge } from "../parts";
-import { AVATAR_SCALE, BEACON, BOARD, LAPTOP, laptopAt, type MiniCities, SEAT_Y, type Seat, seatAt, TABLE, TOWER, type XZ } from "./world";
+import { AVATAR_SCALE, BEACON, BOARD, LAPTOP, laptopAt, type MiniCities, SEAT_Y, type Seat, seatAt, SHELF_STAND, TABLE, type XZ } from "./world";
 
 /** A change of activity shows for at least this long (real ms), so bursts stay readable. */
 const MIN_HOLD_MS = 1500;
@@ -312,6 +313,9 @@ export function DeskAgents({
   onSelect,
   onAgentClick,
   positions,
+  run,
+  walker,
+  bookColor,
 }: {
   /** The agents at the table (see castAt). */
   cast: TLAgent[];
@@ -333,6 +337,12 @@ export function DeskAgents({
   onSelect: (s: Selection | null) => void;
   onAgentClick?: (key: string) => void;
   positions: React.RefObject<Positions>;
+  /** The commits' shelving (T95): the walker follows its trip (driven by the Bookshelf's frame, before this one). */
+  run: ShelfRun;
+  /** Who shelves them (index in `cast`), -1 for nobody. */
+  walker: number;
+  /** A commit's committer colour, for the books carried. */
+  bookColor: (hash: string) => string;
 }) {
   const lookKey = cast.map((a) => `${a.key}:${a.name}:${colorOf(a.key)}`).join("|");
   const lives = useMemo(
@@ -392,6 +402,10 @@ export function DeskAgents({
 
   const camera = useThree((s) => s.camera);
   const wantFrame = useWantFrame();
+  // Each agent's body and label, moved off its seat while it walks (T95); and the books it carries.
+  const movers = useRef<(THREE.Group | null)[]>([]);
+  const moved = useRef<boolean[]>([]);
+  const carry = useRef<THREE.Mesh>(null);
   const invalidate = useThree((s) => s.invalidate);
   // Each tick (a render at snapshot rate): a frame only if the clock changed what shows.
   const sig = useRef("");
@@ -430,6 +444,58 @@ export function DeskAgents({
         l.asleep = d.asleep;
         l.doingSince = real;
       } else if (d.doing !== l.doing || d.asleep !== l.asleep) nextMs = Math.min(nextMs, MIN_HOLD_MS - (real - l.doingSince) + 1);
+
+      // Shelving commits (T95): the walker follows its trip, not its seat, and does nothing else meanwhile.
+      const trip = i === walker ? run.trip : null;
+      const tp = trip ? tripAt(trip, real) : null;
+      const mover = movers.current[i];
+      if (tp && trip && mover) {
+        mover.position.set(tp.x, 0, tp.z);
+        mover.rotation.y = tp.yaw;
+        moved.current[i] = true;
+        const walkPose: Pose = tp.phase === "place" ? "shelve" : tp.phase === "sit" ? "idle" : tp.carrying ? "haul" : "idle";
+        readJoints(l.avatar, l.prev);
+        if (walkPose !== l.pose) {
+          if (l.pose !== null && !reduced) {
+            l.from = l.from ?? new Float32Array(JOINTS);
+            l.from.set(l.prev);
+            l.blendT0 = real;
+          }
+          l.pose = walkPose;
+        }
+        // The walk cycle runs on ground covered, so the feet don't slide at any speed.
+        const hop = applyPose(l.avatar, walkPose, tp.moving ? tp.walked / STRIDE_V : secs, tp.k, tp.moving, reduced, tp.phase === "sit");
+        if (l.from && real - l.blendT0 < BLEND_MS) {
+          readJoints(l.avatar, l.cur);
+          const x = (real - l.blendT0) / BLEND_MS;
+          blendJoints(l.avatar, l.from, l.cur, x * x * (3 - 2 * x));
+        }
+        l.avatar.root.position.y = hop * 0.35;
+        l.twist = l.gazeY = l.gazeX = 0;
+        l.avatar.joints.eyes.forEach((e, n) => e.position.copy(l.eyeRest[n]));
+        l.cloud.target = 0;
+        l.cloud.update(secs, dt, reduced);
+        positions.current?.get(l.key)?.set(tp.x, HEAD_Y - 0.6 * S, tp.z);
+        // The books, held in front while carried.
+        const c = carry.current;
+        if (c) {
+          c.visible = tp.carrying;
+          c.position.set(tp.x + Math.sin(tp.yaw) * 0.55 * S, SEAT_Y + 0.85 * S, tp.z + Math.cos(tp.yaw) * 0.55 * S);
+          c.rotation.y = tp.yaw;
+          c.scale.set(0.5 * S, Math.min(4, trip.books.length) * 0.07 * S, 0.3 * S);
+          (c.material as THREE.MeshStandardMaterial).color.set(bookColor(trip.books[0]));
+        }
+        busy = true;
+        return;
+      }
+      if (mover && moved.current[i]) {
+        mover.position.set(l.seat.x, 0, l.seat.z);
+        mover.rotation.y = l.seat.yaw;
+        moved.current[i] = false;
+        positions.current?.get(l.key)?.set(l.seat.x, HEAD_Y - 0.6 * S, l.seat.z);
+        if (carry.current) carry.current.visible = false;
+      }
+
       // Asleep or waiting for its user, nothing plays (no dances or throws) until it acts.
       const b = l.asleep || l.doing === "wait" ? null : beatAt(beats.get(l.key) ?? [], t);
       const beat = b?.beat ?? null;
@@ -471,9 +537,8 @@ export function DeskAgents({
             break;
           }
           case "stack":
-            look = TOWER;
-            from = hand;
-            to = tmp.b.set(TOWER.x, 3, TOWER.z);
+            // A commit: a glance at the shelf (Alice carries the book there, T95).
+            look = SHELF_STAND;
             pose = "stack";
             pk = thrown ? 0.8 : 0.2;
             break;
@@ -684,29 +749,46 @@ export function DeskAgents({
         const a = cast[i];
         return (
           <group key={l.key}>
-            <group name={l.key} position={[l.seat.x, SEAT_Y, l.seat.z]} rotation-y={l.seat.yaw} onClick={pick}>
-              <primitive object={l.avatar.root} />
+            {/* the chair stays at the seat */}
+            <group position={[l.seat.x, SEAT_Y, l.seat.z]} rotation-y={l.seat.yaw}>
               <primitive object={l.chair} />
+            </group>
+            {/* the body and its label: at the seat, or wherever it walks (moved each frame on a walk) */}
+            <group
+              ref={(g) => {
+                movers.current[i] = g;
+              }}
+              position={[l.seat.x, 0, l.seat.z]}
+              rotation-y={l.seat.yaw}
+            >
+              <group name={l.key} position={[0, SEAT_Y, 0]} onClick={pick}>
+                <primitive object={l.avatar.root} />
+              </group>
+              <OverlayLabel position={[0, HEAD_Y + 0.2, 0]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
+                <DeskLabel
+                  name={a.node.guest ? `${displayName(a)} (guest)` : displayName(a)}
+                  color={colorOf(l.key)}
+                  act={acts.get(l.key)}
+                  snapAgent={snap.agents.get(l.key)}
+                  selected={selected?.kind === "agent" && selected.key === l.key}
+                  bubbles={bubbles.get(l.key) ?? []}
+                  idle={l.doing === "idle" || l.doing === "nap" ? idlePose(l.seed, performance.now(), l.doing === "nap", l.asleep) : null}
+                  // Neighbours' bubbles at alternating heights, so they don't sit on each other.
+                  bubbleLift={(i % 2) * 56}
+                  shelving={i === walker ? (run.trip?.books.length ?? 0) : 0}
+                />
+              </OverlayLabel>
             </group>
             <primitive object={l.laptop} name={l.key} onClick={pick} />
             {/* the thought cloud, over the head, turned to the camera each frame */}
             <primitive object={l.cloud.group} position={[l.seat.x, HEAD_Y - 0.15 * S, l.seat.z]} scale={S * 0.55} />
-            <OverlayLabel position={[l.seat.x, HEAD_Y + 0.2, l.seat.z]} center zIndexRange={[20, 0]} style={{ pointerEvents: "none" }}>
-              <DeskLabel
-                name={a.node.guest ? `${displayName(a)} (guest)` : displayName(a)}
-                color={colorOf(l.key)}
-                act={acts.get(l.key)}
-                snapAgent={snap.agents.get(l.key)}
-                selected={selected?.kind === "agent" && selected.key === l.key}
-                bubbles={bubbles.get(l.key) ?? []}
-                idle={l.doing === "idle" || l.doing === "nap" ? idlePose(l.seed, performance.now(), l.doing === "nap", l.asleep) : null}
-                // Neighbours' bubbles at alternating heights, so they don't sit on each other.
-                bubbleLift={(i % 2) * 56}
-              />
-            </OverlayLabel>
           </group>
         );
       })}
+      <mesh ref={carry} visible={false} castShadow>
+        <boxGeometry args={[1, 1, 1]} />
+        <meshStandardMaterial roughness={0.6} />
+      </mesh>
       <instancedMesh ref={flying} args={[undefined, undefined, 32]} frustumCulled={false}>
         <boxGeometry args={[1, 1, 1]} />
         <meshBasicMaterial toneMapped={false} />
@@ -728,6 +810,7 @@ function DeskLabel({
   bubbles,
   bubbleLift,
   idle,
+  shelving,
 }: {
   name: string;
   color: string;
@@ -738,10 +821,14 @@ function DeskLabel({
   bubbleLift: number;
   /** The idle variant being acted out, if idle. */
   idle: Pose | null;
+  /** Walking this many commits to the shelf (T95), 0 if not. */
+  shelving: number;
 }) {
   const beat = act?.beat;
   const file = act?.path?.split("/").pop();
-  const text = beat
+  const text = shelving
+    ? `shelving ${shelving === 1 ? "a commit" : `${shelving} commits`}`
+    : beat
     ? `${beat.label}${beat.count > 1 ? ` ×${beat.count}` : ""}`
     : idle
       ? (IDLE_TEXT[idle] ?? "")
@@ -750,7 +837,7 @@ function DeskLabel({
         ? "needs your OK"
         : `${DOING_TEXT[act.doing]}${file && (act.doing === "type" || act.doing === "read") ? ` ${file}` : ""}`
       : "";
-  const bubble = headCue(act?.doing, beat?.kind, idle === "nap", act?.waitFor ?? null);
+  const bubble = shelving ? null : headCue(act?.doing, beat?.kind, idle === "nap", act?.waitFor ?? null);
   const task = snapAgent?.task;
   return (
     <div style={{ transform: "translateY(-50%)" }} className="flex flex-col items-center gap-0.5">

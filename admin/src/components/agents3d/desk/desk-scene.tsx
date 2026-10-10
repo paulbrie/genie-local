@@ -16,11 +16,13 @@ import type { SceneProps } from "../scene";
 import { rawBeats, scheduleBeats } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
 import { DeskBrowsers } from "./browsers";
-import { CommitTower, DeskTop, Lamp, MiniCityView, Mug, OriginBeacon, Papers } from "./props";
+import { Bookshelf } from "./bookshelf";
+import { DeskTop, Lamp, MiniCityView, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
 import { GAUGE_COLUMN_W } from "./gauges";
 import { Whiteboard } from "./whiteboard";
-import { BOARD, miniCities } from "./world";
+import { ShelfRun, walkerOf } from "./walk";
+import { BOARD, miniCities, seatAt } from "./world";
 
 /**
  * Desk mode: the repo cities as clay miniatures on an office desk, and a clay
@@ -164,15 +166,19 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
     .join("|");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cast = useMemo(() => castAt(tl, snap.t, snap.live, guests), [tl, castKey]);
+  // The commits' books and Alice's walks to the shelf with them (T95).
+  const run = useMemo(() => new ShelfRun(), []);
+  const walker = walkerOf(cast);
+  const walkerSeat = walker >= 0 ? seatAt(walker, cast.length) : null;
+  const commitBy = useMemo(() => new Map(snap.commits.map((c) => [c.hash, c.node])), [snap.commits]);
+  const bookColor = (hash: string) => colorOf(commitBy.get(hash) ?? "");
   // Who has a browser open (polled every 5 s, live only: a replay shows the past, browsers are now).
   const browsers = useBrowsers(snap.live);
   return (
     <>
       <DeskTop />
       <Papers />
-      <Mug reduced={reduced} />
       <Lamp />
-      <CommitTower commits={snap.commits} clock={clock} colorOf={colorOf} reduced={reduced} onSelect={onSelect} />
       <OriginBeacon commits={snap.commits} clock={clock} reduced={reduced} />
       {/* Before the mini-cities: its frame writes the lifts they read in theirs. */}
       <DeskLinks
@@ -198,6 +204,8 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         onColumnClick={onBoard}
       />
       <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} />
+      {/* Before the agents: its frame moves the shelving on, which the walker then follows. */}
+      <Bookshelf commits={snap.commits} live={snap.live} walker={walkerSeat} run={run} colorOf={colorOf} onSelect={onSelect} />
       <DeskAgents
         cast={cast}
         messages={tl.messages}
@@ -215,6 +223,9 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         onSelect={onSelect}
         onAgentClick={onAgentClick}
         positions={positions}
+        run={run}
+        walker={walker}
+        bookColor={bookColor}
       />
       <Follow positions={positions} followKey={followKey} reduced={reduced} />
       <FlyTo flyTo={flyTo} resetCam={resetCam} board={board} positions={positions} reduced={reduced} />

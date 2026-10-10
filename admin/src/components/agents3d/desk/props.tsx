@@ -14,7 +14,7 @@ import { OverlayLabel } from "../overlay-label";
 import { realAge } from "../parts";
 import type { Selection } from "../scene";
 import { DistrictLabels } from "./district-labels";
-import { BEACON, FLOOR_Y, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
+import { BEACON, FLOOR_Y, LAMP, type MiniCities, PAPERS, PLATE_H, TABLE } from "./world";
 
 const stop = (e: ThreeEvent<MouseEvent>) => e.stopPropagation();
 /** At most this many lifted buildings cast a shadow on their plate. */
@@ -109,48 +109,6 @@ export function Papers() {
   );
 }
 
-export function Mug({ reduced }: { reduced: boolean }) {
-  const steam = useRef<(THREE.Mesh | null)[]>([]);
-  // The steam asks for no frames of its own: it drifts only while the table is drawn anyway.
-  useFrame(({ clock }) => {
-    steam.current.forEach((m, i) => {
-      if (!m) return;
-      const k = (clock.elapsedTime * 0.35 + i / 3) % 1;
-      m.position.set(Math.sin(k * 6 + i) * 0.12, 1.3 + k * 1.3, 0);
-      m.scale.setScalar(0.12 + k * 0.18);
-      (m.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.35;
-    });
-  });
-  return (
-    <group position={[MUG.x, 0, MUG.z]} scale={1.3}>
-      <mesh position={[0, 0.6, 0]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.55, 0.5, 1.2, 40]} />
-        <Clay color="#f97316" />
-      </mesh>
-      <mesh position={[0.58, 0.62, 0]} castShadow>
-        <torusGeometry args={[0.28, 0.08, 12, 24]} />
-        <Clay color="#f97316" />
-      </mesh>
-      <mesh position={[0, 1.17, 0]}>
-        <cylinderGeometry args={[0.48, 0.48, 0.02, 40]} />
-        <meshStandardMaterial color="#3b2414" roughness={0.2} />
-      </mesh>
-      {!reduced &&
-        [0, 1, 2].map((i) => (
-          <mesh
-            key={i}
-            ref={(m) => {
-              steam.current[i] = m;
-            }}
-          >
-            <sphereGeometry args={[1, 12, 8]} />
-            <meshBasicMaterial color="#ffffff" transparent depthWrite={false} />
-          </mesh>
-        ))}
-    </group>
-  );
-}
-
 export function Lamp() {
   return (
     <group position={[LAMP.x, 0, LAMP.z]} scale={1.5}>
@@ -173,76 +131,6 @@ export function Lamp() {
         </mesh>
       </group>
       <pointLight position={[1.6, 3.0, 1.4]} color="#ffcf8a" intensity={9} distance={16} decay={1.6} />
-    </group>
-  );
-}
-
-const BLOCK = { w: 0.75, h: 0.18 };
-/** Newest commits shown as blocks; the label counts them all. */
-const TOWER_MAX = 16;
-
-/** Commits as clay blocks in the committer's colour, the newest dropping in. */
-export function CommitTower({
-  commits,
-  clock,
-  colorOf,
-  reduced,
-  onSelect,
-}: {
-  commits: TLCommit[];
-  clock: Clock;
-  colorOf: (node: string) => string;
-  reduced: boolean;
-  onSelect: (s: Selection) => void;
-}) {
-  const shown = commits.slice(-TOWER_MAX);
-  const refs = useRef<(THREE.Mesh | null)[]>([]);
-  const geo = useMemo(() => new RoundedBoxGeometry(BLOCK.w, BLOCK.h, BLOCK.w, 2, 0.05), []);
-  const want = useWantFrame();
-  // One handler for every block (named by its hash), so re-renders don't redraw.
-  const pick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
-    stop(e);
-    onSelect({ kind: "commit", hash: e.eventObject.name });
-  });
-  useFrame(() => {
-    const t = clock.now();
-    shown.forEach((c, i) => {
-      const m = refs.current[i];
-      if (!m) return;
-      const age = realAge(clock, t, c.ms);
-      const y = 0.2 + i * (BLOCK.h + 0.01) + BLOCK.h / 2;
-      const dropping = !reduced && age >= 0 && age <= 1200;
-      m.position.y = dropping ? y + (1 - age / 1200) ** 2 * 3 : y;
-      if (dropping) want(30);
-    });
-  });
-  return (
-    <group position={[TOWER.x, 0, TOWER.z]} scale={1.5}>
-      <mesh position={[0, 0.1, 0]} castShadow receiveShadow>
-        <cylinderGeometry args={[0.65, 0.75, 0.2, 32]} />
-        <Clay color="#475569" />
-      </mesh>
-      {shown.map((c, i) => (
-        <mesh
-          key={c.hash}
-          ref={(m) => {
-            refs.current[i] = m;
-          }}
-          geometry={geo}
-          position={[0, 0.2 + i * (BLOCK.h + 0.01) + BLOCK.h / 2, 0]}
-          rotation-y={(i % 4) * 0.08 - 0.12}
-          castShadow
-          name={c.hash}
-          onClick={pick}
-        >
-          <Clay color={colorOf(c.node)} />
-        </mesh>
-      ))}
-      <OverlayLabel position={[0, -0.05, 0.85]} center zIndexRange={[5, 0]} style={{ pointerEvents: "none" }}>
-        <div className="whitespace-nowrap rounded bg-black/55 px-1.5 py-0.5 text-[10px] text-white/80">
-          {commits.length} commit{commits.length === 1 ? "" : "s"}
-        </div>
-      </OverlayLabel>
     </group>
   );
 }
