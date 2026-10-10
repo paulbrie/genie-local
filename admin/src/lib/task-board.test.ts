@@ -40,7 +40,7 @@ const model: BoardModel = {
   messages,
   tasks: [t1, t2, t3],
   files: [{ path: "src/a.ts", holder: null, since: null, guessed: false, history: [{ action: "claim", node: "s:bob", at: at(6), msgId: "x", guessed: false }, { action: "claim", node: "s:bob", at: at(55), msgId: "y", guessed: false }] }],
-  commits: [{ hash: "abc1234", abbrev: "abc1234", subject: null, author: null, date: null, remotes: null, project: null, app: null, verified: false, pushedTag: true, mentions: [{ hash: "abc1234", kind: "pushed", node: "s:bob", msgId: "m4", at: at(47) }] }],
+  commits: [{ hash: "abc1234", abbrev: "abc1234", subject: null, author: null, date: null, remotes: null, project: null, app: null, repo: null, verified: false, pushedTag: true, mentions: [{ hash: "abc1234", kind: "pushed", node: "s:bob", msgId: "m4", at: at(47) }] }],
   projects: { "s:bob": { id: "/opt/project/projects/trafficsim", name: "trafficsim" }, "s:tom": { id: "/opt/project/admin", name: "admin" } },
 };
 

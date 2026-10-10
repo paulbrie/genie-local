@@ -159,6 +159,8 @@ export type CommitInfo = {
   /** Admin project + app holding the repo, for linking to its git history. */
   project: string | null;
   app: string | null;
+  /** The repo's top directory (the id Agents City's cities use); null when not known. */
+  repo: string | null;
   verified: boolean;
   pushedTag: boolean;
   mentions: CommitMention[];

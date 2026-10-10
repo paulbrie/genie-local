@@ -151,6 +151,18 @@ function resolveClaim(
   return cands.length === 1 ? cands[0] : null;
 }
 
+/**
+ * The laid-out repo a commit belongs to: the one it was found in (its top directory, the cities' id); else, for
+ * an older cached commit without it, the one of its admin project and app. A repo with no project (/opt/project,
+ * a worktree in /tmp) is told apart by its directory only: "no project" isn't a project they share. Null when
+ * no laid-out repo is it.
+ */
+export function repoOfCommit(c: Pick<CommitInfo, "repo" | "project" | "app">, repos: Pick<RepoLayout, "id" | "project" | "app">[]): string | null {
+  if (c.repo) return repos.some((r) => r.id === c.repo) ? c.repo : null;
+  if (!c.project) return null;
+  return repos.find((r) => r.project === c.project && (r.app ?? null) === (c.app ?? null))?.id ?? null;
+}
+
 export function buildTimeline(
   model: Pick<Agents3DModel, "comms" | "activity" | "repos" | "nodeRepos">,
   pins: Record<string, CommsRole> = {},
@@ -226,7 +238,6 @@ export function buildTimeline(
     for (const d of r.dirty) if (d.m > 0) edits.push({ ms: d.m, fileKey: fileKey(r.id, d.p), node: null });
   edits.sort((a, b) => a.ms - b.ms);
 
-  const repoByProject = new Map(model.repos.map((r) => [`${r.project}/${r.app ?? ""}`, r.id]));
   const commits: TLCommit[] = comms.commits
     .map((c: CommitInfo) => {
       const first = c.mentions.find((m) => m.kind !== "pushed") ?? c.mentions[0];
@@ -236,7 +247,7 @@ export function buildTimeline(
         hash: c.hash,
         abbrev: c.abbrev,
         subject: c.subject,
-        repo: repoByProject.get(`${c.project}/${c.app ?? ""}`) ?? null,
+        repo: repoOfCommit(c, model.repos),
         node: first.node,
         // Prefer the commit's own date when it's within the window; else when it was first mentioned.
         ms: !Number.isNaN(authored) && authored <= ms(first.at) ? Math.max(authored, ms(first.at) - 3_600_000) : ms(first.at),
