@@ -45,7 +45,8 @@ export const TAG_NAMES = [
   "PUSHED",
 ] as const;
 export type TagName = (typeof TAG_NAMES)[number];
-export type CommsTag = { tag: TagName; arg: string };
+/** `loose`: a TASK found after a lead-in ("Queued after T68: TASK T72 …"), not at the line's start. */
+export type CommsTag = { tag: TagName; arg: string; loose?: true };
 
 export type CommsRole = "manager" | "worker" | "peer";
 
@@ -117,6 +118,12 @@ export type CommsTask = {
   createdAt: string | null;
   updatedAt: string | null;
   history: { state: TaskState; at: string | null; msgId: string; text: string | null }[];
+  /**
+   * Each owner's own state, when the task was given to more than one (the same id from the same
+   * manager: "T92 (data part)" to one, "T92 (display part)" to another). `state` sums them up: done once
+   * every part is (`summed`). Set once the task has a report; absent before.
+   */
+  parts?: Record<string, TaskState>;
 };
 
 export type FileClaim = {
@@ -227,22 +234,35 @@ export function parseTags(body: string): CommsTag[] {
       continue;
     }
     const t = line.match(LOOSE_TASK_RE);
-    if (t) tags.push({ tag: "TASK", arg: `${t[2]} ${t[3]}`.trim() });
+    if (t) tags.push(t[1].trim() ? { tag: "TASK", arg: `${t[2]} ${t[3]}`.trim(), loose: true } : { tag: "TASK", arg: `${t[2]} ${t[3]}`.trim() });
   }
   return tags;
 }
 
 const TASK_ID_RE = new RegExp(`^${ID}$`);
-const IDS_RE = new RegExp(`^(${ID}(?:\\s*(?:,|&|\\+|/|\\band\\b)\\s*${ID})*)(?![\\w-])[:,.]?(?:\\s+([\\s\\S]*))?$`);
+/** Between ids, a note in brackets is still about the one before: "T92 (display part) + T101". */
+const NOTE = `(?:\\s*\\([^()\\n]{0,80}\\))?`;
+const IDS_RE = new RegExp(
+  `^(${ID}(?:${NOTE}\\s*(?:,|&|\\+|/|\\band\\b)\\s*${ID})*)(?![\\w-])\\s*(?:[:,.]|[—–]|--?)?\\s*([\\s\\S]*)$`,
+);
 
 /**
  * Every id in a report's first clause and the rest: "T53 and T54 (both …)" →
- * ["T53", "T54"]; "T53, T54: done" → both. Empty if it doesn't start with one.
+ * ["T53", "T54"]; "T53, T54: done" → both; "T92 (display part) + T101, …" →
+ * both (a note in brackets after an id stays with it); "T68 — …" → T68.
+ * Empty if it doesn't start with one.
  */
 export function splitTaskIds(arg: string): { ids: string[]; rest: string } {
   const m = arg.trim().match(IDS_RE);
   if (!m) return { ids: [], rest: arg.trim() };
-  const ids = [...new Set(m[1].split(/\s*(?:,|&|\+|\/|\band\b)\s*/).map((x) => x.toUpperCase()))];
+  const ids = [
+    ...new Set(
+      m[1]
+        .replace(/\s*\([^()]*\)/g, "")
+        .split(/\s*(?:,|&|\+|\/|\band\b)\s*/)
+        .map((x) => x.toUpperCase()),
+    ),
+  ];
   return { ids, rest: (m[2] ?? "").trim() };
 }
 
@@ -433,23 +453,25 @@ export function deriveState(messages: CommsMessage[]): {
   const files = new Map<string, FileClaim>();
   const mentions: CommitMention[] = [];
 
+  /** Each owner's state (a task given to one owner has just that one). */
+  const partsOf = (t: CommsTask): Record<string, TaskState> => (t.parts ??= { [t.worker]: t.state });
+  const owns = (t: CommsTask, node: string) => node === t.worker || (!!t.parts && node in t.parts);
   const findTask = (id: string, a: string, b: string): CommsTask | undefined => {
-    // Prefer a task between this pair; else one with that id that involves
-    // either (a helper reporting to the manager on someone else's task).
+    // Prefer a task between this pair (its manager and one of its owners); else one with that id that
+    // involves either (a helper reporting to the manager on someone else's task).
     let fallback: CommsTask | undefined;
     for (const t of tasks.values()) {
       if (t.id !== id) continue;
-      const pair = pairKey(t.manager, t.worker);
-      if (pair === pairKey(a, b)) return t;
-      if (!fallback && [t.manager, t.worker].some((n) => n === a || n === b)) fallback = t;
+      if ((t.manager === a && owns(t, b)) || (t.manager === b && owns(t, a))) return t;
+      if (!fallback && (t.manager === a || t.manager === b || owns(t, a) || owns(t, b))) fallback = t;
     }
     return fallback;
   };
-  /** Latest open task where `worker` works for `manager`. */
+  /** Latest open task (its part still open) where `worker` works for `manager`. */
   const openTask = (manager: string, worker: string, guessedOnly = false) => {
     let found: CommsTask | undefined;
     for (const t of tasks.values()) {
-      if (t.manager === manager && t.worker === worker && !isClosed(t.state)) {
+      if (t.manager === manager && owns(t, worker) && !isClosed(t.parts?.[worker] ?? t.state)) {
         if (guessedOnly && !t.guessed) continue;
         if (!found || (t.updatedAt ?? "") >= (found.updatedAt ?? "")) found = t;
       }
@@ -464,18 +486,18 @@ export function deriveState(messages: CommsMessage[]): {
     t.history.push({ state, at, msgId: m.id, text });
   };
 
-  /** A tagged report from the task's owner or manager. */
+  /**
+   * A tagged report from one of the task's owners (their part) or its manager (every part). A done part
+   * stays done: a later ACK/STATUS (e.g. the manager's review) is kept in the history but doesn't reopen
+   * it; only BLOCKED or a TASK that says "resume" does. A cancelled one only reopens on TASK.
+   */
   const report = (t: CommsTask, tag: ReportTag, m: CommsMessage, text: string) => {
-    // A done task stays done: a later ACK/STATUS (e.g. the manager's review)
-    // is kept in its history but doesn't reopen it. Only BLOCKED or a new TASK
-    // does. A cancelled one only reopens on TASK.
-    const next =
-      t.state === "cancelled" && tag !== "DONE"
-        ? "cancelled"
-        : t.state === "done" && (tag === "ACK" || tag === "STATUS")
-          ? "done"
-          : tagState(tag);
-    move(t, next, m, text || null);
+    const next = (cur: TaskState): TaskState =>
+      cur === "cancelled" && tag !== "DONE" ? "cancelled" : cur === "done" && (tag === "ACK" || tag === "STATUS") ? "done" : tagState(tag);
+    const parts = partsOf(t);
+    if (m.from in parts) parts[m.from] = next(parts[m.from]);
+    else for (const w of Object.keys(parts)) parts[w] = next(parts[w]);
+    move(t, summed(parts), m, text || null);
   };
 
   // Basename → full paths seen, so "x.ts is yours now" can match "src/lib/x.ts".
@@ -539,12 +561,26 @@ export function deriveState(messages: CommsMessage[]): {
             if (f.history.some((h) => h.guessed && h.action === "claim" && h.node === node))
               fileAct(f.path, "release", node, m, true);
       }
-      for (const { tag, arg } of m.tags) {
+      for (const { tag, arg, loose } of m.tags) {
         switch (tag) {
           case "TASK": {
             const { id, rest } = splitTaskId(arg);
             const key = `${id ?? m.id}@${m.from}`;
-            const t: CommsTask = tasks.get(key) ?? {
+            const known = tasks.get(key);
+            if (known) {
+              // The same id again: to a new owner, another part of it ("T92 (display part)"); to an owner,
+              // a re-send (after a restart, a reminder) that keeps their part as it is. A done part reopens
+              // only when told to resume; a cancelled one always does. A loose mention ("I've dispatched
+              // TASK T3 to Bob", told to someone else) never makes a new owner.
+              const parts = partsOf(known);
+              const cur = parts[m.to];
+              if (cur === undefined && loose) break;
+              parts[m.to] =
+                cur === undefined || cur === "cancelled" ? "dispatched" : cur === "done" ? (/\bresume\b/i.test(rest) ? "dispatched" : "done") : cur;
+              move(known, summed(parts), m, rest || null);
+              break;
+            }
+            const t: CommsTask = {
               key,
               id,
               title: rest || m.summary || firstLine(m.body),
@@ -601,7 +637,7 @@ export function deriveState(messages: CommsMessage[]): {
                 };
                 tasks.set(key, nt);
                 move(nt, tagState(eff), m, text || null);
-              } else if (m.from === t.worker || m.from === t.manager) {
+              } else if (owns(t, m.from) || m.from === t.manager) {
                 report(t, eff, m, text);
               }
               // From anyone else (a helper's "DONE: T74" for their part of
@@ -626,6 +662,18 @@ export function deriveState(messages: CommsMessage[]): {
                 msgId: m.id,
                 at,
               });
+            // The manager committing an owner's work and telling them ("COMMIT: a4414f6 / PUSHED (T110)"
+            // after "BLOCKED: T110 commit/push"; "COMMIT: ca7e185 (T90): your Table work is on origin")
+            // finishes that owner's part, blocked or in progress. Only the receiver's: a commit of one
+            // part ("(T92 data part)", to Alex) leaves another owner's part as it is.
+            for (const id of idsIn(arg)) {
+              const t = tasks.get(`${id}@${m.from}`);
+              if (!t || !owns(t, m.to)) continue;
+              const parts = partsOf(t);
+              if (parts[m.to] !== "blocked" && parts[m.to] !== "in_progress") continue;
+              parts[m.to] = "done";
+              move(t, summed(parts), m, `${tag}: ${arg}`.slice(0, 200));
+            }
             break;
         }
       }
@@ -640,8 +688,10 @@ export function deriveState(messages: CommsMessage[]): {
       const lead = splitTaskIds(firstLine(m.body));
       for (const id of lead.ids) {
         const t = findTask(id, m.from, m.to);
-        if (t && t.worker === m.from && t.manager === m.to && t.state === "dispatched")
-          move(t, "in_progress", m, firstLine(m.body));
+        if (t && t.manager === m.to && owns(t, m.from) && partsOf(t)[m.from] === "dispatched") {
+          partsOf(t)[m.from] = "in_progress";
+          move(t, summed(partsOf(t)), m, firstLine(m.body));
+        }
       }
     }
     // Untagged: keyword fallbacks, all marked as guesses, only while this pair
@@ -697,6 +747,24 @@ export function deriveState(messages: CommsMessage[]): {
 }
 
 type ReportTag = "ACK" | "STATUS" | "BLOCKED" | "DONE" | "CANCELLED";
+
+/**
+ * A task's state from its owners' parts: done (or cancelled) once every part is closed, blocked while any
+ * is, in progress once any has started (or finished), else dispatched.
+ */
+export function summed(parts: Record<string, TaskState>): TaskState {
+  const s = Object.values(parts);
+  if (s.every(isClosed)) return s.includes("done") ? "done" : "cancelled";
+  if (s.includes("blocked")) return "blocked";
+  if (s.some((x) => x === "in_progress" || x === "done")) return "in_progress";
+  return "dispatched";
+}
+
+const ID_IN_RE = new RegExp(`(?<![\\w-])(${ID})(?![\\w-])`, "g");
+/** Every task-id-looking word in a text (whether it is one is up to the caller: it must name a task). */
+function idsIn(text: string): string[] {
+  return [...new Set([...text.matchAll(ID_IN_RE)].map((x) => x[1].toUpperCase()))];
+}
 
 function tagState(tag: ReportTag): TaskState {
   return tag === "DONE" ? "done" : tag === "CANCELLED" ? "cancelled" : tag === "BLOCKED" ? "blocked" : "in_progress";
