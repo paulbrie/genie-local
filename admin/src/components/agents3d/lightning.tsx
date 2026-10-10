@@ -10,13 +10,14 @@ import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeome
 import type { AgentEvent } from "@/lib/agents3d-types";
 import { editor, fileKey, lastBefore, type Snapshot, type Timeline, toolKind } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
+import { LIFT_STOREYS, liftActive, liftAt, TOUCH_HOLD_MS, type TouchKind } from "@/lib/lift";
 
 import type { Clock } from "./clock";
 import { useWantFrame } from "./frame-governor";
 import { ANIM_FPS, editId, keyOf, type Positions, realAge, useSeen } from "./parts";
 
-/** A touched file keeps its bolt this long (real ms) before the linger starts. */
-const HOLD_MS = 6000;
+/** A touched file keeps its bolt this long (real ms) before the linger starts (and its lift: lib/lift.ts). */
+const HOLD_MS = TOUCH_HOLD_MS;
 /** The strike flash after an Edit. */
 export const FLASH_MS = 450;
 /** Message bolts (TASK/STATUS between drones). */
@@ -173,6 +174,8 @@ export function Lightning({
   scale,
   strikes,
   linger,
+  lifts,
+  storey = 1,
 }: {
   tl: Timeline;
   snap: Snapshot;
@@ -184,6 +187,10 @@ export function Lightning({
   strikes: React.RefObject<Strike[]>;
   /** After an operation ends, a bolt stays this long (real ms) while fading out. */
   linger: number;
+  /** Written each frame: how high each building (by layout index) is lifted by its touches (T108), in world units. */
+  lifts?: Float32Array;
+  /** A storey, in world units (a lift is 1 or 1.5 of them). */
+  storey?: number;
 }) {
   const seenEv = useSeen();
   const seenMsg = useSeen();
@@ -258,6 +265,16 @@ export function Lightning({
     const out = strikes.current;
     if (out) out.length = 0;
     let n = 0;
+    // Touched files' buildings lift (the highest lift of their touches; reduced motion: no easing).
+    if (lifts) lifts.fill(0);
+    let lifting = false;
+    const lift = (fk: string, kind: TouchKind, age: number) => {
+      const bi = lifts ? layout.index.get(fk) : undefined;
+      if (bi === undefined || !lifts) return;
+      lifting = true;
+      const h = (reduced ? (age <= HOLD_MS + linger ? LIFT_STOREYS[kind] : 0) : liftAt(kind, age, linger)) * storey;
+      if (h > lifts[bi]) lifts[bi] = h;
+    };
 
     const enqueue = (
       from: THREE.Vector3,
@@ -290,8 +307,10 @@ export function Lightning({
         const kind = toolKind(e.tool);
         if (kind !== "edit" && kind !== "read") continue;
         const age = realAge(clock, t, seenEv.eff(keyOf(e, (x) => callId(x, a.key)), e.ms, live));
-        if (age < 0 || age > HOLD_MS + linger) continue;
+        if (!liftActive(age, linger)) continue;
         const fk = fileKey(e.repo, e.path);
+        lift(fk, kind, age);
+        if (age > HOLD_MS + linger) continue; // (still settling: lifted, no bolt)
         const prev = targets.get(fk);
         if (!prev || age < prev.age) targets.set(fk, { age, kind: kind === "edit" || prev?.kind === "edit" ? "edit" : "read", ms: e.ms });
       }
@@ -300,8 +319,10 @@ export function Lightning({
         const e = tl.edits[i];
         if (e.node && e.node !== a.key) continue;
         const age = realAge(clock, t, seenEv.eff(keyOf(e, editId), e.ms, live));
-        if (age < 0 || age > HOLD_MS + linger) continue;
+        if (!liftActive(age, linger)) continue;
         if (!e.node && editor(tl, snap, e) !== a.key) continue;
+        lift(e.fileKey, "edit", age);
+        if (age > HOLD_MS + linger) continue;
         const prev = targets.get(e.fileKey);
         if (!prev || age < prev.age) targets.set(e.fileKey, { age, kind: "edit", ms: e.ms });
       }
@@ -313,7 +334,8 @@ export function Lightning({
         const bi = layout.index.get(k);
         if (bi === undefined) return;
         const b = layout.buildings[bi];
-        vB.set(b.x, b.h, b.z);
+        // (on the roof as lifted)
+        vB.set(b.x, b.h + (lifts?.[bi] ?? 0), b.z);
         const active = 1 - Math.min(1, tg.age / HOLD_MS);
         const fade = tailFade(tg.age, HOLD_MS, linger);
         // The strike flash: full, then a short hold-and-fade tail.
@@ -462,7 +484,7 @@ export function Lightning({
     cols.needsUpdate = true;
     (sparks.material as THREE.PointsMaterial).size = 0.45 * scale;
     // Bolts flicker and fade, sparks fall: frames until the last is gone.
-    if (n > 0 || sparking) want(ANIM_FPS);
+    if (n > 0 || sparking || lifting) want(ANIM_FPS);
   });
 
   useEffect(

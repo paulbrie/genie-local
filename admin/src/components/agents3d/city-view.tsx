@@ -6,6 +6,7 @@ import * as THREE from "three";
 
 import { editor, fileKey, type Snapshot, type Timeline, type TLCommit } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
+import { LIFT_STOREYS } from "@/lib/lift";
 
 import type { Clock } from "./clock";
 import { useStableHandler, useWantFrame } from "./frame-governor";
@@ -40,6 +41,11 @@ const GREY = new THREE.Color("#94a3b8");
 
 const EDIT_PULSE_MS = 3500;
 const BEAMS = 24;
+/** A storey for touched buildings' lift (lib/lift.ts), in world units. */
+const STOREY = 1.2;
+const MAX_LIFT = STOREY * LIFT_STOREYS.edit;
+/** At most this many lifted buildings get a shadow on the ground. */
+const SHADOWS = 64;
 
 /**
  * What the 3D city shows of a snapshot (busy, focus, holders): when it is the
@@ -111,6 +117,14 @@ export function CityView({
   const agentColor = useMemo(() => new Map(tl.agents.map((a) => [a.key, new THREE.Color(a.color)])), [tl]);
   const ringColor = useMemo(() => new Map(tl.agents.map((a) => [a.key, new THREE.Color(a.color).multiplyScalar(1.4)])), [tl]);
 
+  // Touched buildings lift (T108): Lightning writes each one's lift for the frame, the frame loop below
+  // rewrites only the matrices that changed, and a lifted one leaves a faint shadow on its plot.
+  const lifts = useMemo(() => new Float32Array(buildings.length), [buildings]);
+  const applied = useMemo(() => new Float32Array(buildings.length), [buildings]);
+  const shRef = useRef<THREE.InstancedMesh>(null);
+  // Just over the deepest district plate, which the plots sit on.
+  const plateTop = useMemo(() => (Math.min(8, Math.max(0, ...districts.map((d) => d.depth))) + 1) * 0.06 + 0.01, [districts]);
+
   // Static matrices.
   useEffect(() => {
     const m = new THREE.Matrix4();
@@ -124,7 +138,10 @@ export function CityView({
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere();
+      // (room for a lifted building: picking and culling go by this sphere)
+      if (mesh.boundingSphere) mesh.boundingSphere.radius += MAX_LIFT;
     }
+    applied.fill(0);
     const dm = dRef.current;
     if (dm) {
       const c = new THREE.Color();
@@ -139,7 +156,7 @@ export function CityView({
       if (dm.instanceColor) dm.instanceColor.needsUpdate = true;
       dm.computeBoundingSphere();
     }
-  }, [buildings, districts, baseColors]);
+  }, [buildings, districts, baseColors, applied]);
 
   // Edit beams: a pool of light columns over freshly edited files.
   const beams = useMemo(
@@ -178,6 +195,9 @@ export function CityView({
   // Per-frame scratch, reused.
   const pulse = useMemo(() => new Map<number, { k: number; node: string | null }>(), []);
   const focusOf = useMemo(() => new Map<number, string>(), []);
+  const liftM = useMemo(() => new THREE.Matrix4(), []);
+  const liftV = useMemo(() => new THREE.Vector3(), []);
+  const liftC = useMemo(() => new THREE.Color(), []);
 
   // Frames on demand: a frame for whatever changed that the frame loop below reads.
   const invalidate = useThree((s) => s.invalidate);
@@ -267,7 +287,7 @@ export function CityView({
       const [bi, { k, node }] = e;
       const b = buildings[bi];
       const hgt = 10 * (reduced ? 1 : 0.4 + k * 0.6);
-      m.position.set(b.x, b.h + hgt / 2, b.z);
+      m.position.set(b.x, b.h + lifts[bi] + hgt / 2, b.z);
       m.scale.set(1, hgt, 1);
       const mat = m.material as THREE.MeshBasicMaterial;
       mat.color.copy((node && agentColor.get(node)) || WHITE).multiplyScalar(2.2);
@@ -286,7 +306,7 @@ export function CityView({
       if (bi !== undefined) {
         const b = buildings[bi];
         const off = (idx % 4) * 0.8;
-        target.set(b.x + off * droneScale, b.h + 6 * droneScale, b.z + off * droneScale);
+        target.set(b.x + off * droneScale, b.h + lifts[bi] + 6 * droneScale, b.z + off * droneScale);
       } else target.copy(homes.get(a.key)!);
       // A busy drone bobs and spins its ring; an idle one holds still (no frames needed).
       if (s?.busy && !reduced) {
@@ -302,6 +322,37 @@ export function CityView({
       const mat = core.material as THREE.MeshBasicMaterial;
       mat.color.set(a.color).multiplyScalar(s?.busy ? 2.4 + (reduced ? 0 : Math.sin(time * 4) * 0.4) : 0.45);
       idx++;
+    }
+    // Lifts: write only what moved since the last frame (Lightning asks the frames while they move).
+    if (mesh) {
+      let moved = false;
+      for (let i = 0; i < buildings.length; i++) {
+        if (lifts[i] === applied[i]) continue;
+        const b = buildings[i];
+        liftM.makeScale(b.w, b.h, b.d).setPosition(b.x, b.h / 2 + lifts[i], b.z);
+        mesh.setMatrixAt(i, liftM);
+        applied[i] = lifts[i];
+        moved = true;
+      }
+      if (moved) {
+        mesh.instanceMatrix.needsUpdate = true;
+        const sh = shRef.current;
+        if (sh) {
+          let c = 0;
+          for (let i = 0; i < buildings.length && c < SHADOWS; i++) {
+            if (applied[i] <= 0) continue;
+            const b = buildings[i];
+            liftM.makeRotationX(-Math.PI / 2).scale(liftV.set(b.w * 1.15, b.d * 1.15, 1)).setPosition(b.x, plateTop, b.z);
+            sh.setMatrixAt(c, liftM);
+            // (multiplied onto the ground: white leaves it, grey darkens it, more as it rises)
+            sh.setColorAt(c, liftC.setScalar(1 - 0.5 * Math.min(1, applied[i] / STOREY)));
+            c++;
+          }
+          sh.count = c;
+          sh.instanceMatrix.needsUpdate = true;
+          if (sh.instanceColor) sh.instanceColor.needsUpdate = true;
+        }
+      }
     }
     if (fps) want(fps);
   });
@@ -348,6 +399,12 @@ export function CityView({
       >
         <boxGeometry />
         <meshStandardMaterial toneMapped={false} roughness={0.55} metalness={0.15} />
+      </instancedMesh>
+
+      {/* Shadows left on the ground by lifted buildings (count set in the frame loop). */}
+      <instancedMesh ref={shRef} args={[undefined, undefined, SHADOWS]} count={0} frustumCulled={false} renderOrder={1}>
+        <planeGeometry />
+        <meshBasicMaterial blending={THREE.MultiplyBlending} premultipliedAlpha transparent depthWrite={false} toneMapped={false} />
       </instancedMesh>
 
       {beams.map((m, i) => (
@@ -424,6 +481,8 @@ export function CityView({
         scale={droneScale}
         strikes={strikes}
         linger={linger}
+        lifts={lifts}
+        storey={STOREY}
       />
 
       <MessageArcs tl={tl} clock={clock} positions={positions} eff={(m) => seenMsg.eff(m.id, m.ms, clock.live)} reduced={reduced} />
