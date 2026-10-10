@@ -31,6 +31,7 @@ import { commsPrefs, hydrateCommsPrefs, setCommsPrefs } from "@/store/comms";
 
 import { Clock } from "./clock";
 import { EditorTimeline } from "./timeline";
+import { escapeAction } from "./escape";
 import type { SceneProps, Selection } from "./scene";
 import { useAgents3D } from "./use-agents3d";
 import { type PaneView, usePanes } from "./use-panes";
@@ -160,6 +161,8 @@ export function Agents3DView() {
   const [selected, setSelected] = useState<Selection | null>(null);
   // Clicking an agent's card or row: first click flies the camera to it, a second follows it.
   const [flyTo, setFlyTo] = useState<{ key: string; n: number } | null>(null);
+  // Escape with nothing left to close: a new value flies the camera back to the mode's default.
+  const [resetCam, setResetCam] = useState(0);
   const onAgentClick = (key: string) => {
     if (flyTo?.key === key && selected?.kind === "agent" && selected.key === key) setFollow(key);
     else {
@@ -197,9 +200,11 @@ export function Agents3DView() {
   };
   const toggleRef = useRef(toggleFull);
   const pickModeRef = useRef(pickMode);
+  const escRef = useRef({ overlay: false, selected: false, following: false, messageOpen: false });
   useEffect(() => {
     toggleRef.current = toggleFull;
     pickModeRef.current = pickMode;
+    escRef.current = { overlay, selected: !!selected, following: !!follow, messageOpen: !!openMsg };
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -211,8 +216,16 @@ export function Agents3DView() {
         e.preventDefault();
         pickModeRef.current(modeRef.current === "desk" ? "city" : "desk");
       } else if (e.key === "Escape") {
-        setOverlay(false); // native full screen handles Esc itself
-        setFollow(""); // and back to the free camera
+        // One thing per press (escape.ts); inner layers that used it (a menu, the Table's board) preventDefault.
+        const a = escapeAction({ typing: false, handled: e.defaultPrevented, ...escRef.current });
+        if (a === "exit-overlay") setOverlay(false); // (native full screen handles Esc itself)
+        else if (a === "deselect") {
+          setSelected(null);
+          setFollow(""); // and back to the free camera
+        } else if (a === "reset-camera") {
+          setFollow("");
+          setResetCam((n) => n + 1);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -474,6 +487,7 @@ export function Agents3DView() {
               selected={selected}
               onSelect={onSelect}
               flyTo={flyTo}
+              resetCam={resetCam}
               onAgentClick={onAgentClick}
               panes={terminals ? panes : undefined}
             />
@@ -923,6 +937,17 @@ function ProjectsFilter({
 }) {
   const [open, setOpen] = useState(false);
   const shown = projects.filter((p) => !hidden.has(p.id)).length;
+  // Escape closes the menu (and only that: captured first, marked as used for the view's handler).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
   const toggle = (id: string) => {
     const next = new Set(hidden);
     if (next.has(id)) next.delete(id);

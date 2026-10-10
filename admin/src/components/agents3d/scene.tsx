@@ -38,6 +38,8 @@ export type SceneProps = {
   frameKey?: string;
   /** Fly the camera to this agent (a new `n` starts a new flight). */
   flyTo?: { key: string; n: number } | null;
+  /** A new value flies the camera back to the view's default (Escape with nothing open); 0: never asked. */
+  resetCam?: number;
   /** Live terminal captures by agent key; undefined when terminals are off. */
   panes?: Record<string, PaneView>;
   /** An agent's card was clicked. */
@@ -115,16 +117,40 @@ function Stage(props: SceneProps) {
 const FLY_MS = 800;
 const ease = (x: number) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
 
+type Controls = { target: THREE.Vector3; update: () => void; enableDamping: boolean };
+type Flight = { active: boolean; t0: number; fromPos: THREE.Vector3; fromTarget: THREE.Vector3; toPos: THREE.Vector3; toTarget: THREE.Vector3 };
+
+/** Starts `flight` from where the camera is to `toPos`, looking at `toTarget` (reduced motion: jumps there). */
+function startFlight(flight: Flight, camera: THREE.Camera, controls: Controls, toPos: THREE.Vector3, toTarget: THREE.Vector3, reduced: boolean) {
+  // Spend what's left of a drag's damping first, or it carries the camera on after landing.
+  const damping = controls.enableDamping;
+  controls.enableDamping = false;
+  controls.update();
+  controls.enableDamping = damping;
+  flight.fromPos.copy(camera.position);
+  flight.fromTarget.copy(controls.target);
+  flight.toTarget.copy(toTarget);
+  flight.toPos.copy(toPos);
+  flight.t0 = performance.now();
+  flight.active = true;
+  if (reduced) {
+    camera.position.copy(flight.toPos);
+    controls.target.copy(flight.toTarget);
+    controls.update();
+    flight.active = false;
+  }
+}
+
 /**
  * Eases the camera to an agent: frames the drone and the file under its bolt
  * (its focus) at a comfortable distance, keeping the current viewing
  * direction, then holds. Reduced motion jumps instead.
  */
-function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { positions: React.RefObject<Positions> }) {
-  const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
+function FlyTo({ flyTo, resetCam, camera: startCam, snap, layout, reduced, positions }: SceneProps & { positions: React.RefObject<Positions> }) {
+  const controls = useThree((s) => s.controls) as unknown as Controls | null;
   const camera = useThree((s) => s.camera);
   const want = useWantFrame();
-  const flightRef = useRef({
+  const flightRef = useRef<Flight>({
     active: false,
     t0: 0,
     fromPos: new THREE.Vector3(),
@@ -134,7 +160,6 @@ function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { posit
   });
 
   useEffect(() => {
-    const flight = flightRef.current;
     if (!flyTo || !controls) return;
     const p = positions.current?.get(flyTo.key);
     if (!p) return;
@@ -150,22 +175,21 @@ function FlyTo({ flyTo, snap, layout, reduced, positions }: SceneProps & { posit
     if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
     dir.normalize().multiplyScalar(Math.cos(0.62) * dist);
     dir.y = Math.sin(0.62) * dist; // ~35° above the horizon
-    flight.fromPos.copy(camera.position);
-    flight.fromTarget.copy(controls.target);
-    flight.toTarget.copy(center);
-    flight.toPos.copy(center).add(dir);
-    flight.t0 = performance.now();
-    flight.active = true;
-    if (reduced) {
-      camera.position.copy(flight.toPos);
-      controls.target.copy(flight.toTarget);
-      controls.update();
-      flight.active = false;
-    }
+    startFlight(flightRef.current, camera, controls, center.clone().add(dir), center, reduced);
     want(60);
     // Only a new flight (n) starts this; snapshot ticks must not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flyTo?.n, controls]);
+
+  // Back to the default view (Escape with nothing open): where the canvas started.
+  useEffect(() => {
+    if (!resetCam || !controls) return;
+    const home = startCam ?? cameraFor(layout);
+    startFlight(flightRef.current, camera, controls, new THREE.Vector3(...home.position), new THREE.Vector3(...home.target), reduced);
+    want(60);
+    // Only a new reset starts this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetCam, controls]);
 
   useFrame(() => {
     const flight = flightRef.current;
