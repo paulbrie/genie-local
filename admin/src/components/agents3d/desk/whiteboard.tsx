@@ -21,9 +21,15 @@ import { BOARD, TABLE } from "./world";
 
 type Column = 0 | 1 | 2;
 const COLUMNS = ["To do", "Doing", "Done"];
-const DONE_KEEP = 8;
-const PER_COLUMN = 9;
-const NOTE = 2.8;
+/** Three post-its a row, four rows a column (T164: the larger board's; three rows before). */
+const PER_ROW = 3;
+export const PER_COLUMN = 4 * PER_ROW;
+/** Done keeps one fewer (its newest; as before T164). */
+const DONE_KEEP = PER_COLUMN - 1;
+/** A post-it's side (T164: 10% larger than 2.8). */
+export const NOTE = 3.08;
+/** Between post-its: across, and down. */
+const NOTE_GAP = { x: 0.28, y: 0.3 };
 const FLY_MS = 900;
 /** The paper of every post-it: classic sticky-note yellow (dark text reads at 13:1 on it). */
 const PAPER = "#fff59d";
@@ -33,8 +39,13 @@ const DOT_R = 15;
 type Task = Snapshot["tasks"][number];
 type Placed = { task: Task; col: Column; x: number; y: number; tilt: number };
 
-const HEADER_H = 2.2;
+export const HEADER_H = 2.4;
 const colW = BOARD.w / 3;
+/**
+ * The board's writing (world units, T164: each a step, 10%, larger): the column headings, "+n more" under a
+ * column, and the marker lines.
+ */
+export const INK = { heading: 1.34, more: 0.75, line: 0.1, margin: 0.42 };
 
 function hash(s: string): number {
   let h = 2166136261;
@@ -63,14 +74,14 @@ export function placeNotes(tasks: Task[]): { placed: Placed[]; more: [number, nu
     const keep = c === 2 ? Math.min(DONE_KEEP, PER_COLUMN) : PER_COLUMN;
     more[c] = Math.max(0, list.length - keep);
     list.slice(0, keep).forEach((task, i) => {
-      const row = Math.floor(i / 3);
-      const k = i % 3;
+      const row = Math.floor(i / PER_ROW);
+      const k = i % PER_ROW;
       const x0 = -BOARD.w / 2 + c * colW + colW / 2;
       placed.push({
         task,
         col: c as Column,
-        x: x0 + (k - 1) * (NOTE + 0.25),
-        y: BOARD.h / 2 - HEADER_H - 0.4 - NOTE / 2 - row * (NOTE + 0.45),
+        x: x0 + (k - (PER_ROW - 1) / 2) * (NOTE + NOTE_GAP.x),
+        y: BOARD.h / 2 - HEADER_H - 0.4 - NOTE / 2 - row * (NOTE + NOTE_GAP.y),
         tilt: ((hash(task.key) % 100) / 100 - 0.5) * 0.14,
       });
     });
@@ -159,21 +170,24 @@ function noteTexture(task: Task, color: string, elapsed: Elapsed | null): THREE.
   g.strokeStyle = "rgba(31, 41, 55, 0.45)";
   g.stroke();
   g.fillStyle = "#1f2937";
-  g.font = "bold 40px ui-sans-serif, system-ui, sans-serif";
-  g.fillText(task.id ?? "task", 16, 70);
+  // (each size a step, 10%, larger than before T164)
+  g.font = "bold 44px ui-sans-serif, system-ui, sans-serif";
+  g.fillText(task.id ?? "task", 16, 72);
   // Up to four lines of title, ellipsised after that; the elapsed time keeps the bottom line.
-  g.font = "23px ui-sans-serif, system-ui, sans-serif";
-  wrap(g, noteTitle(task.title), 228, 4).forEach((l, i) => g.fillText(l, 16, 104 + i * 28));
+  g.font = "25px ui-sans-serif, system-ui, sans-serif";
+  wrap(g, noteTitle(task.title), 228, 4).forEach((l, i) => g.fillText(l, 16, 106 + i * 30));
+  // The bottom line: BLOCKED on the left, the time on the right; a step smaller (as before T164) if the two would meet.
+  const blocked = task.state === "blocked";
+  g.font = "bold 24px ui-sans-serif, system-ui, sans-serif";
+  if (blocked && elapsed && 16 + g.measureText("BLOCKED").width + 10 > 242 - g.measureText(elapsed.text).width) g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
   if (elapsed) {
     g.fillStyle = elapsed.color;
-    g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
     g.textAlign = "right";
     g.fillText(elapsed.text, 242, 240);
     g.textAlign = "left";
   }
-  if (task.state === "blocked") {
+  if (blocked) {
     g.fillStyle = "#b91c1c";
-    g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
     g.fillText("BLOCKED", 16, 240);
   }
   if (task.state === "cancelled") {
@@ -192,37 +206,41 @@ function noteTexture(task: Task, color: string, elapsed: Elapsed | null): THREE.
 
 function boardTexture(more: [number, number, number]): THREE.CanvasTexture {
   const c = document.createElement("canvas");
-  c.width = 1536;
-  c.height = 768;
+  // (the board's own proportions, so the writing isn't stretched; u: pixels per world unit)
+  c.width = 2048;
+  c.height = Math.round((c.width * BOARD.h) / BOARD.w);
+  const u = c.width / BOARD.w;
   const g = c.getContext("2d")!;
   g.fillStyle = "#f8fafc";
   g.fillRect(0, 0, c.width, c.height);
   const cw = c.width / 3;
-  const hh = (HEADER_H / BOARD.h) * c.height;
+  const hh = HEADER_H * u;
+  const m = INK.margin * u;
   g.strokeStyle = "#94a3b8";
-  g.lineWidth = 5;
+  g.lineWidth = INK.line * u;
   g.lineCap = "round";
   for (let i = 1; i < 3; i++) {
     g.beginPath();
-    g.moveTo(i * cw, 24);
-    g.lineTo(i * cw + 4, c.height - 24);
+    g.moveTo(i * cw, m);
+    g.lineTo(i * cw + 0.07 * u, c.height - m);
     g.stroke();
   }
   g.beginPath();
-  g.moveTo(24, hh);
-  g.lineTo(c.width - 24, hh - 3);
+  g.moveTo(m, hh);
+  g.lineTo(c.width - m, hh - 0.05 * u);
   g.stroke();
-  g.font = "bold 72px 'Comic Sans MS', 'Marker Felt', ui-rounded, sans-serif";
+  const heading = `bold ${Math.round(INK.heading * u)}px 'Comic Sans MS', 'Marker Felt', ui-rounded, sans-serif`;
+  g.font = heading;
   g.textAlign = "center";
   const ink = ["#2563eb", "#c2410c", "#16a34a"]; // equal weight: amber washes out on white
   COLUMNS.forEach((name, i) => {
     g.fillStyle = ink[i];
-    g.fillText(name, i * cw + cw / 2, hh - 30);
+    g.fillText(name, i * cw + cw / 2, hh - 0.55 * u);
     if (more[i]) {
-      g.font = "40px ui-sans-serif, system-ui, sans-serif";
+      g.font = `${Math.round(INK.more * u)}px ui-sans-serif, system-ui, sans-serif`;
       g.fillStyle = "#64748b";
-      g.fillText(`+${more[i]} more`, i * cw + cw / 2, c.height - 28);
-      g.font = "bold 72px 'Comic Sans MS', 'Marker Felt', ui-rounded, sans-serif";
+      g.fillText(`+${more[i]} more`, i * cw + cw / 2, c.height - 0.5 * u);
+      g.font = heading;
     }
   });
   const t = new THREE.CanvasTexture(c);

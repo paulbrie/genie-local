@@ -59,15 +59,19 @@ const deg = (d: number) => (d * Math.PI) / 180;
 export const PAPERS = polar(deg(180), TABLE.r - 3.1);
 export const BEACON = polar(deg(-146), TABLE.r - 3.5);
 export const LAMP = polar(0, TABLE.r - 2.1);
-/** The whiteboard stands behind the table, its bottom above a standing avatar's head, so it reads over the back seats. */
-export const BOARD = { x: 0, z: -TABLE.r - 9, w: 28, h: 13, y: 8.5 };
+/**
+ * The whiteboard stands behind the table, its bottom above a standing avatar's head, so it reads over the back seats.
+ * T164: larger (28 × 13 before), on shorter legs: the board takes the height they gave up, its top a little higher.
+ */
+export const BOARD = { x: 0, z: -TABLE.r - 9, w: 33, h: 17.6, y: 5.5 };
 /** How far from the table's centre a chair reaches (its back and its foot, behind the seat). */
 export const CHAIR_R = TABLE.r + AVATAR_SCALE * 0.32 + AVATAR_SCALE * (0.2 + 0.5);
 /** Free floor for walking: a ring around the chairs, clear to the whiteboard; and the strip in front of the board. */
 export const WALK = { r0: CHAIR_R + 0.5, r1: CHAIR_R + 3.5 };
 /** Where the bookshelf stands (T95): on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
-// (well left of the board and a little forward: from the default camera it stands clear of the back-left seats, T133)
-export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 10.5 - 9.8 / 2, z: BOARD.z + 3, w: 9.8, d: 2.6 };
+// (well left of the board and a little forward: from the default camera it stands clear of the back-left seats, T133;
+// where it stood when the board grew, T164)
+export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 8 - 9.8 / 2, z: BOARD.z + 3, w: 9.8, d: 2.6 };
 /**
  * The bookshelf (T133: 1.4× T95's): a shelf per project on the table (shelf.ts), `gap` the room between two
  * boards; it grows taller with the projects, up to MAX_SHELVES, the top one still in reach of a person.
