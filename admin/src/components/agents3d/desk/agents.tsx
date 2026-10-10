@@ -206,12 +206,12 @@ const DOING_TEXT: Record<Doing, string> = {
 
 const chairMat = new THREE.MeshPhysicalMaterial({ color: "#334155", roughness: 0.6, clearcoat: 0.2 });
 const chairGeo = {
-  seat: new RoundedBoxGeometry(0.95, 0.12, 0.85, 2, 0.05),
+  seat: new RoundedBoxGeometry(0.95, 0.12, 0.5, 2, 0.05),
   back: new RoundedBoxGeometry(0.95, 0.95, 0.1, 2, 0.05),
   post: new THREE.CylinderGeometry(0.06, 0.06, 1, 10),
   foot: new THREE.CylinderGeometry(0.45, 0.5, 0.06, 20),
 };
-/** A desk chair, in avatar units (scaled with it), reaching down to the floor. */
+/** A desk chair, in avatar units (scaled with it), reaching down to the floor; its seat behind the legs, which go straight down to it. */
 function makeChair(): THREE.Group {
   const g = new THREE.Group();
   const add = (geo: THREE.BufferGeometry, pos: [number, number, number], scale: [number, number, number] = [1, 1, 1]) => {
@@ -222,10 +222,10 @@ function makeChair(): THREE.Group {
     g.add(m);
   };
   const floor = (-TABLE.h - SEAT_Y) / S;
-  add(chairGeo.seat, [0, 0.31, 0.12]);
+  add(chairGeo.seat, [0, 0.31, -0.2]);
   add(chairGeo.back, [0, 0.8, -0.42]);
-  add(chairGeo.post, [0, (0.25 + floor) / 2, 0.1], [1, 0.25 - floor, 1]);
-  add(chairGeo.foot, [0, floor + 0.03, 0.1]);
+  add(chairGeo.post, [0, (0.25 + floor) / 2, -0.2], [1, 0.25 - floor, 1]);
+  add(chairGeo.foot, [0, floor + 0.03, -0.2]);
   g.scale.setScalar(S);
   return g;
 }

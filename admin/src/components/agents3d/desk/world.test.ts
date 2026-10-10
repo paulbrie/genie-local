@@ -3,7 +3,27 @@ import { describe, it } from "node:test";
 
 import type { CityLayout } from "@/lib/city-layout";
 
-import { CITY_SCALE, DISTRICT_LABEL_DIST, districtSpots, miniCities, nearestSpots, packCities, TABLE } from "./world";
+import {
+  AVATAR_SCALE,
+  BOARD,
+  BODY,
+  CHAIR_R,
+  CITY_SCALE,
+  DISTRICT_LABEL_DIST,
+  districtSpots,
+  FLOOR_Y,
+  laptopAt,
+  miniCities,
+  nearestSpots,
+  packCities,
+  PERSON_H,
+  SEAT_Y,
+  SEATED_LEG,
+  seatAt,
+  SHELF_SPOT,
+  TABLE,
+  WALK,
+} from "./world";
 
 /** Cities as the layout makes them: squares in one row along x, GAP 8 apart, centred on z. */
 function row(sides: number[]) {
@@ -80,5 +100,48 @@ describe("neighbourhood names", () => {
     assert.deepEqual([...idx], [3, 2, 1]);
     // From far away: none.
     assert.equal(nearestSpots(0, 40, 0, sp, idx, d2), 0);
+  });
+});
+
+describe("a table of normal height (T96)", () => {
+  const S = AVATAR_SCALE;
+  it("a standing person is 2.41 model units × the scale (about 7.9, '1.75 m')", () => {
+    assert.ok(Math.abs(PERSON_H - 7.95) < 0.05);
+  });
+  it("the top at the seated elbow height: about 0.35 of a standing person, the floor below it", () => {
+    const ratio = TABLE.h / PERSON_H;
+    assert.ok(ratio > 0.33 && ratio < 0.37, `ratio ${ratio}`);
+    assert.equal(FLOOR_Y, -TABLE.h);
+    const shoulder = SEAT_Y + BODY.shoulder * S;
+    const elbow = shoulder - BODY.upperArm * S;
+    assert.ok(Math.abs(elbow) < 1e-9, `elbow ${elbow}`);
+  });
+  it("seated: feet on the floor, head and shoulders above the top", () => {
+    const hip = SEAT_Y + BODY.hip * S;
+    const sole = hip - BODY.leg * S * Math.cos(SEATED_LEG);
+    assert.ok(Math.abs(sole - FLOOR_Y) < 1e-9, `sole ${sole}`);
+    assert.ok(SEAT_Y + BODY.shoulder * S > 0.6);
+    assert.ok(SEAT_Y + BODY.h * S > 4);
+  });
+  it("a standing avatar's head stays under the whiteboard, which reads over the seated ones", () => {
+    assert.ok(FLOOR_Y + PERSON_H < BOARD.y);
+  });
+});
+
+describe("room to walk (T96)", () => {
+  it("chairs stay inside the walking ring, for any number of people", () => {
+    for (const n of [1, 6, 9, 13, 16]) for (let i = 0; i < n; i++) assert.ok(Math.hypot(seatAt(i, n).x, seatAt(i, n).z) + AVATAR_SCALE * 0.7 <= CHAIR_R + 1e-9);
+    assert.ok(WALK.r0 > CHAIR_R && WALK.r1 - WALK.r0 >= 3);
+  });
+  it("the whiteboard (with its gauges) and the bookshelf's spot are past the ring, clear of each other", () => {
+    const boardFront = Math.abs(BOARD.z) - 0.6;
+    assert.ok(boardFront > WALK.r1, `board ${boardFront} vs ring ${WALK.r1}`);
+    const shelfFront = Math.hypot(SHELF_SPOT.x, Math.abs(SHELF_SPOT.z) - SHELF_SPOT.d / 2);
+    assert.ok(shelfFront > WALK.r1, `shelf ${shelfFront}`);
+    const boardLeft = BOARD.x - BOARD.w / 2 - 0.4;
+    assert.ok(SHELF_SPOT.x + SHELF_SPOT.w / 2 < boardLeft, "the shelf is left of the board");
+  });
+  it("laptops stay on the table", () => {
+    for (let i = 0; i < 9; i++) assert.ok(Math.hypot(laptopAt(seatAt(i, 9)).x, laptopAt(seatAt(i, 9)).z) < TABLE.r - 1);
   });
 });

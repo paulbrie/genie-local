@@ -4,6 +4,7 @@
  * the upper body acts out the action. Reduced motion passes t = 0 and holds a still pose.
  */
 import type { Avatar } from "./avatar";
+import { SEATED_LEG } from "./world";
 
 export type Pose =
   | "idle"
@@ -79,7 +80,7 @@ function stand(j: Avatar["joints"]) {
 
 /**
  * Apply a pose. `t` real seconds, `k` progress 0..1 through a one-shot. Returns a vertical hop.
- * `seated`: on a chair at the table (thighs forward; napping is head-down on the arms).
+ * `seated`: on a chair at the table (feet on the floor; napping is head-down on the arms).
  */
 export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: boolean, still: boolean, seated = false): number {
   const j = a.joints;
@@ -102,8 +103,9 @@ export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: b
   p.envelope.visible = p.scroll.visible = p.flag.visible = p.block.visible = p.mug.visible = p.pencil.visible = false;
   let hop = 0;
   if (seated) {
-    j.legL.rotation.set(-1.5, 0, -0.06);
-    j.legR.rotation.set(-1.5, 0, 0.06);
+    // Feet on the floor: the straight legs lean forward a little, under the table's edge.
+    j.legL.rotation.set(-SEATED_LEG, 0, -0.06);
+    j.legR.rotation.set(-SEATED_LEG, 0, 0.06);
   }
 
   if (moving) {

@@ -14,7 +14,7 @@ import { OverlayLabel } from "../overlay-label";
 import { realAge } from "../parts";
 import type { Selection } from "../scene";
 import { DistrictLabels } from "./district-labels";
-import { BEACON, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
+import { BEACON, FLOOR_Y, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
 
 const stop = (e: ThreeEvent<MouseEvent>) => e.stopPropagation();
 /** The lamp's bulb: bright enough to bloom. */
@@ -63,8 +63,8 @@ export function DeskTop() {
       <mesh geometry={geo} position={[0, -0.3, 0]} receiveShadow>
         <meshPhysicalMaterial map={grain} roughness={0.55} clearcoat={0.3} clearcoatRoughness={0.4} />
       </mesh>
-      {/* the floor far below, so the desk doesn't float in a void */}
-      <mesh rotation-x={-Math.PI / 2} position={[0, -TABLE.h, 0]} receiveShadow>
+      {/* the floor everyone stands on */}
+      <mesh rotation-x={-Math.PI / 2} position={[0, FLOOR_Y, 0]} receiveShadow>
         <circleGeometry args={[60, 48]} />
         <meshStandardMaterial color="#2a2522" roughness={1} />
       </mesh>

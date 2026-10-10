@@ -29,7 +29,7 @@ import { BOARD, miniCities } from "./world";
  */
 const GUESTS_KEY = "admin.agents3d.desk.guests";
 /** The default camera; Escape with nothing open flies back to it (resetCam). */
-const HOME = { pos: new THREE.Vector3(0, 25, 45), target: new THREE.Vector3(0, 6, -6) };
+const HOME = { pos: new THREE.Vector3(0, 29, 50), target: new THREE.Vector3(0, 5, -7) };
 
 export default function DeskScene(props: SceneProps) {
   const { bloom, onSelect } = props;

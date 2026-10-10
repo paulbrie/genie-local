@@ -1,8 +1,9 @@
 /**
  * Where things are on the desk (world units, tabletop at y = 0, +z towards the
- * viewer): the table, the seats around it (agents sit at the table, head and
- * shoulders above the top), and the miniature cities fitted into its centre.
- * TABLE, CITY_SCALE and AVATAR_SCALE are the knobs for proportions.
+ * viewer): the table at a normal height for the avatars, the floor they stand
+ * on, the seats around it (feet on the floor, head and shoulders above the
+ * top), the miniature cities fitted into its centre, and the paths left free
+ * for walking. AVATAR_SCALE, BODY and TABLE.r are the knobs for proportions.
  */
 import * as THREE from "three";
 
@@ -10,8 +11,31 @@ import type { CityLayout } from "@/lib/city-layout";
 
 export type XZ = { x: number; z: number };
 
+/** Avatar size: 1 = the 2.41-unit-tall model; 3.3 seats a person at this table. */
+export const AVATAR_SCALE = 3.3;
+/**
+ * The avatar model's own measures (model units, feet at 0): standing height, the
+ * hips (the legs' pivot), the shoulders, hip to sole, and the upper arm. A chibi
+ * body: the head is 1.05 of the 2.41, so the shoulders are at 45 % of the height.
+ */
+export const BODY = { h: 2.41, hip: 0.5, shoulder: 1.08, leg: 0.53, upperArm: 0.26 };
+/** A standing person (world units; "1.75 m"). */
+export const PERSON_H = BODY.h * AVATAR_SCALE;
+/** Seated, the straight legs (no knees) lean this far forward from straight down, under the table's edge (radians). */
+export const SEATED_LEG = 0.25;
+/** Seated with feet on the floor: the hips' height above it. */
+const SEAT_HIP = BODY.leg * AVATAR_SCALE * Math.cos(SEATED_LEG);
+/**
+ * The table's height above the floor, at these bodies' seated elbow height (the
+ * user's choice, T96): forearms rest on the top, as people sit at a table. About
+ * 0.35 of a standing person here; a human's 0.75/1.75 would put the top level
+ * with these short-bodied avatars' shoulders.
+ */
+export const TABLE_HEIGHT = SEAT_HIP + (BODY.shoulder - BODY.hip - BODY.upperArm) * AVATAR_SCALE;
 /** The round tabletop (radius) and its height above the floor; 16 leaves the cities a 10.5-unit disc. */
-export const TABLE = { r: 16, h: 11 };
+export const TABLE = { r: 16, h: TABLE_HEIGHT };
+/** The floor everyone stands on (the tabletop is at 0). */
+export const FLOOR_Y = -TABLE.h;
 /**
  * The miniature cities fit within this share of the table's radius, centred: 0.66 × 16 = 10.56,
  * which clears the props in the front gap (inner edges ≥ 11) and the laptops (≥ 13.6).
@@ -23,12 +47,8 @@ const MAX_CITY_S = 0.35;
 const PACK_GAP = 3;
 /** Seats keep out of this arc on the camera side (+z), so no head hides the cities. */
 const FRONT_GAP = (120 * Math.PI) / 180;
-/** Avatar size: 1 = the 2.4-unit-tall model; 3.3 seats a person at this table. */
-export const AVATAR_SCALE = 3.3;
-/** Avatar-local height that sits level with the tabletop (just under the shoulders). */
-const SEAT_LINE = 0.85;
-/** Root height of a seated avatar, so head and shoulders show above the top. */
-export const SEAT_Y = -SEAT_LINE * AVATAR_SCALE;
+/** Root height of a seated avatar (its feet when standing): hips at SEAT_HIP above the floor. */
+export const SEAT_Y = FLOOR_Y + SEAT_HIP - BODY.hip * AVATAR_SCALE;
 
 /** A point on the table at angle `phi` (0 = the back, positive clockwise seen from above) and radius `r`. */
 const polar = (phi: number, r: number) => ({ x: r * Math.sin(phi), z: -r * Math.cos(phi) });
@@ -41,8 +61,14 @@ export const PAPERS = polar(deg(180), TABLE.r - 3.1);
 export const BEACON = polar(deg(-146), TABLE.r - 3.5);
 export const LAMP = polar(0, TABLE.r - 2.1);
 export const MUG = polar(deg(-164), TABLE.r - 2.2);
-/** The whiteboard stands behind the table. */
+/** The whiteboard stands behind the table, its bottom above a standing avatar's head, so it reads over the back seats. */
 export const BOARD = { x: 0, z: -TABLE.r - 9, w: 28, h: 13, y: 8.5 };
+/** How far from the table's centre a chair reaches (its back and its foot, behind the seat). */
+export const CHAIR_R = TABLE.r + AVATAR_SCALE * 0.32 + AVATAR_SCALE * (0.2 + 0.5);
+/** Free floor for walking: a ring around the chairs, clear to the whiteboard; and the strip in front of the board. */
+export const WALK = { r0: CHAIR_R + 0.5, r1: CHAIR_R + 3.5 };
+/** Where T95's bookshelf will stand: on the floor left of the whiteboard, facing the table (world x/z, width and depth). */
+export const SHELF_SPOT = { x: BOARD.x - BOARD.w / 2 - 5, z: BOARD.z + 1, w: 7, d: 2 };
 
 export const PLATE_H = 0.12;
 
