@@ -19,6 +19,7 @@ export type Pose =
   | "cheer"
   | "blocked"
   | "nap"
+  | "wait"
   // Seated states: the idle variants…
   | "sip"
   | "pencil"
@@ -49,6 +50,22 @@ export const THINK_POSES: Pose[] = ["think", "thinker", "headrest", "pencilChin"
 /** Happy dances for a DONE, each over one cheer beat (~3 s); `k` runs 0..1 through it. */
 export const DANCES: Pose[] = ["jumpUp", "chairSpin", "fistPump", "shimmy", "robot", "twirl", "raiseRoof", "bothWave"];
 export const isDance = (p: Pose) => DANCES.includes(p);
+
+/** Idle agents cycle through these, each for IDLE_SLOT_S, out of step with each other; long idle adds naps. */
+const IDLE_POSES: Pose[] = ["sip", "pencil", "stretch", "idle"];
+const LONG_IDLE_POSES: Pose[] = ["nap", "sip", "nap", "pencil", "stretch"];
+const IDLE_SLOT_S = 14;
+
+/**
+ * The idle variant an agent is in at real time `ms` (shared by the avatar and its label).
+ * Asleep (see asleepAt) it holds the nap: nothing cycles in until it acts again.
+ */
+export function idlePose(seed: number, ms: number, long: boolean, asleep = false): Pose {
+  if (asleep) return "nap";
+  const list = long ? LONG_IDLE_POSES : IDLE_POSES;
+  const slot = Math.floor(ms / 1000 / IDLE_SLOT_S + (seed % 97) / 97);
+  return list[(slot + seed) % list.length];
+}
 
 const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 
@@ -326,6 +343,12 @@ export function applyPose(a: Avatar, pose: Pose, t: number, k: number, moving: b
       j.armL.rotation.set(0, 0, -2.6 + s(6) * 0.4);
       j.armR.rotation.set(0, 0, 2.6 + s(6) * 0.4);
       j.body.rotation.z = s(6) * 0.08;
+      break;
+    case "wait":
+      // Sitting up, hands resting on the table's edge (the head turns to whoever it waits on, in agents.tsx).
+      j.body.rotation.x = -0.06;
+      j.armL.rotation.set(-1.05, 0, 0.22);
+      j.armR.rotation.set(-1.05, 0, -0.22);
       break;
     case "nap":
       for (const e of j.eyes) e.scale.y = 0.008;

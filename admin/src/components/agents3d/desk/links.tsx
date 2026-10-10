@@ -70,7 +70,10 @@ class Targets {
     } else {
       const [repo, path] = key.split("\n");
       const best = (this.byRepo.get(repo) ?? []).filter((d) => path.startsWith(`${d.dir}/`)).sort((a, b) => b.depth - a.depth)[0];
-      if (best) out = new THREE.Vector3(mini.ox + (best.x + best.w / 2) * mini.s, PLATE_H + 0.05, mini.oz + (best.z + best.d / 2) * mini.s);
+      if (best) {
+        const p = mini.at(repo, best.x + best.w / 2, best.z + best.d / 2);
+        out = new THREE.Vector3(p.x, PLATE_H + 0.05, p.z);
+      }
     }
     this.cache.set(key, out);
     return out;

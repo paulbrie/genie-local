@@ -8,13 +8,14 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import type { Snapshot, TLTask } from "@/lib/agents3d-timeline";
 
 import type { Selection } from "../scene";
+import { ServerGauges } from "./gauges";
 import { BOARD, TABLE } from "./world";
 
 /**
  * The whiteboard behind the desk: the tasks as post-its in To do / Doing /
- * Done, from the snapshot (so live, and replayed with the scrubber). A post-it
- * is coloured by its owner (the worker); when its task changes column it
- * flies there. Done keeps the newest few; cancelled ones are struck through.
+ * Done, from the snapshot (so live, and replayed with the scrubber). Every
+ * post-it is yellow, with a dot in its owner's (the worker's) colour; when its
+ * task changes column it flies there. Done keeps the newest few; cancelled ones are struck through.
  */
 
 type Column = 0 | 1 | 2;
@@ -23,6 +24,10 @@ const DONE_KEEP = 8;
 const PER_COLUMN = 9;
 const NOTE = 2.8;
 const FLY_MS = 900;
+/** The paper of every post-it: classic sticky-note yellow (dark text reads at 13:1 on it). */
+const PAPER = "#fff59d";
+/** The owner's colour cue: a dot in the top-right corner, this radius (px of the 256 px note, ~6% of its width). */
+const DOT_R = 15;
 
 type Task = Snapshot["tasks"][number];
 type Placed = { task: Task; col: Column; x: number; y: number; tilt: number };
@@ -127,7 +132,7 @@ export function elapsedFor(task: Task, events: TLTask["events"] | undefined, t: 
     const start = acked ?? dispatched;
     if (start === undefined) return null;
     const ms = t - start;
-    return { text: duration(ms), color: ms > 3 * 3_600_000 ? "#dc2626" : ms > 3_600_000 ? "#d97706" : "#475569" };
+    return { text: duration(ms), color: ms > 3 * 3_600_000 ? "#b91c1c" : ms > 3_600_000 ? "#b45309" : "#475569" };
   }
   if (task.state === "done") {
     const start = dispatched ?? acked;
@@ -142,11 +147,16 @@ function noteTexture(task: Task, color: string, elapsed: Elapsed | null): THREE.
   const c = document.createElement("canvas");
   c.width = c.height = 256;
   const g = c.getContext("2d")!;
-  const paper = new THREE.Color(color).lerp(new THREE.Color("#ffffff"), 0.62);
-  g.fillStyle = `#${paper.getHexString()}`;
+  g.fillStyle = PAPER;
   g.fillRect(0, 0, 256, 256);
+  // The owner's dot, ringed so a yellowish agent colour still shows on the paper.
+  g.beginPath();
+  g.arc(256 - 14 - DOT_R, 14 + DOT_R, DOT_R, 0, Math.PI * 2);
   g.fillStyle = color;
-  g.fillRect(0, 0, 256, 26);
+  g.fill();
+  g.lineWidth = 3;
+  g.strokeStyle = "rgba(31, 41, 55, 0.45)";
+  g.stroke();
   g.fillStyle = "#1f2937";
   g.font = "bold 40px ui-sans-serif, system-ui, sans-serif";
   g.fillText(task.id ?? "task", 16, 70);
@@ -161,7 +171,7 @@ function noteTexture(task: Task, color: string, elapsed: Elapsed | null): THREE.
     g.textAlign = "left";
   }
   if (task.state === "blocked") {
-    g.fillStyle = "#ef4444";
+    g.fillStyle = "#b91c1c";
     g.font = "bold 22px ui-sans-serif, system-ui, sans-serif";
     g.fillText("BLOCKED", 16, 240);
   }
@@ -341,6 +351,7 @@ export function Whiteboard({
         {/* Matte, so the lamp and the room don't wash out the headings up close. */}
         <meshStandardMaterial map={boardTex} roughness={0.85} />
       </mesh>
+      <ServerGauges />
       {placed.map((p) => (
         <PostIt
           key={p.task.key}

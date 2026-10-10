@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent, useFrame } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
@@ -12,6 +12,7 @@ import type { Clock } from "../clock";
 import { OverlayLabel } from "../overlay-label";
 import { realAge } from "../parts";
 import type { Selection } from "../scene";
+import { DistrictLabels } from "./district-labels";
 import { BEACON, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
 
 const stop = (e: ThreeEvent<MouseEvent>) => e.stopPropagation();
@@ -306,7 +307,8 @@ const CLASH = "#ef4444";
 /**
  * Alex's city layout (read-only, via layoutCities) as clay miniatures on
  * plates. Held files take their holder's colour and fly a flag; files being
- * edited glow in the editor's colour.
+ * edited glow in the editor's colour. Pointing at a building names its file;
+ * close up, the neighbourhoods are named too.
  */
 export function MiniCityView({
   tl,
@@ -315,6 +317,7 @@ export function MiniCityView({
   mini,
   colorOf,
   editing,
+  reduced,
   onSelect,
 }: {
   tl: Timeline;
@@ -324,9 +327,13 @@ export function MiniCityView({
   colorOf: (node: string) => string;
   /** fileKey → editor colour. */
   editing: Map<string, string>;
+  reduced: boolean;
   onSelect: (s: Selection) => void;
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
+  // The building under the pointer (layout index), named in a label.
+  const [hover, setHover] = useState<number | null>(null);
+  const hovered = hover !== null && hover < layout.buildings.length ? { b: layout.buildings[hover], top: mini.top(hover) } : null;
   const geo = useMemo(() => new RoundedBoxGeometry(1, 1, 1, 1, 0.12), []);
   const dirty = useMemo(() => {
     const s = new Set<string>();
@@ -392,10 +399,21 @@ export function MiniCityView({
             stop(e);
             if (e.instanceId !== undefined) onSelect({ kind: "file", key: layout.buildings[e.instanceId].key });
           }}
+          onPointerMove={(e) => {
+            e.stopPropagation();
+            setHover(e.instanceId ?? null);
+          }}
+          onPointerOut={() => setHover(null)}
         >
           <meshPhysicalMaterial roughness={0.55} clearcoat={0.15} />
         </instancedMesh>
       )}
+      {hovered && (
+        <OverlayLabel position={[hovered.top.x, hovered.top.y + 0.2, hovered.top.z]} center zIndexRange={[40, 30]} style={{ pointerEvents: "none" }}>
+          <div className="-translate-y-3 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-white">{hovered.b.path}</div>
+        </OverlayLabel>
+      )}
+      <DistrictLabels layout={layout} mini={mini} reduced={reduced} />
       {flags.map((f) => (
         <group key={f.k} position={[f.top.x, f.top.y, f.top.z]}>
           <mesh position={[0, 0.25, 0]}>

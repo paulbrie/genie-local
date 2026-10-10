@@ -119,22 +119,44 @@ export function beatAt(beats: Beat[], t: number): { beat: Beat; k: number } | nu
   return b && t < b.end ? { beat: b, k: (t - b.start) / (b.end - b.start) } : null;
 }
 
-export type Doing = "type" | "read" | "run" | "think" | "idle" | "nap";
+/** `wait`: live, the session waits for its user (a permission prompt or a question). */
+export type Doing = "type" | "read" | "run" | "think" | "idle" | "nap" | "wait";
 
 /** Tool activity within this window decides what an agent is doing. */
 const WINDOW_MS = 60_000;
 /** No tool call for this long: idle; longer than NAP_MS: napping. */
 const IDLE_MS = 90_000;
 const NAP_MS = 5 * 60_000;
+/** A running, named agent idle for longer than this sleeps (head down, laptop shut) until it acts again. */
+export const SLEEP_AFTER_MS = 30_000;
+
+/**
+ * Asleep at t: no tool call for over SLEEP_AFTER_MS and, live, not busy. Measured
+ * between timestamps (live: t is Date.now(), so wall-clock seconds whatever the
+ * frame rate). Guests and ended sessions keep the idle → nap cycle.
+ */
+export function asleepAt(a: TLAgent, t: number, live: boolean): boolean {
+  if (a.node.guest || !a.node.live) return false;
+  if (live && (a.node.status === "busy" || a.node.status === "waiting")) return false;
+  const i = lastBefore(a.events, t);
+  return i < 0 || t - a.events[i].ms > SLEEP_AFTER_MS;
+}
 
 /** The continuous activity at t: the dominant tool kind over the last minute. */
-export function doingAt(a: TLAgent, t: number, live: boolean): { doing: Doing; tool: string | null; repo: string | null; path: string | null } {
+export function doingAt(
+  a: TLAgent,
+  t: number,
+  live: boolean,
+): { doing: Doing; asleep: boolean; tool: string | null; repo: string | null; path: string | null } {
   const i = lastBefore(a.events, t);
   const last = i >= 0 ? a.events[i] : null;
+  // The status says what it waits on only as "its user": no peer (say Alice) is named.
+  if (live && a.node.status === "waiting") return { doing: "wait", asleep: false, tool: last?.tool ?? null, repo: null, path: null };
+  if (asleepAt(a, t, live)) return { doing: "nap", asleep: true, tool: null, repo: null, path: null };
   const since = last ? t - last.ms : Infinity;
   if (since > IDLE_MS) {
-    if (live && a.node.status === "busy") return { doing: "think", tool: null, repo: null, path: null };
-    return { doing: since > NAP_MS ? "nap" : "idle", tool: null, repo: null, path: null };
+    if (live && a.node.status === "busy") return { doing: "think", asleep: false, tool: null, repo: null, path: null };
+    return { doing: since > NAP_MS ? "nap" : "idle", asleep: false, tool: null, repo: null, path: null };
   }
   const score = { type: 0, read: 0, run: 0, think: 0 };
   let repo: string | null = null;
@@ -154,5 +176,14 @@ export function doingAt(a: TLAgent, t: number, live: boolean): { doing: Doing; t
     }
   }
   const doing = (Object.keys(score) as (keyof typeof score)[]).reduce((x, y) => (score[y] > score[x] ? y : x), "think");
-  return { doing: score[doing] > 0 ? doing : "think", tool: last?.tool ?? null, repo, path };
+  return { doing: score[doing] > 0 ? doing : "think", asleep: false, tool: last?.tool ?? null, repo, path };
 }
+
+/** The sign over an agent's head: "?" while it waits for its user or is blocked, "z z Z" while it naps. */
+export function headCue(doing: Doing | undefined, beat: BeatKind | null | undefined, napping: boolean): string | null {
+  if (beat === "blocked" || (doing === "wait" && !beat)) return "?";
+  return napping && !beat ? "z z Z" : null;
+}
+
+/** Where an agent looks up to, besides its work: the camera (its user, who the prompt is for) while it waits. */
+export const gazeAt = (doing: Doing): "camera" | null => (doing === "wait" ? "camera" : null);

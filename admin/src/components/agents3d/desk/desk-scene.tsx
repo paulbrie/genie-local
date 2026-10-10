@@ -13,6 +13,7 @@ import { rawBeats, scheduleBeats } from "./activity";
 import { activitiesAt, castAt, DeskAgents, editingFiles, guestsAt } from "./agents";
 import { CommitTower, DeskTop, Lamp, MiniCityView, Mug, OriginBeacon, Papers } from "./props";
 import { DeskLinks } from "./links";
+import { GAUGE_COLUMN_W } from "./gauges";
 import { Whiteboard } from "./whiteboard";
 import { BOARD, miniCities } from "./world";
 
@@ -50,7 +51,7 @@ export default function DeskScene(props: SceneProps) {
       <Canvas
         key={props.frameKey ?? ""}
         shadows={{ type: THREE.PCFShadowMap }}
-        camera={{ position: [0, 23, 41], fov: 40, near: 0.1, far: 400 }}
+        camera={{ position: [0, 25, 45], fov: 40, near: 0.1, far: 400 }}
         gl={{ antialias: true }}
         dpr={[1, 1.5]}
         scene={{ environmentIntensity: 0.3 }}
@@ -70,10 +71,10 @@ export default function DeskScene(props: SceneProps) {
           shadow-mapSize={small ? [1024, 1024] : [2048, 2048]}
           shadow-bias={-0.0004}
           shadow-radius={5}
-          shadow-camera-left={-22}
-          shadow-camera-right={22}
-          shadow-camera-top={18}
-          shadow-camera-bottom={-18}
+          shadow-camera-left={-25}
+          shadow-camera-right={25}
+          shadow-camera-top={21}
+          shadow-camera-bottom={-21}
           shadow-camera-near={1}
           shadow-camera-far={70}
         />
@@ -150,7 +151,7 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
       <Lamp />
       <CommitTower commits={snap.commits} clock={clock} colorOf={colorOf} reduced={reduced} onSelect={onSelect} />
       <OriginBeacon commits={snap.commits} clock={clock} reduced={reduced} />
-      <MiniCityView tl={tl} snap={snap} layout={layout} mini={mini} colorOf={colorOf} editing={editing} onSelect={onSelect} />
+      <MiniCityView tl={tl} snap={snap} layout={layout} mini={mini} colorOf={colorOf} editing={editing} reduced={reduced} onSelect={onSelect} />
       <Whiteboard
         snap={snap}
         tasks={tl.tasks}
@@ -237,8 +238,11 @@ function FlyTo({
   useEffect(() => {
     if (!board.n) return;
     const c = new THREE.Vector3(BOARD.x, BOARD.y + BOARD.h / 2, BOARD.z);
-    if (board.col < 0) start(c.clone().add(new THREE.Vector3(0, 1.5, BOARD.w * 0.85)), c);
-    else {
+    if (board.col < 0) {
+      // The whole board, with the server dials on its right edge.
+      c.x += GAUGE_COLUMN_W / 2;
+      start(c.clone().add(new THREE.Vector3(0, 1.5, (BOARD.w + GAUGE_COLUMN_W) * 0.85)), c);
+    } else {
       // Face one column, close enough to read its post-its.
       c.x = BOARD.x - BOARD.w / 2 + (BOARD.w / 3) * (board.col + 0.5);
       start(c.clone().add(new THREE.Vector3(0, 0.4, BOARD.h * 1.25)), c);

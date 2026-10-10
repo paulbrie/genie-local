@@ -12,10 +12,10 @@ import type { Clock } from "../clock";
 import { OverlayLabel } from "../overlay-label";
 import type { Positions } from "../parts";
 import type { Selection } from "../scene";
-import { type Beat, beatAt, type Doing, doingAt } from "./activity";
+import { type Beat, beatAt, type Doing, doingAt, gazeAt, headCue } from "./activity";
 import { type Avatar, disposeAvatar, makeAvatar } from "./avatar";
 import { lookFor } from "./identity";
-import { applyPose, DANCES, isDance, type Pose, THINK_POSES } from "./poses";
+import { applyPose, DANCES, idlePose, isDance, type Pose, THINK_POSES } from "./poses";
 import { makeThoughtCloud, type ThoughtCloud } from "./thought";
 import { realAge } from "../parts";
 import { AVATAR_SCALE, BEACON, BOARD, LAPTOP, laptopAt, type MiniCities, SEAT_Y, type Seat, seatAt, TABLE, TOWER, type XZ } from "./world";
@@ -31,17 +31,6 @@ const THROW = { from: 0.15, to: 0.6 };
 const THROW_MESSAGES = true;
 /** A pose change blends over this long (real ms). */
 const BLEND_MS = 500;
-/** Idle agents cycle through these, each for IDLE_SLOT_S, out of step with each other; long idle adds naps. */
-const IDLE_POSES: Pose[] = ["sip", "pencil", "stretch", "idle"];
-const LONG_IDLE_POSES: Pose[] = ["nap", "sip", "nap", "pencil", "stretch"];
-const IDLE_SLOT_S = 14;
-
-/** The idle variant an agent is in at real time `ms` (shared by the avatar and its label). */
-export function idlePose(seed: number, ms: number, long: boolean): Pose {
-  const list = long ? LONG_IDLE_POSES : IDLE_POSES;
-  const slot = Math.floor(ms / 1000 / IDLE_SLOT_S + (seed % 97) / 97);
-  return list[(slot + seed) % list.length];
-}
 /** At most this many speech bubbles per agent, newest on top. */
 const BUBBLES = 1;
 
@@ -109,6 +98,8 @@ type Live = {
   screen: THREE.MeshBasicMaterial;
   base: THREE.MeshStandardMaterial;
   doing: Doing;
+  /** Idle past SLEEP_AFTER_MS: holds the nap, no beats, until it acts again. */
+  asleep: boolean;
   doingSince: number;
   /** Pose blending: the last pose, the joints before this frame, and the blend's start. */
   pose: Pose | null;
@@ -118,6 +109,9 @@ type Live = {
   cur: Float32Array;
   /** Upper-body turn towards a target, eased. */
   twist: number;
+  /** The head's extra turn and tilt towards whoever it waits on (eased). */
+  gazeY: number;
+  gazeX: number;
   /** Per agent, so idle variants and gestures don't run in step. */
   seed: number;
 };
@@ -129,7 +123,8 @@ export function activitiesAt(tl: Timeline, beats: Map<string, Beat[]>, t: number
   const out = new Map<string, Activity>();
   for (const a of tl.agents) {
     const d = doingAt(a, t, live);
-    out.set(a.key, { doing: d.doing, repo: d.repo, path: d.path, beat: beatAt(beats.get(a.key) ?? [], t)?.beat ?? null });
+    const still = d.asleep || d.doing === "wait";
+    out.set(a.key, { doing: d.doing, repo: d.repo, path: d.path, beat: still ? null : (beatAt(beats.get(a.key) ?? [], t)?.beat ?? null) });
   }
   return out;
 }
@@ -169,6 +164,7 @@ const DOING_TEXT: Record<Doing, string> = {
   think: "thinking…",
   idle: "idle",
   nap: "napping",
+  wait: "waiting for you",
 };
 
 // ── Shared furniture ─────────────────────────────────────────────────────────
@@ -260,7 +256,7 @@ function makeLaptop(seat: Seat): { g: THREE.Group; lid: THREE.Group; screen: THR
   return { g, lid, screen, base };
 }
 
-const SCREEN_COLOR: Record<Doing, string> = { type: "", read: "#94a3b8", run: "#4ade80", think: "#64748b", idle: "#475569", nap: "#1e293b" };
+const SCREEN_COLOR: Record<Doing, string> = { type: "", read: "#94a3b8", run: "#4ade80", think: "#64748b", idle: "#475569", nap: "#1e293b", wait: "#fbbf24" };
 
 // ── Agents ───────────────────────────────────────────────────────────────────
 
@@ -325,6 +321,7 @@ export function DeskAgents({
           thinkSince: -1,
           base: lap.base,
           doing: "idle",
+          asleep: false,
           doingSince: 0,
           pose: null,
           prev: new Float32Array(JOINTS),
@@ -332,6 +329,8 @@ export function DeskAgents({
           blendT0: 0,
           cur: new Float32Array(JOINTS),
           twist: 0,
+          gazeY: 0,
+          gazeX: 0,
           seed: hash(a.key),
         };
       }),
@@ -374,11 +373,15 @@ export function DeskAgents({
     lives.forEach((l, i) => {
       const a = cast[i];
       const d = doingAt(a, t, clock.live);
-      if (d.doing !== l.doing && real - l.doingSince > MIN_HOLD_MS) {
+      // Waking, and starting or ending a wait, skip the hold: they show at once.
+      const now = l.asleep || l.doing === "wait" || d.doing === "wait";
+      if ((d.doing !== l.doing || d.asleep !== l.asleep) && (now || real - l.doingSince > MIN_HOLD_MS)) {
         l.doing = d.doing;
+        l.asleep = d.asleep;
         l.doingSince = real;
       }
-      const b = beatAt(beats.get(l.key) ?? [], t);
+      // Asleep or waiting for its user, nothing plays (no dances or throws) until it acts.
+      const b = l.asleep || l.doing === "wait" ? null : beatAt(beats.get(l.key) ?? [], t);
       const beat = b?.beat ?? null;
       const k = b?.k ?? 0;
       const thrown = k >= THROW.from;
@@ -438,9 +441,11 @@ export function DeskAgents({
         }
       } else {
         // Glance at the whiteboard when one of its tasks has just moved there.
-        if (snap.tasks.some((x) => x.worker === l.key && !x.guessed && realAge(clock, t, x.since) >= 0 && realAge(clock, t, x.since) < 4000)) look = BOARD;
+        if (!l.asleep && snap.tasks.some((x) => x.worker === l.key && !x.guessed && realAge(clock, t, x.since) >= 0 && realAge(clock, t, x.since) < 4000)) look = BOARD;
+        // Waiting on a prompt: look up at the user, through the camera.
+        if (gazeAt(l.doing) === "camera") look = camera.position;
         // Idle: coffee, a pencil, a stretch or just sitting (and naps when idle long), per agent.
-        if (l.doing === "idle" || l.doing === "nap") pose = idlePose(l.seed, real, l.doing === "nap");
+        if (l.doing === "idle" || l.doing === "nap") pose = idlePose(l.seed, real, l.doing === "nap", l.asleep);
         else if (l.doing === "think") {
           // A posture per thinking spell, picked at random (per agent, per spell).
           if (l.thinkSince !== l.doingSince) {
@@ -477,13 +482,27 @@ export function DeskAgents({
         blendJoints(l.avatar, l.from, l.cur, x * x * (3 - 2 * x));
       }
       // Turn the upper body towards what it throws at, waves to or glances at (eased).
+      // Looking up at the camera, the head does most of the turn and tilts up; the body follows a little.
       let want = 0;
+      let gazeY = 0;
+      let gazeX = 0;
       if (look) {
         const ang = Math.atan2(look.x - l.seat.x, look.z - l.seat.z) - l.seat.yaw;
-        want = Math.max(-0.9, Math.min(0.9, Math.atan2(Math.sin(ang), Math.cos(ang))));
+        const turn = Math.atan2(Math.sin(ang), Math.cos(ang));
+        if (look === camera.position) {
+          want = Math.max(-0.45, Math.min(0.45, turn * 0.4));
+          gazeY = Math.max(-0.9, Math.min(0.9, turn - want));
+          const up = Math.atan2(camera.position.y - HEAD_Y, Math.hypot(look.x - l.seat.x, look.z - l.seat.z));
+          gazeX = -Math.max(-0.2, Math.min(0.55, up));
+        } else want = Math.max(-0.9, Math.min(0.9, turn));
       }
-      l.twist = reduced ? want : l.twist + (want - l.twist) * Math.min(1, dt * 6);
+      const ease = reduced ? 1 : Math.min(1, dt * 6);
+      l.twist += (want - l.twist) * ease;
+      l.gazeY += (gazeY - l.gazeY) * ease;
+      l.gazeX += (gazeX - l.gazeX) * ease;
       l.avatar.joints.body.rotation.y += l.twist;
+      l.avatar.joints.head.rotation.y += l.gazeY;
+      l.avatar.joints.head.rotation.x += l.gazeX;
       // Dances stand up on the chair (their lift is in avatar units); other hops stay small.
       l.avatar.root.position.y = isDance(pose) ? hop * S : hop * 0.35;
       // The thought cloud: in while thinking, out otherwise, facing the camera.
@@ -602,7 +621,7 @@ export function DeskAgents({
                 snapAgent={snap.agents.get(l.key)}
                 selected={selected?.kind === "agent" && selected.key === l.key}
                 bubbles={bubbles.get(l.key) ?? []}
-                idle={l.doing === "idle" || l.doing === "nap" ? idlePose(l.seed, performance.now(), l.doing === "nap") : null}
+                idle={l.doing === "idle" || l.doing === "nap" ? idlePose(l.seed, performance.now(), l.doing === "nap", l.asleep) : null}
                 // Neighbours' bubbles at alternating heights, so they don't sit on each other.
                 bubbleLift={(i % 2) * 56}
               />
@@ -651,7 +670,7 @@ function DeskLabel({
       : act
       ? `${DOING_TEXT[act.doing]}${file && (act.doing === "type" || act.doing === "read") ? ` ${file}` : ""}`
       : "";
-  const bubble = beat?.kind === "blocked" ? "?" : idle === "nap" && !beat ? "z z Z" : null;
+  const bubble = headCue(act?.doing, beat?.kind, idle === "nap");
   const task = snapAgent?.task;
   return (
     <div style={{ transform: "translateY(-50%)" }} className="flex flex-col items-center gap-0.5">
