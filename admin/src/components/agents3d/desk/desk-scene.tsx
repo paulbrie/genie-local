@@ -136,6 +136,11 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
     return (k: string) => m.get(k) ?? "#94a3b8";
   }, [tl]);
   const mini = useMemo(() => miniCities(layout), [layout]);
+  // Each building's lift (T108), written by DeskLinks each frame and read by the mini-cities after it.
+  const lifts = useRef(new Float32Array(0));
+  useEffect(() => {
+    lifts.current = new Float32Array(layout.buildings.length);
+  }, [layout]);
 
   // Beats: one-shot animations, queued per agent (see activity.ts). In live mode a
   // beat is due when its event was first seen, as data arrives up to a poll late.
@@ -169,7 +174,20 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
       <Lamp />
       <CommitTower commits={snap.commits} clock={clock} colorOf={colorOf} reduced={reduced} onSelect={onSelect} />
       <OriginBeacon commits={snap.commits} clock={clock} reduced={reduced} />
-      <MiniCityView tl={tl} snap={snap} layout={layout} mini={mini} colorOf={colorOf} editing={editing} reduced={reduced} onSelect={onSelect} />
+      {/* Before the mini-cities: its frame writes the lifts they read in theirs. */}
+      <DeskLinks
+        cast={cast}
+        edits={tl.edits}
+        snap={snap}
+        clock={clock}
+        layout={layout}
+        mini={mini}
+        linger={linger}
+        colorOf={colorOf}
+        reduced={reduced}
+        lifts={lifts}
+      />
+      <MiniCityView tl={tl} snap={snap} layout={layout} mini={mini} colorOf={colorOf} editing={editing} reduced={reduced} onSelect={onSelect} lifts={lifts} />
       <Whiteboard
         snap={snap}
         tasks={tl.tasks}
@@ -180,7 +198,6 @@ function Stage(props: SceneProps & { board: BoardFocus; onBoard: (col: number) =
         onColumnClick={onBoard}
       />
       <DeskBrowsers cast={cast} sessions={snap.live ? browsers : NO_BROWSERS} colorOf={colorOf} />
-      <DeskLinks cast={cast} snap={snap} clock={clock} layout={layout} mini={mini} linger={linger} colorOf={colorOf} reduced={reduced} />
       <DeskAgents
         cast={cast}
         messages={tl.messages}

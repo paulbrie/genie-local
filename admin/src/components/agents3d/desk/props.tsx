@@ -17,6 +17,10 @@ import { DistrictLabels } from "./district-labels";
 import { BEACON, FLOOR_Y, LAMP, type MiniCities, MUG, PAPERS, PLATE_H, TABLE, TOWER } from "./world";
 
 const stop = (e: ThreeEvent<MouseEvent>) => e.stopPropagation();
+/** At most this many lifted buildings cast a shadow on their plate. */
+const MAX_SHADOWS = 64;
+/** A lifted building's shadow: a soft-edged disc lying on the plate, scaled per building. */
+const shadowGeo = new THREE.CircleGeometry(0.5, 24).rotateX(-Math.PI / 2);
 /** The lamp's bulb: bright enough to bloom. */
 const BULB = new THREE.Color("#fff1c9").multiplyScalar(2.5);
 
@@ -332,6 +336,7 @@ export function MiniCityView({
   editing,
   reduced,
   onSelect,
+  lifts,
 }: {
   tl: Timeline;
   snap: Snapshot;
@@ -342,6 +347,8 @@ export function MiniCityView({
   editing: Map<string, string>;
   reduced: boolean;
   onSelect: (s: Selection) => void;
+  /** Each building's lift this frame (T108; written by DeskLinks first), world units. */
+  lifts: React.RefObject<Float32Array>;
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
   // The building under the pointer (layout index), named in a label.
@@ -350,6 +357,17 @@ export function MiniCityView({
   const geo = useMemo(() => new RoundedBoxGeometry(1, 1, 1, 1, 0.12), []);
   // The buildings are written in place (not through props): a write that changes something asks for a frame.
   const invalidate = useThree((s) => s.invalidate);
+  // A building's matrix: its plot, its height, lifted by `lift`.
+  const place = (i: number, lift: number, mat: THREE.Matrix4) => {
+    const b = layout.buildings[i];
+    const top = mini.top(i);
+    const h = top.y - PLATE_H;
+    return mat.makeScale(Math.max(0.03, b.w * mini.s * 0.9), h, Math.max(0.03, b.d * mini.s * 0.9)).setPosition(top.x, PLATE_H + h / 2 + lift, top.z);
+  };
+  // The lifts last written, per building (only the moving ones are rewritten), and their shadows.
+  const shown = useRef<{ m: THREE.InstancedMesh | null; h: Float32Array }>({ m: null, h: new Float32Array(0) });
+  const shadows = useRef<THREE.InstancedMesh>(null);
+  const tmpM = useMemo(() => new THREE.Matrix4(), []);
   // The colours last written, per building, for the mesh they were written to.
   const written = useRef<{ m: THREE.InstancedMesh | null; rgb: Float64Array }>({ m: null, rgb: new Float64Array(0) });
   const onClick = useStableHandler((e: ThreeEvent<MouseEvent>) => {
@@ -371,16 +389,47 @@ export function MiniCityView({
     const m = ref.current;
     if (!m) return;
     const mat = new THREE.Matrix4();
-    layout.buildings.forEach((b, i) => {
-      const top = mini.top(i);
-      const h = top.y - PLATE_H;
-      mat.makeScale(Math.max(0.03, b.w * mini.s * 0.9), h, Math.max(0.03, b.d * mini.s * 0.9)).setPosition(top.x, PLATE_H + h / 2, top.z);
-      m.setMatrixAt(i, mat);
-    });
+    layout.buildings.forEach((_, i) => m.setMatrixAt(i, place(i, 0, mat)));
     m.instanceMatrix.needsUpdate = true;
     m.computeBoundingSphere();
+    // Everything stands on its plot now: lifts are written again from here.
+    const w = shown.current;
+    w.m = m;
+    w.h = new Float32Array(layout.buildings.length);
     invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout, mini, invalidate]);
+
+  // Touched buildings rise and settle: rewrite only those whose lift changed, and their faint shadows on the plate.
+  useFrame(() => {
+    const m = ref.current;
+    const w = shown.current;
+    if (!m || w.m !== m) return;
+    let changed = false;
+    const L = lifts.current;
+    for (let i = 0; i < w.h.length; i++) {
+      const h = L[i] ?? 0;
+      if (h === w.h[i]) continue;
+      w.h[i] = h;
+      m.setMatrixAt(i, place(i, h, tmpM));
+      changed = true;
+    }
+    if (!changed) return;
+    m.instanceMatrix.needsUpdate = true;
+    const sh = shadows.current;
+    if (!sh) return;
+    let n = 0;
+    for (let i = 0; i < w.h.length && n < MAX_SHADOWS; i++) {
+      if (w.h[i] <= 0) continue;
+      const b = layout.buildings[i];
+      const top = mini.top(i);
+      // Wider and softer the higher it floats.
+      const r = Math.max(b.w, b.d) * mini.s * 0.75 * (1 + w.h[i] * 0.4);
+      sh.setMatrixAt(n++, tmpM.makeScale(r, 1, r).setPosition(top.x, PLATE_H + 0.006, top.z));
+    }
+    sh.count = n;
+    sh.instanceMatrix.needsUpdate = true;
+  });
 
   useEffect(() => {
     const m = ref.current;
@@ -443,6 +492,9 @@ export function MiniCityView({
           <meshPhysicalMaterial roughness={0.55} clearcoat={0.15} />
         </instancedMesh>
       )}
+      <instancedMesh ref={shadows} args={[shadowGeo, undefined, MAX_SHADOWS]} count={0} frustumCulled={false} renderOrder={1}>
+        <meshBasicMaterial color="#000000" transparent opacity={0.28} depthWrite={false} />
+      </instancedMesh>
       {hovered && (
         <OverlayLabel position={[hovered.top.x, hovered.top.y + 0.2, hovered.top.z]} center zIndexRange={[40, 30]} style={{ pointerEvents: "none" }}>
           <div className="-translate-y-3 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[10px] text-white">{hovered.b.path}</div>
