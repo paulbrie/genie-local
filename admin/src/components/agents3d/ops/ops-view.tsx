@@ -3,12 +3,13 @@
 import dynamic from "next/dynamic";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { TASK_COLORS, TOOL_COLORS } from "@/lib/agents3d-timeline";
+import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
-import { beamColor, Desk, DeskStyles } from "./desk-sprites";
-import { deskParts, deskRow, rowRoom } from "./desks";
-import { blockAt, districtAt, districtLabels, inPoly, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
+import { Belt } from "./belt-sprites";
+import { Curve, Desk, DeskStyles, KIND_COLORS } from "./desk-sprites";
+import { deskLine, deskParts, L } from "./desks";
+import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
 import { cssBetween, FIT_VIEW, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
@@ -19,8 +20,9 @@ const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
 /**
  * The 2D "Ops" view of Agents City (T163, T143's concepts A and B): each agent's card and the tasks' swimlanes on
  * top, the repos below as an isometric map (files as small blocks, height by size; folders as districts), the agents
- * seated at a row of desks in front of it (T198), a beam from each one's computer to the file it works on, the latest
- * messages as arcs between them.
+ * seated at a row of desks on the map's ground in front of it (T198, T201), glowing curves from each one's computer to
+ * the files it edits, reads or has claimed, the commits riding a conveyor belt behind the desks to their repos, the
+ * latest messages as arcs between them.
  *
  * Cheap by design (T143): the blocks are two Canvas 2D layers, the whole map drawn once per layout (back to front)
  * and the lit files (touched lately, held, claimed twice) drawn over it only when that set changes; the agents and
@@ -31,7 +33,8 @@ const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
  */
 
 const EXT: Record<string, string> = { ts: "#4f6fa8", tsx: "#5d82c4", js: "#a39a52", jsx: "#b0a65a", mjs: "#a39a52", json: "#6b7a5c", md: "#5c8f6b", css: "#8f5c8f", sql: "#8f765c", py: "#5c8a8f", sh: "#777", yml: "#7a6b8f", yaml: "#7a6b8f" };
-const LIT: Record<LitKind, string> = { edit: TOOL_COLORS.edit, read: TOOL_COLORS.read, held: "#e2e8f0", clash: "#ef4444" };
+// (a lit file in the curves' colours, T201: edited orange, read green, claimed red, claimed twice red and outlined)
+const LIT: Record<LitKind, string> = { edit: KIND_COLORS.edit, read: KIND_COLORS.read, held: KIND_COLORS.claim, clash: KIND_COLORS.claim };
 const DOING: Record<OpsAgent["doing"], string> = { type: "editing", read: "reading", run: "running", think: "thinking", idle: "idle", nap: "napping", wait: "waiting for you" };
 
 const shade = (hex: string, k: number) => {
@@ -42,9 +45,11 @@ const shade = (hex: string, k: number) => {
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
 type Fit = { k: number; ox: number; oy: number };
+/** room under the map for the front desks' names (px) */
+const NAMES_H = 26;
 /** the map's zoom and pan, kept for the browser session (T200) */
 const VIEW_KEY = "admin.agents3d.ops.view";
-/** the map fitted to its box, with room above for the cities' names and below (`bottom` px) for the desks' row */
+/** the map fitted to its box, with room above for the cities' names and below (`bottom` px) for the desks' names */
 function fitOf(map: IsoMap, w: number, h: number, bottom: number): Fit {
   const b = map.bounds, side = 24, top = 28;
   const k = Math.max(0.1, Math.min((w - side * 2) / (b.x1 - b.x0 || 1), (h - top - bottom) / (b.y1 - b.y0 || 1)));
@@ -296,9 +301,13 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const base = useRef<HTMLCanvasElement>(null);
   const litC = useRef<HTMLCanvasElement>(null);
   const map = useMemo(() => isoMap(layout), [layout]);
-  // (the desks' row along the front, under the map: its scale decides the room it takes)
-  const row = useMemo(() => deskRow(model.agents.length, size.w, size.h), [model.agents.length, size.w, size.h]);
-  const fit0 = useMemo(() => fitOf(map, size.w, size.h, rowRoom(row.u)), [map, size.w, size.h, row.u]);
+  // (the desks' row and the belt on the map's ground, in front of the cities (T201): the fit takes them in)
+  const line = useMemo(() => deskLine(layout.cities, model.agents.length), [layout.cities, model.agents.length]);
+  const framed = useMemo(() => {
+    const xs = [map.bounds.x0, map.bounds.x1, ...line.extent.map((p) => p.x)], ys = [map.bounds.y0, map.bounds.y1, ...line.extent.map((p) => p.y)];
+    return { ...map, bounds: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } };
+  }, [map, line]);
+  const fit0 = useMemo(() => fitOf(framed, size.w, size.h, NAMES_H), [framed, size.w, size.h]);
   // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
   // when it ends the view is set, the layers drawn again and the labels picked again
   const [view, setViewRaw] = useState<View>(FIT_VIEW);
@@ -381,18 +390,17 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       const i = layout.index.get(k);
       if (i !== undefined) lit.set(i, v.kind);
     }
-    const colorOf = new Map(model.agents.map((a) => [a.key, a.color]));
     for (const n of litDrawList(map, lit.keys())) {
       const b = map.blocks[n], kind = lit.get(b.i);
       if (!kind) {
         drawBlock(g, b, EXT[b.ext] ?? "#4b5563");
         continue;
       }
-      const by = model.lit.get(b.key)?.by;
-      drawBlock(g, b, kind === "held" && by ? (colorOf.get(by) ?? LIT.held) : LIT[kind], true);
-      if (kind === "clash" || kind === "held") {
+      drawBlock(g, b, LIT[kind], true);
+      // (claimed twice: outlined white)
+      if (kind === "clash") {
         poly(g, b.top);
-        g.strokeStyle = kind === "clash" ? "#ef4444" : "#ffffff";
+        g.strokeStyle = "#ffffff";
         g.lineWidth = 1.2 / fit.k;
         g.stroke();
       }
@@ -414,11 +422,18 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     model.agents.forEach((a, n) => {
       const i = a.focus ? layout.index.get(a.focus) : undefined;
       const m = i !== undefined ? map.order.get(i) : undefined;
-      out.set(a.key, { at: row.seats[n], peak: m !== undefined ? px(fit, map.blocks[m].peak) : null });
+      const seat = line.seats[n];
+      out.set(a.key, { at: px(fit, iso(seat.x, seat.z)), peak: m !== undefined ? px(fit, map.blocks[m].peak) : null });
     });
     return out;
-  }, [model.agents, layout, map, fit, row]);
-  const beamFrom = deskParts(row.u).beam;
+  }, [model.agents, layout, map, fit, line]);
+  // (the sprites' scale: a desk unit in pixels at this zoom, over its full-size pixels)
+  const u = (line.wu * fit.k) / L;
+  const beamFrom = deskParts(u).beam;
+  const blockPeak = (file: string) => {
+    const i = layout.index.get(file), m = i !== undefined ? map.order.get(i) : undefined;
+    return m !== undefined ? px(fit, map.blocks[m].peak) : null;
+  };
 
   // the neighbourhoods' (folders') names: the biggest first, where they fit, never overlapping (T192); once per layout and size
   const cityBoxes = useMemo(() => map.cities.map((c) => { const p = px(fit, c.at); return { x: p.x, y: p.y - 10, w: c.name.length * 8 + 8, h: 14 }; }), [map, fit]);
@@ -505,7 +520,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     const c = map.cities.find((x) => inPoly(p, x.ground));
     if (!c) return;
     const pts = c.ground.map((q) => px(fit0, q));
-    setView(viewOfBox({ x0: Math.min(...pts.map((q) => q.x)), y0: Math.min(...pts.map((q) => q.y)) - 30, x1: Math.max(...pts.map((q) => q.x)), y1: Math.max(...pts.map((q) => q.y)) }, size.w, size.h - rowRoom(row.u), top));
+    setView(viewOfBox({ x0: Math.min(...pts.map((q) => q.x)), y0: Math.min(...pts.map((q) => q.y)) - 30, x1: Math.max(...pts.map((q) => q.x)), y1: Math.max(...pts.map((q) => q.y)) }, size.w, size.h - NAMES_H, top));
   };
   return (
     <div
@@ -575,38 +590,28 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
           </g>
         ))}
-      </svg>
-      </div>
-      {/* (the desks' row stands clear of the map: the map fades out under it) */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0b0f17] from-60% to-transparent" style={{ height: rowRoom(row.u) + 24 }} />
-      <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
-        {/* the latest messages: an arc from sender to receiver */}
+        {/* on the map's ground, so they zoom and pan with it (T201): the belt, the desks, the curves, the messages */}
+        <DeskStyles />
+        <Belt line={line} fit={fit} cities={layout.cities} commits={model.commits} agents={model.agents} />
+        {model.agents.map((a) => {
+          const s = spots.get(a.key);
+          return s?.at ? <Desk key={a.key} a={a} at={s.at} u={u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
+        })}
+        {/* each agent's curves: from its computer to the files it edits, reads or has claimed */}
+        {model.links.map((l) => {
+          const s = spots.get(l.by), to = blockPeak(l.file), a = byKey.get(l.by);
+          if (!s?.at || !to || !a) return null;
+          return <Curve key={`${l.by}\n${l.file}`} l={l} from={{ x: s.at.x + beamFrom.x, y: s.at.y + beamFrom.y }} to={to} color={a.color} dim={!!selected && selected !== l.by} />;
+        })}
+        {/* the latest messages: an arc from sender to receiver, over the row, head to head */}
         {model.msgs.map((m) => {
           const a = spots.get(m.from)?.at, b = spots.get(m.to)?.at;
           if (!a || !b || (a.x === b.x && a.y === b.y)) return null;
-          // (over the row, from head to head)
-          const mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - 30 * row.u - 10 - Math.abs(a.x - b.x) * 0.12;
-          return <path key={m.id} d={`M${a.x},${a.y - 30 * row.u} Q${mx},${my} ${b.x},${b.y - 30 * row.u}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
-        })}
-        <DeskStyles />
-        {/* each agent's beam: from its computer to the file it works on (edited or read), under the desks */}
-        {model.agents.map((a) => {
-          const s = spots.get(a.key);
-          if (!s?.peak || !s.at) return null;
-          const x1 = s.at.x + beamFrom.x, y1 = s.at.y + beamFrom.y;
-          return (
-            <g key={`b${a.key}`} className="pointer-events-none group-data-[moving]:hidden" opacity={selected && selected !== a.key ? 0.3 : 0.85}>
-              <line x1={x1} y1={y1} x2={s.peak.x} y2={s.peak.y} stroke={beamColor(a)} strokeWidth={1.4} />
-              <circle cx={s.peak.x} cy={s.peak.y} r={2.4} fill={beamColor(a)} />
-            </g>
-          );
-        })}
-        {/* the desks' row, in front of the codebases */}
-        {model.agents.map((a) => {
-          const s = spots.get(a.key);
-          return s?.at ? <Desk key={a.key} a={a} at={s.at} u={row.u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
+          const lift = 46 * u, mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - lift - 10 - Math.abs(a.x - b.x) * 0.12;
+          return <path key={m.id} d={`M${a.x},${a.y - lift} Q${mx},${my} ${b.x},${b.y - lift}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
         })}
       </svg>
+      </div>
       {hover && (
         <div className="pointer-events-none absolute z-10 max-w-[28rem] truncate rounded bg-black/80 px-1.5 py-0.5 font-mono text-[11px] text-white" style={{ left: Math.min(hover.x + 12, size.w - 200), top: hover.y + 12 }}>
           {hover.path}
@@ -628,10 +633,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <button type="button" aria-label="The whole map" title="The whole map (0, Esc)" className="border-t border-white/10 px-1.5 py-0.5 text-[11px] hover:bg-white/10" onClick={() => setView(FIT_VIEW)}>fit</button>
       </div>
       <div className="pointer-events-none absolute bottom-1.5 right-2 flex gap-2 text-[10px] text-white/60">
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: LIT.edit }} />edited</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: LIT.read }} />read</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" />held</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: LIT.clash }} />claimed twice</span>
+        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.edit }} />editing</span>
+        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.read }} />reading</span>
+        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.claim }} />claimed</span>
+        <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" style={{ background: KIND_COLORS.claim }} />claimed twice</span>
+        <span>· packages: commits</span>
         <span>· last {Math.round((SPARK_MS * SPARK_N) / 60_000)} min on the cards</span>
       </div>
     </div>

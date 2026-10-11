@@ -1,11 +1,8 @@
 "use client";
 
-import type { ToolKind } from "@/lib/agents3d-timeline";
-import { TOOL_COLORS } from "@/lib/agents3d-timeline";
-
 import { deskParts, local, pts } from "./desks";
 import type { P2 } from "./iso";
-import type { OpsAgent } from "./model";
+import type { OpsAgent, OpsLink } from "./model";
 
 /**
  * An agent at its desk in the Ops view (T198), in the map's isometric style: the desk and its computer, the monitor's
@@ -18,10 +15,12 @@ import type { OpsAgent } from "./model";
 
 const SKIN = "#f1c9a5", HAIR = "#3b2a20", INK = "#0b0f17";
 
-/** the beam's colour: what it does to the file (edited or read), else the agent's own */
-export const beamColor = (a: OpsAgent) => (a.lastKind === "edit" || a.lastKind === "read" ? TOOL_COLORS[a.lastKind as ToolKind] : a.color);
+/** the curves' colours, by kind (T201, the user's): editing orange, reading green, claimed red; the legend's too */
+export const KIND_COLORS = { edit: "#f59e0b", read: "#22c55e", claim: "#ef4444" } as const;
+/** a curve's bright core: its colour, lighter (so the glow reads as that colour, not white) */
+const CORE = { edit: "#fde68a", read: "#86efac", claim: "#fecaca" } as const;
 
-/** the keyframes for the screens' blinks (once per map) */
+/** the keyframes for the screens' blinks, a curve's pulse and the packages' ride (once per map) */
 export function DeskStyles() {
   return (
     <style>{`
@@ -29,8 +28,35 @@ export function DeskStyles() {
       .ops-desk-lines rect { animation: ops-desk-line .3s ease-in-out 6 alternate both; }
       .ops-desk-lines rect:nth-child(2) { animation-delay: .1s }
       .ops-desk-lines rect:nth-child(3) { animation-delay: .2s }
-      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect { animation: none } }
+      @keyframes ops-pulse { from { stroke-dashoffset: 14 } to { stroke-dashoffset: -100 } }
+      .ops-pulse { stroke-dasharray: 14 100; stroke-dashoffset: 14; animation: ops-pulse .9s ease-out 1 forwards; }
+      .ops-pkg { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
+      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse { animation: none } .ops-pkg { transition: none } }
     `}</style>
+  );
+}
+
+/**
+ * The glowing curves from agents' computers to the files they work on (T201): an arc rising from the monitor and
+ * landing on the file's top, in the kind's colour, its glow three strokes (wide and faint, medium, a thin bright
+ * core; no blur filter), a dot on the file, a thin ring of the agent's colour where it starts. Reads thinner; a
+ * touch fades over a minute and a half (`fade`, on the model's 10 s steps); a new edit sends a pulse along it once.
+ */
+export function Curve({ l, from, to, color, dim }: { l: OpsLink; from: P2; to: P2; color: string; dim: boolean }) {
+  const c = KIND_COLORS[l.kind], read = l.kind === "read";
+  const d = Math.hypot(to.x - from.x, to.y - from.y);
+  const mx = (from.x + to.x) / 2, my = Math.min(from.y, to.y) - Math.max(24, d * 0.28);
+  const path = `M${from.x.toFixed(1)},${from.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${to.x.toFixed(1)},${to.y.toFixed(1)}`;
+  const o = (dim ? 0.3 : 1) * (0.25 + 0.75 * l.fade);
+  return (
+    <g className="pointer-events-none" opacity={o} fill="none" strokeLinecap="round">
+      <path d={path} stroke={c} strokeOpacity={0.12} strokeWidth={read ? 5 : 8} />
+      <path d={path} stroke={c} strokeOpacity={0.35} strokeWidth={read ? 2.2 : 3.6} />
+      <path d={path} stroke={CORE[l.kind]} strokeOpacity={read ? 0.85 : 0.95} strokeWidth={read ? 0.9 : 1.3} />
+      {l.kind === "edit" && l.fade > 0.85 && <path key={l.ms} d={path} pathLength={100} className="ops-pulse" stroke="#ffffff" strokeWidth={2.4} />}
+      <circle cx={to.x} cy={to.y} r={read ? 2 : 2.8} fill={c} stroke="#fff" strokeOpacity={0.8} strokeWidth={0.8} />
+      <circle cx={from.x} cy={from.y} r={3} fill={c} stroke={color} strokeWidth={1.6} />
+    </g>
   );
 }
 
@@ -40,7 +66,7 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
   const busy = a.doing === "type" || a.doing === "read" || a.doing === "run" || a.doing === "think";
   const off = a.doing === "nap", idle = a.doing === "idle" || off;
   const screen = off ? "#0f141c" : a.doing === "run" ? "#0b1410" : a.doing === "read" ? "#123448" : busy ? "#1d2a3f" : "#151b26";
-  const lineColor = a.doing === "read" ? TOOL_COLORS.read : a.doing === "type" ? TOOL_COLORS.edit : "#94a3b8";
+  const lineColor = a.doing === "read" ? KIND_COLORS.read : a.doing === "type" ? KIND_COLORS.edit : "#94a3b8";
   // (the screen's lines, along its face: three rows of code)
   const sx = (x: number, h: number) => local(x, -3.0, h, u);
   const line = (row: number, len: number) => {
@@ -55,7 +81,7 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
   // (the figure's measures, px at full scale)
   const S = (v: number) => v * u * 1.45;
   return (
-    <g transform={`translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`} className="cursor-pointer" opacity={idle ? 0.6 : 1}
+    <g transform={`translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`} className="pointer-events-auto cursor-pointer" opacity={idle ? 0.6 : 1}
       onClick={(e) => { e.stopPropagation(); onClick(); }}>
       <title>{a.name}</title>
       {/* the shadow under the seat, the selection ring */}
@@ -114,7 +140,7 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
         </g>
       )}
       {off && <text x={head.x + S(6)} y={head.y - S(6)} fill="#cbd5e1" fontSize={S(9)}>z</text>}
-      <text y={S(14)} textAnchor="middle" fill="#fff" fontSize={Math.max(9, 11 * u)} fontWeight={500} style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>
+      <text y={S(14)} textAnchor="middle" fill="#fff" fontSize={Math.min(13, Math.max(9, 11 * u))} fontWeight={500} style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>
         {a.name}
       </text>
     </g>

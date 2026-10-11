@@ -54,4 +54,23 @@ describe("opsModel (T163)", () => {
     assert.equal(s[18], 2);
     assert.equal(s.reduce((x, y) => x + y, 0), 3);
   });
+  it("curves (T201): a file edited or read in the last 90 s (an edit over a read), fading with age; claimed files too", () => {
+    const claims = [{ ms: T - 5000, node: "Bob", action: "claim" as const, fileKey: fileKey("/r", "c.ts"), path: "c.ts", guessed: false }];
+    const t = tl([agent("Bob", [[5_000, "Edit", "a.ts"], [40_000, "Read", "a.ts"], [60_000, "Read", "b.ts"], [200_000, "Edit", "c.ts"]])], { claims });
+    const links = opsModel(t, snapshotAt(t, T, false)).links.map((l) => [l.file.split("\n")[1], l.kind, l.fade]).sort();
+    assert.deepEqual(links, [["a.ts", "edit", 1], ["b.ts", "read", Math.round((1 - 60 / 90) * 9) / 9], ["c.ts", "claim", 1]]);
+  });
+  it("the belt (T201): the newest 20 commits of named agents, labelled by task id (else the short hash), pushed by then", () => {
+    const commits = Array.from({ length: 25 }, (_, i) => ({
+      hash: `h${i}`.padEnd(40, "0"), abbrev: `h${i}`, subject: i === 24 ? "admin: desks (T201)" : `commit ${i}`, repo: "/r", node: i === 23 ? "guest" : "Bob",
+      ms: T - (25 - i) * 1000, pushedMs: i === 24 ? T + 1000 : i === 22 ? T - 100 : null, remote: false,
+    }));
+    const t = tl([agent("Bob", []), agent("guest", [], true)], { commits });
+    const m = opsModel(t, snapshotAt(t, T, false));
+    assert.equal(m.commits.length, 20);
+    assert.ok(!m.commits.some((c) => c.by === "guest"));
+    const last = m.commits[m.commits.length - 1];
+    assert.deepEqual([last.label, last.pushed], ["T201", false]);
+    assert.deepEqual([m.commits.find((c) => c.hash.startsWith("h22"))?.pushed, m.commits[0].label], [true, "h4"]);
+  });
 });
