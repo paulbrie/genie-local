@@ -153,13 +153,14 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
   return (
     <div ref={rootRef} data-draws="0" data-low-power={lowPower || undefined} className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 text-white">
       {wins.length > 0 && <CodeWindows wins={wins} onClose={(id) => setWins((ws) => ws.filter((w) => w.id !== id))} />}
-      <div className="max-h-[46%] shrink-0 space-y-2 overflow-y-auto pr-1">
+      {/* (on top: the counts, the latest messages, the folded timeline; under the map, the agents' cards: T207) */}
+      <div className="max-h-[40%] shrink-0 space-y-2 overflow-y-auto pr-1">
         <Header model={model} />
-        <Cards model={model} selected={selectedAgent} onAgentClick={onAgentClick} />
         <Messages model={model} onMessage={onMessage} />
         <Lanes model={model} visible={visible} onDraw={count} />
       </div>
       <IsoCity model={model} layout={layout} selected={selectedAgent} visible={visible} onDraw={count} onAgentClick={onAgentClick} onFile={onFile} onOpenFile={openFile} resetCam={resetCam} />
+      <Cards model={model} selected={selectedAgent} onAgentClick={onAgentClick} />
     </div>
   );
 }
@@ -181,7 +182,8 @@ function Header({ model }: { model: OpsModel }) {
 
 function Cards({ model, selected, onAgentClick }: { model: OpsModel; selected: string | null; onAgentClick: (k: string) => void }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-1.5">
+    // (one row under the map, as many as fit across; more scroll sideways, so the page never grows: T207)
+    <div className="grid shrink-0 auto-cols-[minmax(190px,1fr)] grid-flow-col gap-1.5 overflow-x-auto pb-0.5" aria-label="The agents">
       {model.agents.map((a) => {
         const waiting = a.doing === "wait";
         const still = a.doing === "idle" || a.doing === "nap";
