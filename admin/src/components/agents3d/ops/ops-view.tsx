@@ -632,13 +632,18 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <button type="button" aria-label="Zoom out" title="Zoom out (−)" className="border-t border-white/10 px-2 py-0.5 hover:bg-white/10" onClick={() => setView(zoomAt(view, 1 / 1.5, { x: size.w / 2, y: size.h / 2 }, top))}>−</button>
         <button type="button" aria-label="The whole map" title="The whole map (0, Esc)" className="border-t border-white/10 px-1.5 py-0.5 text-[11px] hover:bg-white/10" onClick={() => setView(FIT_VIEW)}>fit</button>
       </div>
-      <div className="pointer-events-none absolute bottom-1.5 right-2 flex gap-2 text-[10px] text-white/60">
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.edit }} />editing</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.read }} />reading</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.claim }} />claimed</span>
-        <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" style={{ background: KIND_COLORS.claim }} />claimed twice</span>
-        <span>· packages: commits</span>
-        <span>· last {Math.round((SPARK_MS * SPARK_N) / 60_000)} min on the cards</span>
+      {/* the legend: on its own panel over the map (labels and blocks pass under it), the colours on one row, the notes on the next */}
+      <div className="pointer-events-none absolute right-2 bottom-1.5 z-10 flex max-w-[calc(100%-1rem)] flex-col items-end gap-0.5 rounded border border-white/10 bg-[#0b0f17]/95 px-2 py-1 text-[10px] whitespace-nowrap text-white/60">
+        <div className="flex flex-wrap justify-end gap-x-2">
+          <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.edit }} />editing</span>
+          <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.read }} />reading</span>
+          <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.claim }} />claimed</span>
+          <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" style={{ background: KIND_COLORS.claim }} />claimed twice</span>
+        </div>
+        <div className="flex flex-wrap justify-end gap-x-2">
+          <span>packages: commits</span>
+          <span>· last {Math.round((SPARK_MS * SPARK_N) / 60_000)} min on the cards</span>
+        </div>
       </div>
     </div>
   );
