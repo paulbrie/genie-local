@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { cleanLine, firstLine, STEP_MAX } from "./agent-steps";
+import { actOf, cleanLine, firstLine, STEP_MAX } from "./agent-steps";
 
 describe("agent steps (T205)", () => {
   it("keeps the first line only, short", () => {
@@ -23,5 +23,15 @@ describe("agent steps (T205)", () => {
       assert.ok(!/hunter22|abcdef123456|AAAAAAAAAAAAAAAAAAAA|ABCDEFGHIJKLMNOPQRST|BEGIN OPENSSH PRIVATE KEY|:p@/.test(out), `${bad} → ${out}`);
     }
     assert.ok(!/hunter22/.test(firstLine("Let me try psql postgres://app:hunter22@db/x -c 'select 1'\nthen…")!));
+  });
+  it("tool calls as kinds and sizes only, for the monitors (T205c): never their text", () => {
+    const at = "2026-10-11T18:00:00Z";
+    assert.deepEqual(actOf("Edit", { file_path: "/x/a.ts", old_string: "a", new_string: "abcdef" }, at), { kind: "edit", at, len: 6 });
+    assert.deepEqual(actOf("MultiEdit", { edits: [{ new_string: "ab" }, { new_string: "cde" }, null] }, at), { kind: "edit", at, len: 5 });
+    assert.deepEqual(actOf("Write", { content: "x".repeat(20000) }, at), { kind: "edit", at, len: 9999 });
+    assert.deepEqual(actOf("Bash", { command: "psql postgres://u:secret@h/d" }, at), { kind: "bash", at, len: 28 });
+    assert.deepEqual(actOf("Grep", { pattern: "x" }, at), { kind: "read", at, len: 0 });
+    assert.deepEqual(actOf("SendMessage", { to: "Alice", message: "hello" }, at), { kind: "other", at, len: 0 });
+    assert.equal(Object.keys(actOf("Bash", { command: "a secret" }, at)).sort().join(), "at,kind,len", "no text field at all");
   });
 });

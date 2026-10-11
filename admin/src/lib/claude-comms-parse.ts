@@ -182,6 +182,8 @@ export type CommsModel = {
   activity?: Record<string, ActivityEvent[]>;
   /** Each agent's last steps in plain, redacted, one-line words (lib/agent-steps.ts); with `activity` (T205). */
   steps?: Record<string, { t: string; kind: "tool" | "say" | "think"; text: string }[]>;
+  /** Each agent's last tool calls as kinds and sizes only, no text (lib/agent-steps.ts `actOf`); with `activity` (T205c) */
+  acts?: Record<string, { kind: "edit" | "read" | "bash" | "other"; at: string; len: number }[]>;
 };
 
 // ── Redaction ────────────────────────────────────────────────────────────────

@@ -26,3 +26,20 @@ export function firstLine(text: string): string | null {
   const line = text.split("\n").map((l) => l.replace(/^[\s>#*\-•`]+/, "").replace(/\*\*|__|`/g, "").trim()).find((l) => l.length > 0);
   return line ? cleanLine(line) : null;
 }
+
+/** a tool call as Agents City's monitors draw it (T205c): its kind and a size, never its text */
+export type AgentAct = { kind: "edit" | "read" | "bash" | "other"; at: string; len: number };
+const EDITS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]), READS = new Set(["Read", "Grep", "Glob", "LS"]);
+/** the size counted: what it writes (an edit's new text, a file written), a command's length; 0 for the rest */
+export function actOf(tool: string, input: Record<string, unknown>, at: string): AgentAct {
+  const len = (v: unknown) => (typeof v === "string" ? v.length : 0);
+  const kind = EDITS.has(tool) ? "edit" : READS.has(tool) ? "read" : tool === "Bash" ? "bash" : "other";
+  const n =
+    tool === "MultiEdit" && Array.isArray(input.edits) ? input.edits.reduce((a: number, e) => a + (e && typeof e === "object" && "new_string" in e ? len(e.new_string) : 0), 0)
+    : tool === "Edit" ? len(input.new_string)
+    : tool === "Write" ? len(input.content)
+    : tool === "NotebookEdit" ? len(input.new_source)
+    : tool === "Bash" ? len(input.command)
+    : 0;
+  return { kind, at, len: Math.min(9999, n) };
+}

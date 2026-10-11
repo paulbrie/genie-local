@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { firstLine, type AgentStep } from "@/lib/agent-steps";
+import { actOf, firstLine, type AgentAct, type AgentStep } from "@/lib/agent-steps";
 import { asksUser } from "@/lib/asking";
 import { CLAUDE_HOME } from "@/lib/claude";
 import {
@@ -111,6 +111,8 @@ type FileState = {
   activity: ActivityEvent[];
   /** Its last steps in words, oldest first (lib/agent-steps.ts: redacted, one line each) */
   steps: AgentStep[];
+  /** its last tool calls as kinds and sizes (no text), oldest first: the Ops view's monitors (T205c) */
+  acts: AgentAct[];
   /** The last assistant entry was text asking the user something (lib/asking.ts): when; else null. */
   ask: { ts: string | null } | null;
   /** The name its first prompt gives ("You are Bob, …"), for when nothing else names it; checked once. */
@@ -188,10 +190,16 @@ function ingestLine(st: FileState, line: string): void {
       if (tools) st.ask = null;
       else if (text !== null) st.ask = asksUser(text) ? { ts } : null;
     }
-    // (its thinking, for the bubbles (T205b: thinking only, the user's choice): its own turns only, not a helper's)
+    // (its thinking, for the bubbles (T205b: thinking only, the user's choice), and its tool calls as kinds and sizes
+    // for the monitors (T205c): its own turns only, not a helper's)
     if (!obj.isSidechain && ts)
       for (const raw of content) {
         const b = raw as Record<string, unknown>;
+        if (b?.type === "tool_use") {
+          st.acts.push(actOf(str(b.name) ?? "tool", (b.input ?? {}) as Record<string, unknown>, ts));
+          if (st.acts.length > MAX_STEPS) st.acts.splice(0, st.acts.length - MAX_STEPS);
+          continue;
+        }
         const line = b?.type === "thinking" && typeof b.thinking === "string" ? firstLine(b.thinking) : null;
         if (!line) continue;
         st.steps.push({ t: ts, kind: "think", text: line });
@@ -322,6 +330,7 @@ async function refreshFile(abs: string, sessionId: string): Promise<FileState | 
       renames: [],
       activity: [],
       steps: [],
+      acts: [],
       ask: null,
       promptName: null,
       promptChecked: false,
@@ -846,12 +855,19 @@ async function assemble(
   const windowed = messages.filter((m) => (m.sentAt ?? m.receivedAt ?? "") >= cutoff);
   let activity: CommsModel["activity"];
   let steps: CommsModel["steps"];
+  let acts: CommsModel["acts"];
   if (withActivity) {
     steps = {};
     for (const st of states) {
       if (!st.steps.length || st.steps[st.steps.length - 1].t < cutoff) continue;
       const k = canon(sessionNode(st.sessionId));
       steps[k] = [...(steps[k] ?? []), ...st.steps].sort((a, b) => a.t.localeCompare(b.t)).slice(-SENT_STEPS);
+    }
+    acts = {};
+    for (const st of states) {
+      if (!st.acts.length || st.acts[st.acts.length - 1].at < cutoff) continue;
+      const k = canon(sessionNode(st.sessionId));
+      acts[k] = [...(acts[k] ?? []), ...st.acts].sort((a, b) => a.at.localeCompare(b.at)).slice(-MAX_STEPS);
     }
     activity = {};
     for (const [key, events] of recentActivity) {
@@ -875,6 +891,7 @@ async function assemble(
     commits,
     ...(activity ? { activity } : {}),
     ...(steps ? { steps } : {}),
+    ...(acts ? { acts } : {}),
   };
 }
 
