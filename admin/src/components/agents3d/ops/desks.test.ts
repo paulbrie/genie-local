@@ -31,10 +31,11 @@ describe("the Ops view's desks on the map's ground (T201)", () => {
     const two = deskLine(cities, 2);
     assert.ok(two.seats[1].x - two.seats[0].x <= Math.min(SEAT_MAX, 100 / 4) + 1e-9);
   });
-  it("the belt runs the cities' length behind the seats, between the desks and the cities", () => {
+  it("the belt runs the cities' length in front of the seats (front to back: belt, desks, cities), clear of the feet", () => {
     const l = deskLine(cities, 6), deskFar = l.seats[0].z - 3.6 * l.wu;
     assert.ok(l.belt.x0 < 0 && l.belt.x1 > 100);
-    assert.ok(l.belt.z0 > 40 && l.belt.z1 < deskFar, "clear of the cities and of the desks");
+    assert.ok(deskFar > 40, "the desks clear of the cities");
+    assert.ok(l.belt.z0 > l.seats[0].z + 2.05 * l.wu && l.belt.z1 > l.belt.z0, "the belt in front, past a turned agent's toes (z +2.05)");
     assert.equal(l.extent.length, 4);
   });
   it("the computer stands on the desk towards the map, the curve leaving its top", () => {

@@ -1,6 +1,6 @@
 /**
- * The commits' conveyor belt in the Ops view (T201): behind the agents' desks, between them and the cities, along
- * the cities' front. Each commit is a package; a new one drops onto the belt at its author's desk and rides to the
+ * The commits' conveyor belt in the Ops view (T201): along the cities' front, in front of the agents' desks (towards
+ * the viewer, T202). Each commit is a package; a new one drops onto the belt at its author's desk and rides to the
  * city of the repo it went into (or to the belt's far end, a repo not on the map), where it waits in that repo's
  * queue, the newest at the front. Pure: where each package rests along the belt (world x), packages never closer
  * than a slot, all on the belt.

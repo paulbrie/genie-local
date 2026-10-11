@@ -8,7 +8,7 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belt } from "./belt-sprites";
-import { Curve, Desk, DeskStyles, KIND_COLORS } from "./desk-sprites";
+import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS } from "./desk-sprites";
 import { deskLine, deskParts, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
@@ -22,7 +22,7 @@ const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
  * The 2D "Ops" view of Agents City (T163, T143's concepts A and B): each agent's card and the tasks' swimlanes on
  * top, the repos below as an isometric map (files as small blocks, height by size; folders as districts), the agents
  * seated at a row of desks on the map's ground in front of it (T198, T201), glowing curves from each one's computer to
- * the files it edits, reads or has claimed, the commits riding a conveyor belt behind the desks to their repos, the
+ * the files it edits, reads or has claimed, the commits riding a conveyor belt in front of the desks to their repos, the
  * latest messages as arcs between them.
  *
  * Cheap by design (T143): the blocks are two Canvas 2D layers, the whole map drawn once per layout (back to front)
@@ -622,18 +622,23 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
           </g>
         ))}
-        {/* on the map's ground, so they zoom and pan with it (T201): the belt, the desks, the curves, the messages */}
+        {/* on the map's ground, so they zoom and pan with it (T201), back to front (T202): the desks, the belt in front of
+            them, the names, then the curves and the messages over all */}
         <DeskStyles />
-        <Belt line={line} fit={fit} cities={layout.cities} commits={model.commits} agents={model.agents} />
         {model.agents.map((a) => {
           const s = spots.get(a.key);
           return s?.at ? <Desk key={a.key} a={a} at={s.at} u={u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
+        })}
+        <Belt line={line} fit={fit} cities={layout.cities} commits={model.commits} agents={model.agents} />
+        {model.agents.map((a) => {
+          const s = spots.get(a.key);
+          return s?.at ? <DeskName key={`n${a.key}`} a={a} at={s.at} u={u} onClick={() => onAgentClick(a.key)} /> : null;
         })}
         {/* each agent's curves: from its computer to the files it edits, reads or has claimed */}
         {model.links.map((l) => {
           const s = spots.get(l.by), to = blockPeak(l.file), a = byKey.get(l.by);
           if (!s?.at || !to || !a) return null;
-          return <Curve key={`${l.by}\n${l.file}`} l={l} from={{ x: s.at.x + beamFrom.x, y: s.at.y + beamFrom.y }} to={to} color={a.color} dim={!!selected && selected !== l.by} />;
+          return <Curve key={`${l.by}\n${l.file}`} l={l} from={{ x: s.at.x + beamFrom.x, y: s.at.y + beamFrom.y }} to={to} color={a.color} dim={!!selected && selected !== l.by} u={u} />;
         })}
         {/* the latest messages: an arc from sender to receiver, over the row, head to head */}
         {model.msgs.map((m) => {
@@ -669,7 +674,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <div className="flex flex-wrap justify-end gap-x-2">
           <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.edit }} />editing</span>
           <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.read }} />reading</span>
-          <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.claim }} />claimed</span>
+          <span><svg className="mr-1 inline-block align-middle" width={14} height={4} aria-hidden><line x1={0} y1={2} x2={14} y2={2} stroke={KIND_COLORS.claim} strokeWidth={2} strokeDasharray="4 2" /></svg>claimed</span>
           <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" style={{ background: KIND_COLORS.claim }} />claimed twice</span>
         </div>
         <div className="flex flex-wrap justify-end gap-x-2">
