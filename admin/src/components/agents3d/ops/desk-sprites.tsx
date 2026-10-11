@@ -42,12 +42,13 @@ export function DeskStyles() {
       .ops-desk-lines rect { animation: ops-desk-line .3s ease-in-out 6 alternate both; }
       .ops-desk-lines rect:nth-child(2) { animation-delay: .1s }
       .ops-desk-lines rect:nth-child(3) { animation-delay: .2s }
-      @keyframes ops-tap { 0% { transform: translateY(0) } 100% { transform: translateY(1.5px) } }
-      .ops-tap { animation: ops-tap .16s ease-in-out 8 alternate; }
+      @keyframes ops-tap { 0% { transform: translateY(0) } 100% { transform: translateY(var(--tap, 1.5px)) } }
+      .ops-tap-l, .ops-tap-r { animation: ops-tap .11s ease-in-out infinite alternate; }
+      .ops-tap-r { animation-delay: -.11s; }
       @keyframes ops-pulse { from { stroke-dashoffset: 14 } to { stroke-dashoffset: -100 } }
       .ops-pulse { stroke-dasharray: 14 100; stroke-dashoffset: 14; animation: ops-pulse .9s ease-out 1 forwards; }
       .ops-pkg { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
-      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse, .ops-tap { animation: none } .ops-pkg { transition: none } }
+      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r { animation: none } .ops-pkg { transition: none } }
     `}</style>
   );
 }
@@ -93,8 +94,11 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
   };
   // (the agent: boxes along its bones, back to front, in the pose of what it does (figure.ts); the head's middle top
   // for the bubbles and badges)
-  const faces = figureFaces(a.doing), faceOut = facing(a.doing) > 0;
-  const headBone = figureBones(a.doing).find((b) => b.name === "head")!;
+  // (editing or running a command, T204d: the typing pose, the hands tapping the keys for as long as the step goes on
+  // (busy), alternating, about 5 taps a second; CSS, which a hidden tab doesn't run; still under reduced motion)
+  const pose = a.doing === "run" ? "type" : a.doing, tapping = pose === "type" && a.busy;
+  const faces = figureFaces(pose), faceOut = facing(pose) > 0;
+  const headBone = figureBones(pose).find((b) => b.name === "head")!;
   const P = (p: V3) => local(p.x, p.z, p.h, u);
   const head = P({ x: headBone.b.x, h: headBone.b.h - 0.2, z: headBone.b.z });
   const S = (v: number) => v * u * 1.45;
@@ -132,11 +136,14 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
       <polygon points={pts([local(-0.8, -0.4, 1.3, u), local(0.8, -0.4, 1.3, u), local(0.8, 1.0, 1.3, u), local(-0.8, 1.0, 1.3, u)])} fill="#1f2633" stroke={INK} strokeWidth={0.6} />
       {/* the mouse, by the keyboard */}
       <polygon points={pts([local(1.05, -2.05, 2.62, u), local(1.45, -2.05, 2.62, u), local(1.45, -1.75, 2.62, u), local(1.05, -1.75, 2.62, u)])} fill="#1f2633" stroke={INK} strokeWidth={0.5} />
-      {/* the agent, in isometric boxes (T202): back to front; typing, the hands tap a few times on a new tool call */}
-      {faces.map((f, i) => (
-        <polygon key={`${f.bone.name}${i}`} points={pts(f.pts.map(P))} fill={faceFill(f, a.color, faceOut)} stroke={INK} strokeWidth={0.5} strokeLinejoin="round"
-          className={a.doing === "type" && f.bone.name.startsWith("hand") ? "ops-tap" : undefined} />
-      ))}
+      {/* the agent, in isometric boxes (T202): back to front; typing, the hands tap while the step goes on (T204d) */}
+      {faces.map((f, i) => {
+        const hand = tapping && f.bone.name.startsWith("hand") ? (f.bone.name.endsWith("-l") ? "ops-tap-l" : "ops-tap-r") : undefined;
+        return (
+          <polygon key={`${f.bone.name}${i}`} points={pts(f.pts.map(P))} fill={faceFill(f, a.color, faceOut)} stroke={INK} strokeWidth={0.5} strokeLinejoin="round"
+            className={hand} style={hand ? ({ "--tap": `${(1.3 * u).toFixed(2)}px` } as React.CSSProperties) : undefined} />
+        );
+      })}
       {faceOut && (() => {
         // (turned to the viewer: eyes on the face towards +z)
         const e = (dx: number) => P({ x: headBone.b.x + dx, h: headBone.b.h - 0.45, z: headBone.b.z + 0.56 });
