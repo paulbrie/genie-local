@@ -33,6 +33,13 @@ const treeCache = new Map<string, LayoutCache>();
 type StatusCache = { at: number; dirty: RepoLayout["dirty"]; untracked: RepoLayout["files"]; untrackedHidden: RepoLayout["files"] };
 const statusCache = new Map<string, StatusCache>();
 const dirRepo = new Map<string, RepoInfo | null>();
+/** the files the map last showed, per repo (top dir): the only ones the code window may read (T197) */
+const shownFiles = new Map<string, Set<string>>();
+/** a repo's files on the map (undefined: not a repo the map shows); `refresh`: lay the repos out first, if it isn't known yet */
+export async function shownRepoFiles(top: string, refresh = true): Promise<Set<string> | undefined> {
+  if (!shownFiles.has(top) && refresh) await getAgents3DModel(1, { showHidden: true });
+  return shownFiles.get(top);
+}
 
 async function repoOfFile(file: string): Promise<RepoInfo | null> {
   const dir = path.dirname(file);
@@ -164,12 +171,17 @@ export async function getAgents3DModel(days: number, { showHidden = false }: { s
     const tracked = withoutHiddenDirs(tree.files, showHidden);
     const known = new Set(tracked.map((f) => f.p));
     const untracked = showHidden ? [...status.untracked, ...status.untrackedHidden] : status.untracked;
+    const files = [...tracked.slice(0, MAX_FILES), ...untracked.filter((f) => !known.has(f.p))];
+    // (what the map shows, for the code window: added to, never shrunk by a request without hidden folders)
+    const shown = shownFiles.get(r.top) ?? new Set<string>();
+    for (const f of files) shown.add(f.p);
+    shownFiles.set(r.top, shown);
     layouts.push({
       id: r.top,
       name: r.project ? (r.app ? `${r.project}/${r.app}` : r.project) : path.basename(r.top),
       project: r.project,
       app: r.app,
-      files: [...tracked.slice(0, MAX_FILES), ...untracked.filter((f) => !known.has(f.p))],
+      files,
       dirty: withoutHiddenDirs(status.dirty, showHidden),
       truncated: tracked.length > MAX_FILES,
     });

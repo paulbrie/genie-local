@@ -1,12 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { TASK_COLORS, TOOL_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { blockAt, districtAt, districtLabels, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
+import type { CodeWin } from "./code-window";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
+
+// (Monaco and its windows: loaded only when the first file is opened, T197)
+const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
 
 /**
  * The 2D "Ops" view of Agents City (T163, T143's concepts A and B): each agent's card and the tasks' swimlanes on
@@ -115,15 +120,23 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
     rootRef.current?.setAttribute("data-draws", String(draws.current));
   };
   const visible = useVisible();
+  // (files opened by a right-click on the map, each in its own window: T197)
+  const [wins, setWins] = useState<CodeWin[]>([]);
+  const nextWin = useRef(1);
+  const openFile = (repo: string, path: string) => {
+    if (wins.some((w) => w.repo === repo && w.path === path)) return;
+    setWins((ws) => [...ws, { id: nextWin.current++, repo, path, repoName: layout.cities.find((c) => c.repo === repo)?.name ?? repo.split("/").pop() ?? repo }]);
+  };
   return (
     <div ref={rootRef} data-draws="0" className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 text-white">
+      {wins.length > 0 && <CodeWindows wins={wins} onClose={(id) => setWins((ws) => ws.filter((w) => w.id !== id))} />}
       <div className="max-h-[46%] shrink-0 space-y-2 overflow-y-auto pr-1">
         <Header model={model} />
         <Cards model={model} selected={selectedAgent} onAgentClick={onAgentClick} />
         <Messages model={model} onMessage={onMessage} />
         <Lanes model={model} visible={visible} onDraw={count} />
       </div>
-      <IsoCity model={model} layout={layout} selected={selectedAgent} visible={visible} onDraw={count} onAgentClick={onAgentClick} onFile={onFile} />
+      <IsoCity model={model} layout={layout} selected={selectedAgent} visible={visible} onDraw={count} onAgentClick={onAgentClick} onFile={onFile} onOpenFile={openFile} />
     </div>
   );
 }
@@ -268,9 +281,11 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
 
 type Glide = { from: P2; to: P2; t0: number };
 
-function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFile }: {
+function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFile, onOpenFile }: {
   model: OpsModel; layout: CityLayout; selected: string | null; visible: boolean; onDraw: () => void;
   onAgentClick: (k: string) => void; onFile?: (k: string) => void;
+  /** a block right-clicked: its file, to read (T197) */
+  onOpenFile?: (repo: string, path: string) => void;
 }) {
   const [box, size] = useSize<HTMLDivElement>();
   const base = useRef<HTMLCanvasElement>(null);
@@ -398,7 +413,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     }
     return m;
   }, [layout]);
-  const [hover, setHover] = useState<{ x: number; y: number; path: string; folder: IsoDistrict | null } | null>(null);
+  const [hover, setHover] = useState<{ x: number; y: number; path: string; folder: IsoDistrict | null; block: IsoBlock | null } | null>(null);
   const toMap = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -419,12 +434,20 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         // (over a block: its file; over the ground: its neighbourhood, the deepest folder there)
         const b = blockAt(map, p), folder = districtAt(map, p);
         const path = b ? layout.buildings[b.i].path : folder ? `${folder.dir}/` : null;
-        setHover((h) => (path === null ? null : h?.path === path && h.folder === folder && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path, folder }));
+        setHover((h) => (path === null ? null : h?.path === path && h.folder === folder && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path, folder, block: b }));
       }}
       onMouseLeave={() => setHover(null)}
       onClick={(e) => {
         const b = blockAt(map, toMap(e).p);
         if (b) onFile?.(b.key);
+      }}
+      onContextMenu={(e) => {
+        // (a file's column: read it in a code window; elsewhere the browser's own menu)
+        const b = blockAt(map, toMap(e).p);
+        if (!b || !onOpenFile) return;
+        e.preventDefault();
+        const f = layout.buildings[b.i];
+        onOpenFile(f.repo, f.path);
       }}
     >
       <canvas ref={base} className="absolute inset-0 size-full" aria-hidden />
@@ -438,6 +461,18 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             </text>
           );
         })}
+        {/* the column under the pointer: its top lit and outlined (T197) */}
+        {hover?.block && (() => {
+          const top = hover.block.top.map((q) => px(fit, q)), peak = px(fit, hover.block.peak);
+          // (a top a few pixels wide, the map seen whole: a ring round it too, so it is seen)
+          const small = Math.max(...top.map((p) => p.x)) - Math.min(...top.map((p) => p.x)) < 10;
+          return (
+            <g className="pointer-events-none">
+              <polygon points={top.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")} fill="#ffffff" fillOpacity={0.55} stroke="#ffffff" strokeWidth={1.5} strokeLinejoin="round" />
+              {small && <circle cx={peak.x} cy={peak.y} r={6} fill="none" stroke="#ffffff" strokeWidth={1.5} />}
+            </g>
+          );
+        })()}
         {/* the neighbourhood under the pointer: its ground outlined */}
         {hover?.folder && <polygon points={hover.folder.pts.map((q) => { const p = px(fit, q); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(" ")} fill="none" stroke="#ffffff" strokeOpacity={0.45} strokeWidth={1} strokeDasharray="3 2" />}
         {/* the neighbourhoods' names, on their ground, under the figures; one a figure stands on fades back */}
