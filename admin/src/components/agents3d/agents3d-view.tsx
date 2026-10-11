@@ -537,6 +537,7 @@ export function Agents3DView() {
           {error && <p className="absolute top-2 left-2 z-10 text-xs text-destructive">Error: {error}</p>}
           {tl && snap && view === "2d" ? (
             <OpsView
+              lowPower={lowPower}
               model={ops!}
               layout={layout}
               selectedAgent={selected?.kind === "agent" ? selected.key : null}

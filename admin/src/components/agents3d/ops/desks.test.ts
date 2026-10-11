@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { CityBounds } from "@/lib/city-layout";
 
 import { beltPlaces, PKG, SLOT } from "./belt";
-import { deskLine, deskParts, SEAT_MAX } from "./desks";
+import { deskLine, deskParts, deskSpots, SEAT_MAX } from "./desks";
 import type { OpsCommit } from "./model";
 
 // (two cities along x, as the layout lays them)
@@ -14,33 +14,41 @@ const cities: CityBounds[] = [
 ];
 const commit = (hash: string, repo: string | null, by = "Tom", ms = 0): OpsCommit => ({ hash, label: hash, subject: hash, repo, by, ms, pushed: false });
 
-describe("the Ops view's desks on the map's ground (T201)", () => {
-  it("one seat per agent, in a row along x (parallel to the cities' edges) in front of the cities, centred on them", () => {
-    const l = deskLine(cities, 6);
-    assert.equal(l.seats.length, 6);
-    assert.ok(l.seats.every((s) => s.z === l.seats[0].z), "one line of equal z: along the cities' front edges");
-    assert.ok(l.seats[0].z > 40, "in front of the frontmost city (its front edge at z = 40)");
-    for (let i = 1; i < 6; i++) assert.ok(l.seats[i].x > l.seats[i - 1].x);
-    assert.ok(Math.abs((l.seats[0].x + l.seats[5].x) / 2 - 50) < 1e-9);
-    assert.ok(l.seats[0].x >= 0 && l.seats[5].x <= 100);
-    assert.ok(l.seats[1].x - l.seats[0].x <= SEAT_MAX + 1e-9, "a desk at the files' scale, however long the cities");
+describe("the Ops view's desks, each in front of its city (T204c)", () => {
+  const l = deskLine(cities, 6);
+  const team = [
+    { key: "Tom", city: "/r/admin" }, { key: "Bob", city: "/r/trafficsim" }, { key: "Ann", city: "/r/admin" },
+    { key: "Max", city: null }, { key: "Eve", city: "/elsewhere" },
+  ];
+  it("an agent sits in front of its city, several side by side along its front, centred on its middle", () => {
+    const d = deskSpots(cities, team, l.wu, 0);
+    const tom = d.seats.get("Tom")!, ann = d.seats.get("Ann")!, bob = d.seats.get("Bob")!;
+    assert.equal(tom.z, ann.z);
+    assert.ok(Math.abs((tom.x + ann.x) / 2 - 20) < 1e-9 && ann.x - tom.x >= 4.4 * l.wu, "side by side, centred on admin's middle (x 20), clear of each other");
+    assert.ok(Math.abs(bob.x - 72) < 1e-9, "Bob at trafficsim's middle");
+    assert.ok(tom.z > 30 && bob.z > 40, "each in front of its city's front edge");
   });
-  it("desks never overlap (a desk is 4.4 of its units long, a seat's room 7), and a small team keeps together", () => {
-    const l = deskLine(cities, 6);
-    assert.ok(l.seats[1].x - l.seats[0].x >= 4.4 * l.wu);
-    const two = deskLine(cities, 2);
-    assert.ok(two.seats[1].x - two.seats[0].x <= Math.min(SEAT_MAX, 100 / 4) + 1e-9);
+  it("no city, or one not on the map: the lounge, left of the leftmost city", () => {
+    const d = deskSpots(cities, team, l.wu, 0);
+    assert.ok(d.seats.get("Max")!.x < 0 && d.seats.get("Eve")!.x < 0 && d.seats.get("Max")!.x !== d.seats.get("Eve")!.x);
+  });
+  it("far enough out that a head and its bubble (`lift` over the seat) stay clear of the city on screen", () => {
+    const lift = 12, d = deskSpots(cities, team, l.wu, lift), bob = d.seats.get("Bob")!;
+    // (a point `lift` over the seat shows where the ground twice as far back would: still in front of the city)
+    assert.ok(bob.z - 2 * lift >= 40 - 1e-9);
+    assert.ok(d.extent.length >= 8, "every city's desk band in the fit, and the lounge's");
+  });
+  it("a desk at the files' scale, however long the cities", () => {
+    assert.ok(7 * l.wu <= SEAT_MAX + 1e-9);
   });
   it("a belt per city (T204): along its far side, its length, a gap behind it (from the viewer: desks, cities, belts)", () => {
-    const l = deskLine(cities, 6), deskFar = l.seats[0].z - 3.6 * l.wu;
     assert.deepEqual(l.belts.map((b) => b.repo), ["/r/admin", "/r/trafficsim"]);
     l.belts.forEach((b, i) => {
       const c = cities[i];
       assert.deepEqual([b.x0, b.x1], [c.x, c.x + c.w]);
       assert.ok(b.z1 < c.z - 2 * l.wu && b.z0 < b.z1, "behind its city's far edge, with a gap");
     });
-    assert.ok(deskFar > 40, "the desks clear of the cities");
-    assert.equal(l.extent.length, 2 * 2 + 2);
+    assert.equal(l.extent.length, 2 * 2);
   });
   it("the computer stands on the desk towards the map, the curve leaving its top", () => {
     const d = deskParts(1);

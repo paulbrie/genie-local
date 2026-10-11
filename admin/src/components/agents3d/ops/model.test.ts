@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { fileKey, snapshotAt, type Timeline, type TLAgent } from "@/lib/agents3d-timeline";
 import type { CommsNode } from "@/lib/claude-comms-parse";
-import { litKey, opsModel } from "./model";
+import { cityOf, CITY_SWITCH_MS, litKey, opsModel } from "./model";
 
 const T = Date.parse("2026-10-10T12:00:00Z");
 const node = (key: string, guest = false): CommsNode => ({
@@ -78,4 +78,13 @@ describe("opsModel (T163)", () => {
     assert.deepEqual([m.commits.find((c) => c.hash.startsWith("h22"))?.pushed, m.commits.find((c) => c.repo === "/r")?.label, m.commits[0].label], [true, "h9", "s0"]);
   });
 
+  it("an agent's city (T204c): its latest repo once it has worked there 2 min, else the one before; no touches: its home", () => {
+    const at = (ago: number, repo: string) => ({ ms: T - ago, repo });
+    assert.equal(cityOf([at(60_000, "/a"), at(30_000, "/b")], T, "/h"), "/a", "30 s in /b: still /a");
+    assert.equal(cityOf([at(10 * 60_000, "/a"), at(3 * 60_000, "/b"), at(10_000, "/b")], T, "/h"), "/b", "3 min in /b: /b");
+    assert.equal(cityOf([at(10_000, "/b")], T, "/h"), "/b", "only ever /b: /b at once");
+    assert.equal(cityOf([], T, "/h"), "/h");
+    assert.equal(cityOf([at(-5000, "/z")], T, null), null, "a touch after t doesn't count");
+    assert.equal(CITY_SWITCH_MS, 120_000);
+  });
 });

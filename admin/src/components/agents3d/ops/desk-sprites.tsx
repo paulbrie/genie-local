@@ -34,7 +34,10 @@ export const KIND_COLORS = { edit: "#f59e0b", read: "#22c55e", claim: "#ef4444" 
 /** a curve's bright core: its colour, lighter (so the glow reads as that colour, not white) */
 const CORE = { edit: "#fde68a", read: "#86efac", claim: "#fecaca" } as const;
 
-/** the keyframes for the screens' blinks, a curve's pulse and the packages' ride (once per map) */
+/**
+ * the keyframes for the screens' blinks, a curve's pulse, the typing hands, the packages' ride and the desks' moves
+ * (once per map); none under reduced motion, nor with Low power on (T162: `data-low-power` on the view)
+ */
 export function DeskStyles() {
   return (
     <style>{`
@@ -47,8 +50,11 @@ export function DeskStyles() {
       .ops-tap-r { animation-delay: -.11s; }
       @keyframes ops-pulse { from { stroke-dashoffset: 14 } to { stroke-dashoffset: -100 } }
       .ops-pulse { stroke-dasharray: 14 100; stroke-dashoffset: 14; animation: ops-pulse .9s ease-out 1 forwards; }
-      .ops-pkg { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
-      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r { animation: none } .ops-pkg { transition: none } }
+      .ops-pkg, .ops-seat { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
+      .ops-desk :is(polygon, ellipse, circle, line, rect, path) { vector-effect: non-scaling-stroke; }
+      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r { animation: none } .ops-pkg, .ops-seat { transition: none } }
+      [data-low-power] :is(.ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r) { animation: none }
+      [data-low-power] :is(.ops-pkg, .ops-seat) { transition: none }
     `}</style>
   );
 }
@@ -79,8 +85,11 @@ export function Curve({ l, from, to, color, dim, u }: { l: OpsLink; from: P2; to
   );
 }
 
-/** the desk, the computer and the seated agent, drawn at its seat (`at`, px) at scale `u` */
-export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: number; selected: boolean; onClick: () => void }) {
+/**
+ * the desk, the computer and the seated agent, drawn round its seat (the origin; the caller's group puts it on the map
+ * and glides it when it moves, T204c) at scale `u` (the caller's units a desk unit's L pixels at full size)
+ */
+export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; selected: boolean; onClick: () => void }) {
   const d = deskParts(u);
   const busy = a.doing === "type" || a.doing === "read" || a.doing === "run" || a.doing === "think";
   const off = a.doing === "nap", idle = a.doing === "idle" || off;
@@ -103,7 +112,7 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
   const head = P({ x: headBone.b.x, h: headBone.b.h - 0.2, z: headBone.b.z });
   const S = (v: number) => v * u * 1.45;
   return (
-    <g transform={`translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`} className="pointer-events-auto cursor-pointer" opacity={idle ? 0.6 : 1}
+    <g className="ops-desk pointer-events-auto cursor-pointer" opacity={idle ? 0.6 : 1}
       onClick={(e) => { e.stopPropagation(); onClick(); }}>
       <title>{a.name}</title>
       {/* the shadow under the seat, the selection ring */}
@@ -168,11 +177,11 @@ export function Desk({ a, at, u, selected, onClick }: { a: OpsAgent; at: P2; u: 
   );
 }
 
-/** an agent's name under its desk (drawn after the belt in front, so the belt never covers it) */
-export function DeskName({ a, at, u, onClick }: { a: OpsAgent; at: P2; u: number; onClick: () => void }) {
+/** an agent's name under its desk, round the seat as Desk is; `k`: screen pixels a unit there (the text kept 9–13 px) */
+export function DeskName({ a, u, k, onClick }: { a: OpsAgent; u: number; k: number; onClick: () => void }) {
   return (
-    <text x={at.x} y={at.y + 14 * u * 1.45} textAnchor="middle" fill="#fff" fontSize={Math.min(13, Math.max(9, 11 * u))} fontWeight={500}
-      className="pointer-events-auto cursor-pointer" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }} onClick={(e) => { e.stopPropagation(); onClick(); }}>
+    <text y={14 * u * 1.45} textAnchor="middle" fill="#fff" fontSize={Math.min(13, Math.max(9, 11 * u * k)) / k} fontWeight={500}
+      className="pointer-events-auto cursor-pointer" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 / k }} onClick={(e) => { e.stopPropagation(); onClick(); }}>
       {a.name}
     </text>
   );

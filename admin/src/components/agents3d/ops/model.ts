@@ -47,6 +47,9 @@ export type OpsAgent = {
   spark: number[];
   /** its bubble (T205): its last steps in words, newest last, each fading with age (1 new … 0.3 old); null when idle */
   bubble: { lines: { kind: "tool" | "say" | "think"; text: string; fade: number }[]; thinking: boolean } | null;
+  /** the repo (city) it works in (T204c): of its latest edit, read or claim, a new one only once it has been there
+   * CITY_SWITCH_MS; else its working directory's repo */
+  city?: string | null;
 };
 export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
 /** a curve from an agent's computer to a file (T201): editing, reading (fading with age, 0..1 on STEP), or claimed */
@@ -73,6 +76,28 @@ export type OpsModel = {
 const RANK: Record<LitKind, number> = { read: 0, edit: 1, held: 2, clash: 3 };
 
 /** the Ops view's model at the snapshot's time (named agents only, as the Table seats them) */
+/** an agent's desk moves to a new repo's city only once it has worked there this long (T204c) */
+export const CITY_SWITCH_MS = 2 * 60_000;
+
+/**
+ * The repo an agent works in at `t` (T204c): its touches (edits, reads, claims) newest first; the latest run in one
+ * repo counts once it has lasted CITY_SWITCH_MS (until then, the run before it), so a quick look elsewhere doesn't
+ * move its desk; no touches: its working directory's repo.
+ */
+export function cityOf(touches: { ms: number; repo: string }[], t: number, home: string | null): string | null {
+  const ts = touches.filter((x) => x.ms <= t).sort((a, b) => b.ms - a.ms);
+  if (!ts.length) return home;
+  let i = 0;
+  const runs: { repo: string; since: number }[] = [];
+  while (i < ts.length && runs.length < 2) {
+    const repo = ts[i].repo;
+    let since = ts[i].ms;
+    while (i < ts.length && ts[i].repo === repo) since = ts[i++].ms;
+    runs.push({ repo, since });
+  }
+  return t - runs[0].since >= CITY_SWITCH_MS || runs.length === 1 ? runs[0].repo : runs[1].repo;
+}
+
 /** a bubble shows the last BUBBLE_N steps of the last BUBBLE_MS */
 export const BUBBLE_N = 3, BUBBLE_MS = 2 * 60_000;
 
@@ -93,6 +118,11 @@ export function opsModel(tl: Timeline, snap: Snapshot, steps?: Record<string, { 
     if (!cur || RANK[kind] > RANK[cur.kind]) lit.set(k, { kind, by });
   };
   const agents: OpsAgent[] = [];
+  // (each agent's touches for its city: edits and reads in a repo, and its claims)
+  const touchesOf = (a: Timeline["agents"][number]) => [
+    ...a.events.flatMap((e) => (e.repo && e.path && (toolKind(e.tool) === "edit" || toolKind(e.tool) === "read") ? [{ ms: e.ms, repo: e.repo }] : [])),
+    ...tl.claims.flatMap((c) => (c.node === a.key && c.action === "claim" && c.fileKey ? [{ ms: c.ms, repo: c.fileKey.split("\n")[0] }] : [])),
+  ];
   const links: OpsLink[] = [];
   const spark0 = Math.floor(snap.t / SPARK_MS) * SPARK_MS - (SPARK_N - 1) * SPARK_MS;
   for (const a of tl.agents) {
@@ -132,6 +162,7 @@ export function opsModel(tl: Timeline, snap: Snapshot, steps?: Record<string, { 
       managing: s?.managing ?? 0,
       spark,
       bubble: bubbleOf(steps?.[a.key], t),
+      city: cityOf(touchesOf(a), t, a.repo),
     });
   }
   // (edits seen on disk, by whoever)

@@ -11,7 +11,7 @@ import { Belts } from "./belt-sprites";
 import { bubbleAt, Bubbles, HEAD_TOP, layoutBubbles } from "./bubbles";
 import { local as deskLocal } from "./desks";
 import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS } from "./desk-sprites";
-import { deskLine, deskParts, L } from "./desks";
+import { deskLine, deskParts, deskSpots, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
 import { cssBetween, FIT_VIEW, keepCentre, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
@@ -52,6 +52,11 @@ type Fit = { k: number; ox: number; oy: number };
 const NAMES_H = 26;
 /** the map's zoom and pan, kept for the browser session (T200) */
 const VIEW_KEY = "admin.agents3d.ops.view";
+/** the map with its bounds grown to take in `extra` (screen units) */
+function withExtent(m: IsoMap, extra: P2[]): IsoMap {
+  const xs = [m.bounds.x0, m.bounds.x1, ...extra.map((p) => p.x)], ys = [m.bounds.y0, m.bounds.y1, ...extra.map((p) => p.y)];
+  return { ...m, bounds: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } };
+}
 /** the map fitted to its box, with room above for the cities' names and below (`bottom` px) for the desks' names */
 function fitOf(map: IsoMap, w: number, h: number, bottom: number): Fit {
   const b = map.bounds, side = 24, top = 28;
@@ -116,7 +121,7 @@ function useVisible() {
   return v;
 }
 
-export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage, onFile, resetCam }: {
+export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage, onFile, resetCam, lowPower }: {
   model: OpsModel;
   layout: CityLayout;
   selectedAgent: string | null;
@@ -126,6 +131,8 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
   onFile?: (key: string) => void;
   /** a new value: back to the whole map (Escape with nothing else to close, as the 3D camera's reset) */
   resetCam?: number;
+  /** the Low power switch (T162): the view's motion (typing hands, pulses, rides, glides) held still */
+  lowPower?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const draws = useRef(0);
@@ -142,7 +149,7 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
     setWins((ws) => [...ws, { id: nextWin.current++, repo, path, repoName: layout.cities.find((c) => c.repo === repo)?.name ?? repo.split("/").pop() ?? repo }]);
   };
   return (
-    <div ref={rootRef} data-draws="0" className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 text-white">
+    <div ref={rootRef} data-draws="0" data-low-power={lowPower || undefined} className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 text-white">
       {wins.length > 0 && <CodeWindows wins={wins} onClose={(id) => setWins((ws) => ws.filter((w) => w.id !== id))} />}
       <div className="max-h-[46%] shrink-0 space-y-2 overflow-y-auto pr-1">
         <Header model={model} />
@@ -327,12 +334,13 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const base = useRef<HTMLCanvasElement>(null);
   const litC = useRef<HTMLCanvasElement>(null);
   const map = useMemo(() => isoMap(layout), [layout]);
-  // (the desks' row and the belt on the map's ground, in front of the cities (T201): the fit takes them in)
+  // (the desks and the belts on the map's ground (T201, T204): the fit takes them in)
   const line = useMemo(() => deskLine(layout.cities, model.agents.length), [layout.cities, model.agents.length]);
-  const framed = useMemo(() => {
-    const xs = [map.bounds.x0, map.bounds.x1, ...line.extent.map((p) => p.x)], ys = [map.bounds.y0, map.bounds.y1, ...line.extent.map((p) => p.y)];
-    return { ...map, bounds: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } };
-  }, [map, line]);
+  // (each agent's desk in front of its city (T204c), far enough out that its head and a bubble (T205: 59 px at the
+  // whole map's zoom, as near as the fit without the desks tells) stay clear of the city's blocks)
+  const kEst = useMemo(() => fitOf(withExtent(map, line.extent), size.w || 1, size.h || 1, NAMES_H).k, [map, line, size.w, size.h]);
+  const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, model.agents, line, kEst]);
+  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent]), [map, line, desks]);
   const fit0 = useMemo(() => fitOf(framed, size.w, size.h, NAMES_H), [framed, size.w, size.h]);
   // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
   // when it ends the view is set, the layers drawn again and the labels picked again
@@ -453,14 +461,16 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   // each agent's seat at its desk (in the agents' order), and the top of the file it works on, if laid out
   const spots = useMemo(() => {
     const out = new Map<string, { at: P2; peak: P2 | null }>();
-    model.agents.forEach((a, n) => {
+    model.agents.forEach((a) => {
       const i = a.focus ? layout.index.get(a.focus) : undefined;
       const m = i !== undefined ? map.order.get(i) : undefined;
-      const seat = line.seats[n];
+      const seat = desks.seats.get(a.key)!;
       out.set(a.key, { at: px(fit, iso(seat.x, seat.z)), peak: m !== undefined ? px(fit, map.blocks[m].peak) : null });
     });
     return out;
-  }, [model.agents, layout, map, fit, line]);
+  }, [model.agents, layout, map, fit, desks]);
+  // (the desks back to front: further from the viewer first)
+  const deskOrder = useMemo(() => [...model.agents].sort((a, b) => { const p = desks.seats.get(a.key)!, q = desks.seats.get(b.key)!; return p.x + p.z - (q.x + q.z); }), [model.agents, desks]);
   // (the sprites' scale: a desk unit in pixels at this zoom, over its full-size pixels)
   const u = (line.wu * fit.k) / L;
   // (the bubbles over the heads, laid out when the agents' steps or the view change: T205)
@@ -640,14 +650,18 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         {/* on the map's ground, so they zoom and pan with it (T201), back to front (T202): the desks, the names, then the
             curves and the messages over all (the belt is under the cities: above) */}
         <DeskStyles />
-        {model.agents.map((a) => {
-          const s = spots.get(a.key);
-          return s?.at ? <Desk key={a.key} a={a} at={s.at} u={u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
-        })}
-        {model.agents.map((a) => {
-          const s = spots.get(a.key);
-          return s?.at ? <DeskName key={`n${a.key}`} a={a} at={s.at} u={u} onClick={() => onAgentClick(a.key)} /> : null;
-        })}
+        {/* (in the map's own units, so a zoom doesn't set off the glide a move to another city makes, T204c) */}
+        <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
+          {deskOrder.map((a) => {
+            const seat = desks.seats.get(a.key)!, p = iso(seat.x, seat.z), uu = line.wu / L;
+            return (
+              <g key={a.key} className="ops-seat" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}>
+                <Desk a={a} u={uu} selected={selected === a.key} onClick={() => onAgentClick(a.key)} />
+                <DeskName a={a} u={uu} k={fit.k} onClick={() => onAgentClick(a.key)} />
+              </g>
+            );
+          })}
+        </g>
         {/* each agent's curves: from its computer to the files it edits, reads or has claimed */}
         {model.links.map((l) => {
           const s = spots.get(l.by), to = blockPeak(l.file), a = byKey.get(l.by);
