@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronRight } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -11,7 +12,7 @@ import { Curve, Desk, DeskStyles, KIND_COLORS } from "./desk-sprites";
 import { deskLine, deskParts, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
-import { cssBetween, FIT_VIEW, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
+import { cssBetween, FIT_VIEW, keepCentre, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
 
 // (Monaco and its windows: loaded only when the first file is opened, T197)
@@ -232,7 +233,18 @@ function Messages({ model, onMessage }: { model: OpsModel; onMessage?: (id: stri
 }
 
 /** the tasks over the last hour, a row per agent; drawn when they change, or once a minute as time passes */
+/** the timeline folded or open, kept in this browser; folded until opened (T203) */
+const LANES_KEY = "admin.agents3d.ops.lanes";
+
 function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; onDraw: () => void }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (localStorage.getItem(LANES_KEY) === "1") setOpen(true); // eslint-disable-line react-hooks/set-state-in-effect
+  }, []);
+  const toggle = () => {
+    localStorage.setItem(LANES_KEY, open ? "0" : "1");
+    setOpen(!open);
+  };
   const [box, size] = useSize<HTMLDivElement>();
   const canvas = useRef<HTMLCanvasElement>(null);
   const rows = model.agents.filter((a) => model.bars.has(a.key));
@@ -241,7 +253,7 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
   const H = 18 + rows.length * 18;
   useEffect(() => {
     const c = canvas.current;
-    if (!c || !visible || !size.w || !rows.length) return;
+    if (!c || !open || !visible || !size.w || !rows.length) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1), W = size.w;
     c.width = W * dpr;
     c.height = H * dpr;
@@ -280,12 +292,24 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
       }
     });
     onDraw();
-    // (drawn again only when what it shows changes: `key`)
+    // (drawn again only when what it shows changes: `key`; and when opened)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, visible]);
+  }, [key, visible, open]);
+  const tasks = rows.reduce((n, a) => n + (model.bars.get(a.key)?.length ?? 0), 0);
   return (
     <div ref={box} className="w-full">
-      {rows.length > 0 && <canvas ref={canvas} style={{ width: "100%", height: H }} aria-label="Tasks over the last hour, a row per agent" />}
+      {/* (folded: one thin bar; a click opens the swimlanes, and the map gives back the room) */}
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        title={open ? "Fold the timeline away" : "Show the tasks over the last hour, a row per agent"}
+        className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-white/60 hover:bg-white/[0.06] hover:text-white/85"
+      >
+        <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
+        Timeline · {tasks} task{tasks === 1 ? "" : "s"} in the last {Math.round(LANE_MS / 60_000)} min
+      </button>
+      {open && rows.length > 0 && <canvas ref={canvas} style={{ width: "100%", height: H }} aria-label="Tasks over the last hour, a row per agent" />}
     </div>
   );
 }
@@ -312,6 +336,14 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   // when it ends the view is set, the layers drawn again and the labels picked again
   const [view, setViewRaw] = useState<View>(FIT_VIEW);
   const fit = useMemo(() => viewFit(fit0, view), [fit0, view]);
+  // (the box resized, the timeline folded or opened: the whole map if it showed it, else the same middle and zoom; T203)
+  const sized = useRef<{ fit0: Fit; w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const p = sized.current;
+    sized.current = { fit0, w: size.w, h: size.h };
+    if (!p || !p.w || !size.w || (p.w === size.w && p.h === size.h) || box.current?.hasAttribute("data-moving")) return;
+    setViewRaw((v) => keepCentre(v, p.fit0, p.w, p.h, fit0, size.w, size.h));
+  }, [fit0, size.w, size.h, box]);
   const top = maxS(fit0, size.w || 1);
   const layer = useRef<HTMLDivElement>(null);
   const live = useRef<View | null>(null);

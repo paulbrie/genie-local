@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { cssBetween, FIT_VIEW, MIN_S, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt } from "./map-view";
+import { cssBetween, FIT_VIEW, keepCentre, MIN_S, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt } from "./map-view";
 
 const fit = { k: 4, ox: 100, oy: 50 };
 const at = (v: { s: number; tx: number; ty: number }, q: { x: number; y: number }) => ({ x: v.s * q.x + v.tx, y: v.s * q.y + v.ty });
@@ -38,5 +38,13 @@ describe("map view (T200)", () => {
     const wider = viewFromStore(kept, 1000, 600, 10)!;
     assert.ok(Math.abs(at(wider, { x: kept.cx, y: kept.cy }).x - 500) < 1e-9, "the same middle in a wider box");
     for (const junk of [null, 3, {}, { s: "2", cx: 0, cy: 0 }, { s: NaN, cx: 0, cy: 0 }]) assert.equal(viewFromStore(junk, 800, 600, 10), null);
+  });
+  it("keeps the middle and the zoom when the box changes size (T203); at fit, stays at fit", () => {
+    const before = { k: 4, ox: 100, oy: 50 }, after = { k: 5, ox: 90, oy: 120 }, v = { s: 3, tx: -400, ty: -300 };
+    const fb = viewFit(before, v), mid = { x: (800 / 2 - fb.ox) / fb.k, y: (500 / 2 - fb.oy) / fb.k };
+    const n = keepCentre(v, before, 800, 500, after, 800, 700), fa = viewFit(after, n);
+    assert.ok(Math.abs(fa.ox + mid.x * fa.k - 400) < 1e-9 && Math.abs(fa.oy + mid.y * fa.k - 350) < 1e-9, "the same point in the middle");
+    assert.ok(Math.abs(fa.k - fb.k) < 1e-9, "the same zoom on the map");
+    assert.equal(keepCentre(FIT_VIEW, before, 800, 500, after, 800, 700), FIT_VIEW);
   });
 });

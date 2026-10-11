@@ -47,3 +47,14 @@ export function viewFromStore(x: unknown, w: number, h: number, max: number): Vi
   const z = Math.min(max, Math.max(MIN_S, s));
   return { s: z, tx: w / 2 - z * cx, ty: h / 2 - z * cy };
 }
+
+/**
+ * The view after the box changed size (the timeline folded or opened, T203): at fit it stays at fit (the map refits);
+ * otherwise the same map point stays in the middle at the same zoom on the map (`k·s` kept), whatever the new fit.
+ */
+export function keepCentre(v: View, before: Fit, wb: number, hb: number, after: Fit, w: number, h: number): View {
+  if (v.s === FIT_VIEW.s && v.tx === FIT_VIEW.tx && v.ty === FIT_VIEW.ty) return v;
+  const f = viewFit(before, v), cx = (wb / 2 - f.ox) / f.k, cy = (hb / 2 - f.oy) / f.k;
+  const s = (before.k * v.s) / after.k;
+  return { s, tx: w / 2 - s * (after.ox + cx * after.k), ty: h / 2 - s * (after.oy + cy * after.k) };
+}
