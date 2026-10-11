@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { deriveState, isDefaultName, mergeNodesByName, nameFromPrompt, nodesInWindow, parseTags, recipientName, splitTaskIds, type CommsMessage, type CommsNode } from "./claude-comms-parse";
+import { deriveState, isDefaultName, mergeNodesByName, nameFromPrompt, nodesInWindow, parseTags, recipientName, splitPaths, splitTaskIds, type CommsMessage, type CommsNode } from "./claude-comms-parse";
 
 let n = 0;
 const msg = (from: string, to: string, body: string): CommsMessage => {
@@ -306,5 +306,56 @@ describe("names for sessions that ended before a reboot (T121)", () => {
     // with its task updated inside the window, its owner stays
     const t2 = tasks.map((t) => ({ ...t, updatedAt: at(13) }));
     assert.deepEqual(nodesInWindow([pid, bob, tom], [], t2, at(6)).map((n) => n.name), ["pid 14604", "Bob"]);
+  });
+});
+
+describe("CLAIM / RELEASE paths as we write them (T208)", () => {
+  const D = "admin/src/components/agents3d/desk";
+  it("skips a leading task id, repo names and words; takes every path in an item", () => {
+    assert.deepEqual(splitPaths("T204c desks.ts"), ["desks.ts"]);
+    assert.deepEqual(splitPaths("T202 admin/src/x.tsx, and maybe y.ts"), ["admin/src/x.tsx", "y.ts"]);
+    assert.deepEqual(splitPaths("T164 admin src/components/agents3d/desk/world.ts"), ["src/components/agents3d/desk/world.ts"]);
+    assert.deepEqual(splitPaths("T149 trafficsim src/lib/lane-align.ts"), ["src/lib/lane-align.ts"]);
+    assert.deepEqual(splitPaths("T202 admin/src/components/agents3d/ops/desk-sprites.tsx, and maybe desks.ts and desks.test.ts (limb geometry). Working in /opt/project/admin directly; Alex told."), [
+      "admin/src/components/agents3d/ops/desk-sprites.tsx",
+      "desks.ts",
+      "desks.test.ts",
+    ]);
+    assert.deepEqual(splitPaths("lightning.tsx and bolts.ts, once you've committed."), ["lightning.tsx", "bolts.ts"]);
+    assert.deepEqual(splitPaths("`src/a.ts`, ./src/b.ts; c.md"), ["src/a.ts", "src/b.ts", "c.md"]);
+  });
+  it("leaves out notes in brackets, where the work is, braces spelled out, and later sentences", () => {
+    assert.deepEqual(splitPaths(`${D}/* (the 9 desk files: activity, agents, avatar.ts)`), [`${D}/*`]);
+    assert.deepEqual(splitPaths(`${D}/* in /home/genie/alex-scratch/admin-t90 (T85)`), [`${D}/*`]);
+    assert.deepEqual(splitPaths(`${D}/{shelf.ts, shelf.test.ts, world.ts} in admin-t90`), [`${D}/shelf.ts`, `${D}/shelf.test.ts`, `${D}/world.ts`]);
+    assert.deepEqual(splitPaths("admin/src/components/agents3d/agents3d-view.tsx. Alex can run the build check. I'll stay inside desk/* from here on."), [
+      "admin/src/components/agents3d/agents3d-view.tsx",
+    ]);
+    // (the first sentence that names a path)
+    assert.deepEqual(splitPaths("T202 add-on (move the belt in front of the desks). Adding to my claim: ops/belt.ts, ops/belt-sprites.tsx, the new ops/figure.ts (iso limbs)"), [
+      "ops/belt.ts",
+      "ops/belt-sprites.tsx",
+      "ops/figure.ts",
+    ]);
+    assert.deepEqual(splitPaths("none yet. I keep desk/* for T94, T92 and T93."), []);
+    assert.deepEqual(splitPaths("T184 (Sketch window as a modal). T183 is pushed (e27e81b, the focus block only). Files for T184:"), []);
+    assert.deepEqual(splitPaths("T198 split agreed as you proposed, and/or T92/T93 next."), []);
+    assert.deepEqual(splitPaths("app/(auth)/page.tsx"), ["app/(auth)/page.tsx"]);
+    // (prose with slashes, a JSX tag: not paths; a directory or a glob is)
+    assert.deepEqual(splitPaths("T204e model.ts, and in ops-view.tsx my desk/curve/arc block only"), ["model.ts", "ops-view.tsx"]);
+    assert.deepEqual(splitPaths("bubbles.tsx, and in ops-view.tsx one <Bubbles/> line at the end of the map svg"), ["bubbles.tsx", "ops-view.tsx"]);
+    assert.deepEqual(splitPaths("src/server/bridge.ts, src/app/api/bridge/**, ops/"), ["src/server/bridge.ts", "src/app/api/bridge/**", "ops/"]);
+  });
+  it("a release spelt with the repo apart frees the file the sender claimed; Tom no longer holds task ids", () => {
+    const held = (msgs: CommsMessage[]) => deriveState(msgs).files.filter((f) => f.holder).map((f) => f.path);
+    assert.deepEqual(held([msg("tom", "alice", `CLAIM: ${D}/world.ts`), msg("tom", "alice", "RELEASE: T164 admin src/components/agents3d/desk/world.ts")]), []);
+    assert.deepEqual(held([msg("tom", "alice", "CLAIM: T204c admin/src/components/agents3d/ops/desks.ts"), msg("tom", "alice", "RELEASE: T204c desks.ts")]), []);
+    assert.deepEqual(held([msg("tom", "alice", `CLAIM: ${D}/*`), msg("tom", "alice", "RELEASE: desk/* to Alex for the T78 commit.")]), []);
+    // (a directory or glob frees the files under it, claimed one by one)
+    assert.deepEqual(held([msg("tom", "alice", `CLAIM: ${D}/{shelf.ts, walk.ts} in admin-t90`), msg("tom", "alice", `RELEASE: ${D}/* in /home/genie/alex-scratch/admin-t90.`)]), []);
+    const once = deriveState([msg("tom", "alice", `CLAIM: ${D}/*, ${D}/walk.ts`), msg("tom", "alice", "RELEASE: desk/*")]).files;
+    assert.ok(once.every((f) => f.history.filter((h) => h.action === "release").length === 1), "each released once");
+    // (someone else's file of that name stays theirs)
+    assert.deepEqual(held([msg("bob", "alice", "CLAIM: trafficsim/src/desks.ts"), msg("tom", "alice", "RELEASE: T204c desks.ts")]), ["trafficsim/src/desks.ts"]);
   });
 });

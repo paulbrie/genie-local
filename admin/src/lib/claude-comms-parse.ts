@@ -305,14 +305,47 @@ function cleanPathToken(raw: string): string {
     .replace(/^\.\//, "");
 }
 
-/** `a.ts, src/b.ts (notes)` → ["a.ts", "src/b.ts"]: first token of each item. */
+const FILE_EXT_RE = /\.(?:tsx?|jsx?|mjs|cjs|json|md|mdx|css|scss|sql|py|sh|ya?ml|toml|go|rs|html|prisma|txt|svg|png|conf|service)$/i;
+
+/**
+ * A token that names a file (a file extension), a directory ("ops/") or a glob ("desk/*", "api/**"); not prose
+ * with slashes ("the desk/belt/curve/arc block", "and/or"), not a URL.
+ */
+function isPathToken(t: string): boolean {
+  if (!/\w/.test(t) || t.length > 300 || TASK_ID_RE.test(t) || t.includes("://")) return false;
+  return FILE_EXT_RE.test(t) || /\/\**$/.test(t);
+}
+
+/**
+ * The paths a CLAIM / RELEASE names (T208), as we write them: "T202 admin/src/x.tsx, and maybe y.ts" → both;
+ * "T164 admin src/desk/world.ts" → the path (a leading task id, repo names and other words are skipped);
+ * "desk/{shelf.ts, walk.ts} in admin-t90" → each file in the braces (a dir after "in" is where, not what).
+ * Notes in brackets are skipped, and only the first sentence that names any path counts: "x.tsx. I'll stay
+ * inside desk/* from here on." releases x.tsx only. "none yet. I keep desk/*" names none.
+ */
 export function splitPaths(arg: string): string[] {
-  const out: string[] = [];
-  for (const item of arg.split(/[,;]/)) {
-    const first = cleanPathToken(item.trim().split(/\s+/)[0] ?? "");
-    if (first && /[\w]/.test(first) && first.length <= 300) out.push(first);
+  if (/^\s*(?:none|nothing)\b/i.test(arg)) return [];
+  const text = arg
+    .replace(/(^|\s)\([^()]*\)/g, "$1")
+    .replace(/(\S*)\{([^{}]*)\}(\S*)/g, (_, pre: string, list: string, post: string) =>
+      list.split(",").map((x) => `${pre}${x.trim()}${post}`).join(", "),
+    );
+  for (const sentence of text.split(/\.\s+(?=\S)/)) {
+    const out: string[] = [];
+    for (const item of sentence.split(/[,;]/)) {
+      const words = item.trim().split(/\s+/);
+      words.forEach((w, i) => {
+        const t = cleanPathToken(w);
+        // ("one <Bubbles/> line": a tag, not a directory)
+        if (w.startsWith("<")) return;
+        // ("in /home/genie/alex-scratch/admin-t90", "in ops/": where the work is, not a file claimed)
+        if (!isPathToken(t) || (i > 0 && /^in$/i.test(words[i - 1]) && !FILE_EXT_RE.test(t))) return;
+        if (!out.includes(t)) out.push(t);
+      });
+    }
+    if (out.length) return out;
   }
-  return out;
+  return [];
 }
 
 const HEX_RE = /^[0-9a-f]{7,40}$/i;
@@ -577,14 +610,13 @@ export function deriveState(messages: CommsMessage[]): {
     const full = fullPaths.get(p);
     return full && full.size === 1 ? [...full][0] : p;
   };
-  const fileAct = (
-    rawPath: string,
+  const mark = (
+    p: string,
     action: "claim" | "release",
     node: string,
     m: CommsMessage,
     guessed: boolean,
   ) => {
-    const p = canonical(rawPath);
     let f = files.get(p);
     if (!f) {
       f = { path: p, holder: null, since: null, guessed, history: [] };
@@ -603,6 +635,27 @@ export function deriveState(messages: CommsMessage[]): {
     }
   };
 
+  const fileAct = (
+    rawPath: string,
+    action: "claim" | "release",
+    node: string,
+    m: CommsMessage,
+    guessed: boolean,
+  ) => {
+    const p = canonical(rawPath);
+    let paths = [p];
+    if (action === "release") {
+      const mine = [...files.values()].filter((f) => f.holder === node).map((f) => f.path);
+      // (a directory or a glob: also every file under it the sender holds, "desk/*" of "admin/…/desk/shelf.ts")
+      const dir = p.match(/^(.*?)\/\**$/)?.[1];
+      const under = dir ? mine.filter((q) => q !== p && (q.startsWith(`${dir}/`) || q.includes(`/${dir}/`))) : [];
+      // ("RELEASE: T164 admin src/x.ts" of a claimed "admin/src/x.ts", or the other way round: the one file the
+      // sender holds that the two spellings name)
+      const same = mine.includes(p) ? [] : mine.filter((q) => q.endsWith(`/${p}`) || p.endsWith(`/${q}`));
+      paths = [...new Set([...under, ...(same.length === 1 ? same : [p])])];
+    }
+    for (const q of paths) mark(q, action, node, m, guessed);
+  };
   const sorted = [...messages].sort(byTime);
   // When each pair of sessions started using tags.
   const tagsSince = new Map<string, string>();
