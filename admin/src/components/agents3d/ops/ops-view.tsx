@@ -6,6 +6,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TASK_COLORS, TOOL_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
+import { beamColor, Desk, DeskStyles } from "./desk-sprites";
+import { deskParts, deskRow, rowRoom } from "./desks";
 import { blockAt, districtAt, districtLabels, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
@@ -16,21 +18,20 @@ const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
 /**
  * The 2D "Ops" view of Agents City (T163, T143's concepts A and B): each agent's card and the tasks' swimlanes on
  * top, the repos below as an isometric map (files as small blocks, height by size; folders as districts), the agents
- * as figures over the file they work on, a thread down to it, the latest messages as arcs between them.
+ * seated at a row of desks in front of it (T198), a beam from each one's computer to the file it works on, the latest
+ * messages as arcs between them.
  *
  * Cheap by design (T143): the blocks are two Canvas 2D layers, the whole map drawn once per layout (back to front)
  * and the lit files (touched lately, held, claimed twice) drawn over it only when that set changes; the agents and
- * labels a thin SVG layer; the cards DOM. Nothing loops: a figure moving to another file glides for 0.45 s at 30
- * frames a second, then all is still; what the clock's ticks bring (4 a second at most) changes only what changed;
- * in a hidden tab nothing is drawn until it shows again. `data-draws` on the root counts the canvas draws and
- * glide frames, for checking it.
+ * labels a thin SVG layer; the cards DOM. Nothing loops: the desks stay where they are (a beam moves to another
+ * file at once), a screen's lines blink a few times on a new tool call (CSS, finite), then all is still; what the
+ * clock's ticks bring (4 a second at most) changes only what changed; in a hidden tab nothing is drawn until it shows
+ * again. `data-draws` on the root counts the canvas draws, for checking it.
  */
 
 const EXT: Record<string, string> = { ts: "#4f6fa8", tsx: "#5d82c4", js: "#a39a52", jsx: "#b0a65a", mjs: "#a39a52", json: "#6b7a5c", md: "#5c8f6b", css: "#8f5c8f", sql: "#8f765c", py: "#5c8a8f", sh: "#777", yml: "#7a6b8f", yaml: "#7a6b8f" };
 const LIT: Record<LitKind, string> = { edit: TOOL_COLORS.edit, read: TOOL_COLORS.read, held: "#e2e8f0", clash: "#ef4444" };
 const DOING: Record<OpsAgent["doing"], string> = { type: "editing", read: "reading", run: "running", think: "thinking", idle: "idle", nap: "napping", wait: "waiting for you" };
-const GLIDE_MS = 450;
-const GLIDE_FPS = 30;
 
 const shade = (hex: string, k: number) => {
   const n = parseInt(hex.slice(1), 16);
@@ -40,9 +41,9 @@ const shade = (hex: string, k: number) => {
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
 type Fit = { k: number; ox: number; oy: number };
-/** the map fitted to its box, with room above for the figures over the top blocks and below for those parked */
-function fitOf(map: IsoMap, w: number, h: number): Fit {
-  const b = map.bounds, side = 24, top = 52, bottom = 48;
+/** the map fitted to its box, with room above for the cities' names and below (`bottom` px) for the desks' row */
+function fitOf(map: IsoMap, w: number, h: number, bottom: number): Fit {
+  const b = map.bounds, side = 24, top = 28;
   const k = Math.max(0.1, Math.min((w - side * 2) / (b.x1 - b.x0 || 1), (h - top - bottom) / (b.y1 - b.y0 || 1)));
   return { k, ox: (w - (b.x1 - b.x0) * k) / 2 - b.x0 * k, oy: top + (h - top - bottom - (b.y1 - b.y0) * k) / 2 - b.y0 * k };
 }
@@ -279,8 +280,6 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
   );
 }
 
-type Glide = { from: P2; to: P2; t0: number };
-
 function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFile, onOpenFile }: {
   model: OpsModel; layout: CityLayout; selected: string | null; visible: boolean; onDraw: () => void;
   onAgentClick: (k: string) => void; onFile?: (k: string) => void;
@@ -291,7 +290,9 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const base = useRef<HTMLCanvasElement>(null);
   const litC = useRef<HTMLCanvasElement>(null);
   const map = useMemo(() => isoMap(layout), [layout]);
-  const fit = useMemo(() => fitOf(map, size.w, size.h), [map, size.w, size.h]);
+  // (the desks' row along the front, under the map: its scale decides the room it takes)
+  const row = useMemo(() => deskRow(model.agents.length, size.w, size.h), [model.agents.length, size.w, size.h]);
+  const fit = useMemo(() => fitOf(map, size.w, size.h, rowRoom(row.u)), [map, size.w, size.h, row.u]);
   const lk = litKey(model.lit);
 
   // the map, once per layout and size
@@ -347,59 +348,17 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lk, map, fit, visible]);
 
-  // where each figure stands: over its file, else in a row at the lower left
+  // each agent's seat at its desk (in the agents' order), and the top of the file it works on, if laid out
   const spots = useMemo(() => {
     const out = new Map<string, { at: P2; peak: P2 | null }>();
-    let parked = 0;
-    const perFile = new Map<string, number>();
-    for (const a of model.agents) {
+    model.agents.forEach((a, n) => {
       const i = a.focus ? layout.index.get(a.focus) : undefined;
-      const n = i !== undefined ? map.order.get(i) : undefined;
-      if (n !== undefined) {
-        const peak = px(fit, map.blocks[n].peak), k = perFile.get(a.focus!) ?? 0;
-        perFile.set(a.focus!, k + 1);
-        out.set(a.key, { at: { x: peak.x + 18 + k * 14, y: peak.y - 30 - k * 6 }, peak });
-      } else out.set(a.key, { at: { x: 26 + parked++ * 40, y: size.h - 26 }, peak: null });
-    }
+      const m = i !== undefined ? map.order.get(i) : undefined;
+      out.set(a.key, { at: row.seats[n], peak: m !== undefined ? px(fit, map.blocks[m].peak) : null });
+    });
     return out;
-  }, [model.agents, layout, map, fit, size.h]);
-
-  // figures glide to a new spot (0.45 s at 30 frames a second), then hold still
-  // (where each is drawn now: its spot, or on its way there)
-  const [shownPos, setShownPos] = useState(() => new Map<string, P2>());
-  const shown = useRef(new Map<string, P2>());
-  const glides = useRef(new Map<string, Glide>());
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    const now = performance.now();
-    for (const [k, s] of spots) {
-      const cur = shown.current.get(k);
-      const g = glides.current.get(k);
-      const goal = g?.to ?? cur;
-      if (!cur) shown.current.set(k, s.at);
-      else if (!goal || Math.hypot(goal.x - s.at.x, goal.y - s.at.y) > 0.5) glides.current.set(k, { from: cur, to: s.at, t0: now });
-    }
-    const step = () => {
-      timer.current = null;
-      if (document.visibilityState !== "visible") {
-        for (const [k, g] of glides.current) shown.current.set(k, g.to);
-        glides.current.clear();
-      }
-      const t = performance.now();
-      for (const [k, g] of glides.current) {
-        const e = Math.min(1, (t - g.t0) / GLIDE_MS), q = 1 - (1 - e) ** 3;
-        const p = { x: g.from.x + (g.to.x - g.from.x) * q, y: g.from.y + (g.to.y - g.from.y) * q };
-        shown.current.set(k, p);
-        if (e >= 1) glides.current.delete(k);
-      }
-      setShownPos(new Map(shown.current));
-      onDraw();
-      if (glides.current.size) timer.current = setTimeout(step, 1000 / GLIDE_FPS);
-    };
-    if (glides.current.size && !timer.current) timer.current = setTimeout(step, 1000 / GLIDE_FPS);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spots]);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  }, [model.agents, layout, map, fit, row]);
+  const beamFrom = deskParts(row.u).beam;
 
   // the neighbourhoods' (folders') names: the biggest first, where they fit, never overlapping (T192); once per layout and size
   const cityBoxes = useMemo(() => map.cities.map((c) => { const p = px(fit, c.at); return { x: p.x, y: p.y - 10, w: c.name.length * 8 + 8, h: 14 }; }), [map, fit]);
@@ -420,11 +379,6 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     return { sx, sy, p: { x: (sx - fit.ox) / fit.k, y: (sy - fit.oy) / fit.k } };
   };
   const byKey = new Map(model.agents.map((a) => [a.key, a]));
-  // (where the figures and their names stand now, for the labels to give way)
-  const figureBoxes = model.agents.flatMap((a) => {
-    const p = shownPos.get(a.key) ?? spots.get(a.key)?.at;
-    return p ? [{ x: p.x, y: p.y + 4, w: Math.max(20, a.name.length * 6.5), h: 40 }] : [];
-  });
   return (
     <div
       ref={box}
@@ -475,48 +429,38 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         })()}
         {/* the neighbourhood under the pointer: its ground outlined */}
         {hover?.folder && <polygon points={hover.folder.pts.map((q) => { const p = px(fit, q); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(" ")} fill="none" stroke="#ffffff" strokeOpacity={0.45} strokeWidth={1} strokeDasharray="3 2" />}
-        {/* the neighbourhoods' names, on their ground, under the figures; one a figure stands on fades back */}
+        {/* the neighbourhoods' names, on their ground */}
         {labels.map((l) => (
-          <g key={l.key} transform={`translate(${l.x.toFixed(1)},${l.y.toFixed(1)})`} className="pointer-events-none" opacity={figureBoxes.some((f) => Math.abs(f.x - l.x) * 2 < f.w + l.w && Math.abs(f.y - l.y) * 2 < f.h + l.h) ? 0.25 : 1}>
+          <g key={l.key} transform={`translate(${l.x.toFixed(1)},${l.y.toFixed(1)})`} className="pointer-events-none">
             <rect x={-l.w / 2} y={-l.h / 2} width={l.w} height={l.h} rx={3} fill="#0b0f17" fillOpacity={0.72} />
             <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
           </g>
         ))}
         {/* the latest messages: an arc from sender to receiver */}
         {model.msgs.map((m) => {
-          const a = shownPos.get(m.from) ?? spots.get(m.from)?.at, b = shownPos.get(m.to) ?? spots.get(m.to)?.at;
+          const a = spots.get(m.from)?.at, b = spots.get(m.to)?.at;
           if (!a || !b || (a.x === b.x && a.y === b.y)) return null;
-          const mx = (a.x + b.x) / 2, my = Math.max(6, Math.min(a.y, b.y) - 40 - Math.abs(a.x - b.x) * 0.1);
-          return <path key={m.id} d={`M${a.x},${a.y - 14} Q${mx},${my} ${b.x},${b.y - 14}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
+          // (over the row, from head to head)
+          const mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - 30 * row.u - 10 - Math.abs(a.x - b.x) * 0.12;
+          return <path key={m.id} d={`M${a.x},${a.y - 30 * row.u} Q${mx},${my} ${b.x},${b.y - 30 * row.u}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
         })}
+        <DeskStyles />
+        {/* each agent's beam: from its computer to the file it works on (edited or read), under the desks */}
         {model.agents.map((a) => {
           const s = spots.get(a.key);
-          if (!s) return null;
-          const p = shownPos.get(a.key) ?? s.at;
-          return s.peak ? (
-            <line
-              key={`t${a.key}`}
-              x1={p.x} y1={p.y + 8} x2={s.peak.x} y2={s.peak.y}
-              stroke={a.color} strokeWidth={1.5} opacity={selected && selected !== a.key ? 0.35 : 0.9}
-            />
-          ) : null;
-        })}
-        {model.agents.map((a) => {
-          const p = shownPos.get(a.key) ?? spots.get(a.key)?.at;
-          if (!p) return null;
+          if (!s?.peak || !s.at) return null;
+          const x1 = s.at.x + beamFrom.x, y1 = s.at.y + beamFrom.y;
           return (
-            <g
-              key={a.key}
-              transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
-              className="cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                onAgentClick(a.key);
-              }}
-            >
-              <Figure a={a} selected={selected === a.key} />
+            <g key={`b${a.key}`} className="pointer-events-none" opacity={selected && selected !== a.key ? 0.3 : 0.85}>
+              <line x1={x1} y1={y1} x2={s.peak.x} y2={s.peak.y} stroke={beamColor(a)} strokeWidth={1.4} />
+              <circle cx={s.peak.x} cy={s.peak.y} r={2.4} fill={beamColor(a)} />
             </g>
           );
+        })}
+        {/* the desks' row, in front of the codebases */}
+        {model.agents.map((a) => {
+          const s = spots.get(a.key);
+          return s?.at ? <Desk key={a.key} a={a} at={s.at} u={row.u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
         })}
       </svg>
       {hover && (
@@ -541,28 +485,5 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <span>· last {Math.round((SPARK_MS * SPARK_N) / 60_000)} min on the cards</span>
       </div>
     </div>
-  );
-}
-
-/** an agent as a small isometric figure: a shadow, a body, a head; busy bright, idle faded, waiting with a "?" */
-function Figure({ a, selected }: { a: OpsAgent; selected: boolean }) {
-  const waiting = a.doing === "wait", still = a.doing === "idle" || a.doing === "nap";
-  return (
-    <g opacity={still ? 0.5 : 1}>
-      <ellipse cx={0} cy={9} rx={7} ry={3.2} fill="#000" opacity={0.45} />
-      {selected && <ellipse cx={0} cy={9} rx={10} ry={4.6} fill="none" stroke="#fff" strokeWidth={1.5} />}
-      <path d="M-5,8 L-5,-2 Q-5,-6 0,-6 Q5,-6 5,-2 L5,8 Z" fill={a.color} stroke="#0b0f17" strokeWidth={1} />
-      <circle cx={0} cy={-10} r={4.2} fill="#f1c9a5" stroke="#0b0f17" strokeWidth={1} />
-      {waiting && (
-        <g transform="translate(9,-18)">
-          <circle r={6.5} fill="#f59e0b" stroke="#0b0f17" strokeWidth={1} />
-          <text y={3.5} textAnchor="middle" className="fill-black text-[10px] font-bold">{a.waitFor === "permission" ? "!" : "?"}</text>
-        </g>
-      )}
-      {a.doing === "nap" && <text x={7} y={-14} className="fill-slate-300 text-[9px]">z</text>}
-      <text y={22} textAnchor="middle" className="fill-white text-[10px] font-medium" style={{ paintOrder: "stroke", stroke: "#0b0f17", strokeWidth: 3 }}>
-        {a.name}
-      </text>
-    </g>
   );
 }
