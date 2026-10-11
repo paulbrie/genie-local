@@ -29,7 +29,7 @@ export type IsoBlock = {
   peak: P2;
   ext: string;
 };
-export type IsoDistrict = { pts: P2[]; depth: number; dir: string; repo: string };
+export type IsoDistrict = { pts: P2[]; depth: number; dir: string; repo: string; /** ground area (world units²), for labelling the big ones first */ area: number; /** the ground's middle */ mid: P2 };
 export type IsoMap = {
   blocks: IsoBlock[];
   /** layout index → position in `blocks` (drawing order) */
@@ -63,7 +63,7 @@ export function isoMap(layout: CityLayout): IsoMap {
   const districts = layout.districts
     .slice()
     .sort((a, b) => a.depth - b.depth)
-    .map((d) => ({ pts: quad(d.x, d.z, d.x + d.w, d.z + d.d, 0), depth: d.depth, dir: d.dir, repo: d.repo }));
+    .map((d) => ({ pts: quad(d.x, d.z, d.x + d.w, d.z + d.d, 0), depth: d.depth, dir: d.dir, repo: d.repo, area: d.w * d.d, mid: iso(d.x + d.w / 2, d.z + d.d / 2) }));
   const cities = layout.cities.map((c) => ({ name: c.name, repo: c.repo, at: iso(c.x, c.z), ground: quad(c.x, c.z, c.x + c.w, c.z + c.d, 0) }));
   const pts = [...blocks.flatMap((b) => [{ x: b.box.x0, y: b.box.y0 }, { x: b.box.x1, y: b.box.y1 }]), ...cities.flatMap((c) => c.ground)];
   const bounds = pts.length
@@ -104,4 +104,38 @@ export function blockAt(map: IsoMap, p: P2): IsoBlock | null {
     if (inside(p, b.top) || inside(p, b.left) || inside(p, b.right)) return b;
   }
   return null;
+}
+
+/** the deepest district (folder) whose ground is under `p` (screen units), or null */
+export function districtAt(map: IsoMap, p: P2): IsoDistrict | null {
+  let best: IsoDistrict | null = null;
+  for (const d of map.districts) if ((!best || d.depth > best.depth) && inside(p, d.pts)) best = d;
+  return best;
+}
+
+/** a folder's name on the map: the top-level one as it is, a deeper one with its parent ("src/components") */
+export const districtName = (dir: string) => dir.split("/").slice(-2).join("/");
+
+export type MapLabel = { key: string; text: string; x: number; y: number; w: number; h: number; depth: number };
+
+/**
+ * The neighbourhoods to name (T192), in screen pixels: the biggest first; one only where its ground is wide enough
+ * for its name; never two that overlap (the smaller one goes), nor over `taken` (the cities' names). The rest show on
+ * hover. `toPx`: map → screen; `k`: screen pixels a map unit; `charW`, `h`: a label's character width and height.
+ */
+export function districtLabels(map: IsoMap, toPx: (p: P2) => P2, k: number, taken: { x: number; y: number; w: number; h: number }[], charW = 6, h = 14, maxDepth = 3): MapLabel[] {
+  const out: MapLabel[] = [];
+  const hits = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+    Math.abs(a.x - b.x) * 2 < a.w + b.w + 4 && Math.abs(a.y - b.y) * 2 < a.h + b.h + 2;
+  const cands = map.districts.filter((d) => d.depth <= maxDepth).sort((a, b) => b.area - a.area || a.depth - b.depth);
+  for (const d of cands) {
+    const text = districtName(d.dir), w = text.length * charW + 10;
+    // (wide enough: the ground's width across the screen, at least the name's)
+    const span = (Math.max(...d.pts.map((p) => p.x)) - Math.min(...d.pts.map((p) => p.x))) * k;
+    if (span < w) continue;
+    const at = toPx(d.mid), box = { x: at.x, y: at.y, w, h };
+    if (taken.some((t) => hits(t, box)) || out.some((l) => hits(l, box))) continue;
+    out.push({ key: `${d.repo}\n${d.dir}`, text, x: at.x, y: at.y, w, h, depth: d.depth });
+  }
+  return out;
 }

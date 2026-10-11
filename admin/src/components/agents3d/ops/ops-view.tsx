@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TASK_COLORS, TOOL_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
-import { blockAt, isoMap, litDrawList, type IsoBlock, type IsoMap, type P2 } from "./iso";
+import { blockAt, districtAt, districtLabels, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
 
 /**
@@ -386,22 +386,40 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   }, [spots]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
-  const [hover, setHover] = useState<{ x: number; y: number; path: string } | null>(null);
+  // the neighbourhoods' (folders') names: the biggest first, where they fit, never overlapping (T192); once per layout and size
+  const cityBoxes = useMemo(() => map.cities.map((c) => { const p = px(fit, c.at); return { x: p.x, y: p.y - 10, w: c.name.length * 8 + 8, h: 14 }; }), [map, fit]);
+  const labels = useMemo(() => (size.w ? districtLabels(map, (p) => px(fit, p), fit.k, cityBoxes) : []), [map, fit, size.w, cityBoxes]);
+  // (files in each folder, for its hover card)
+  const filesIn = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const b of layout.buildings) {
+      const parts = b.path.split("/");
+      for (let i = 1; i < parts.length; i++) { const k = `${b.repo}\n${parts.slice(0, i).join("/")}`; m.set(k, (m.get(k) ?? 0) + 1); }
+    }
+    return m;
+  }, [layout]);
+  const [hover, setHover] = useState<{ x: number; y: number; path: string; folder: IsoDistrict | null } | null>(null);
   const toMap = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     return { sx, sy, p: { x: (sx - fit.ox) / fit.k, y: (sy - fit.oy) / fit.k } };
   };
   const byKey = new Map(model.agents.map((a) => [a.key, a]));
+  // (where the figures and their names stand now, for the labels to give way)
+  const figureBoxes = model.agents.flatMap((a) => {
+    const p = shownPos.get(a.key) ?? spots.get(a.key)?.at;
+    return p ? [{ x: p.x, y: p.y + 4, w: Math.max(20, a.name.length * 6.5), h: 40 }] : [];
+  });
   return (
     <div
       ref={box}
       className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-white/10 bg-[#0b0f17]"
       onMouseMove={(e) => {
         const { sx, sy, p } = toMap(e);
-        const b = blockAt(map, p);
-        const path = b ? layout.buildings[b.i].path : null;
-        setHover((h) => (path === null ? null : h?.path === path && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path }));
+        // (over a block: its file; over the ground: its neighbourhood, the deepest folder there)
+        const b = blockAt(map, p), folder = districtAt(map, p);
+        const path = b ? layout.buildings[b.i].path : folder ? `${folder.dir}/` : null;
+        setHover((h) => (path === null ? null : h?.path === path && h.folder === folder && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path, folder }));
       }}
       onMouseLeave={() => setHover(null)}
       onClick={(e) => {
@@ -420,6 +438,15 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             </text>
           );
         })}
+        {/* the neighbourhood under the pointer: its ground outlined */}
+        {hover?.folder && <polygon points={hover.folder.pts.map((q) => { const p = px(fit, q); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; }).join(" ")} fill="none" stroke="#ffffff" strokeOpacity={0.45} strokeWidth={1} strokeDasharray="3 2" />}
+        {/* the neighbourhoods' names, on their ground, under the figures; one a figure stands on fades back */}
+        {labels.map((l) => (
+          <g key={l.key} transform={`translate(${l.x.toFixed(1)},${l.y.toFixed(1)})`} className="pointer-events-none" opacity={figureBoxes.some((f) => Math.abs(f.x - l.x) * 2 < f.w + l.w && Math.abs(f.y - l.y) * 2 < f.h + l.h) ? 0.25 : 1}>
+            <rect x={-l.w / 2} y={-l.h / 2} width={l.w} height={l.h} rx={3} fill="#0b0f17" fillOpacity={0.72} />
+            <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
+          </g>
+        ))}
         {/* the latest messages: an arc from sender to receiver */}
         {model.msgs.map((m) => {
           const a = shownPos.get(m.from) ?? spots.get(m.from)?.at, b = shownPos.get(m.to) ?? spots.get(m.to)?.at;
@@ -460,10 +487,15 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       {hover && (
         <div className="pointer-events-none absolute z-10 max-w-[28rem] truncate rounded bg-black/80 px-1.5 py-0.5 font-mono text-[11px] text-white" style={{ left: Math.min(hover.x + 12, size.w - 200), top: hover.y + 12 }}>
           {hover.path}
+          {hover.path.endsWith("/") && hover.folder && ` · ${filesIn.get(`${hover.folder.repo}\n${hover.folder.dir}`) ?? 0} files`}
           {byKey.size > 0 && (() => {
             const l = [...model.lit].find(([k]) => k.endsWith(`\n${hover.path}`))?.[1];
             return l ? ` · ${l.kind}${l.by ? ` (${byKey.get(l.by)?.name ?? "…"})` : ""}` : "";
           })()}
+          {/* (a file: the neighbourhood it is in, outlined on the map) */}
+          {!hover.path.endsWith("/") && hover.folder && (
+            <span className="block text-white/60">in {hover.folder.dir}/ · {filesIn.get(`${hover.folder.repo}\n${hover.folder.dir}`) ?? 0} files</span>
+          )}
         </div>
       )}
       <div className="pointer-events-none absolute bottom-1.5 right-2 flex gap-2 text-[10px] text-white/60">
