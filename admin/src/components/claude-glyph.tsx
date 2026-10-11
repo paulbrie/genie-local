@@ -1,20 +1,37 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
+
+import { glyphTicker } from "./glyph-ticker";
 
 /**
  * The glyphs the Claude CLI cycles through for its "thinking" spinner — an
  * asterisk that swells and fades, from a bare dot to a full eight-point spark.
  * We animate through them (ping-pong) so an active Claude terminal twinkles the
- * same way the CLI does. These are the CLI's actual frames, verified by sampling
+ * same way the CLI does, for as long as it works (T169): one shared clock at 5
+ * frames a second writes the glyph straight into the element (glyph-ticker.ts),
+ * so a working terminal costs a tiny repaint a few times a second, nothing in a
+ * hidden tab, and nothing at all once it stops. These are the CLI's actual frames, verified by sampling
  * a live `claude` pane (note the middle frame is a plain ASCII `*`, not `✳`):
  *   ·  ✢  *  ✶  ✻  ✽   (then back down)
  */
 const FRAMES = ["·", "✢", "*", "✶", "✻", "✽"] as const;
 const FULL = FRAMES.length - 1; // steadiest, fullest glyph (used when idle)
-const FRAME_MS = 110;
-/** how long it twinkles when Claude starts working, then holds the full spark (no endless animation on every page: T162) */
-const TWINKLE_MS = 2640;
+
+/** the page's one glyph clock, made on first use (browser only), stopped while the tab is hidden */
+let ticker: ReturnType<typeof glyphTicker> | null = null;
+function pageTicker() {
+  if (!ticker) {
+    ticker = glyphTicker({
+      setInterval: (f, ms) => window.setInterval(f, ms),
+      clearInterval: (id) => window.clearInterval(id),
+      visible: () => document.visibilityState === "visible",
+    });
+    const t = ticker;
+    document.addEventListener("visibilitychange", () => t.sync());
+  }
+  return ticker;
+}
 
 /** The three states a Claude terminal glyph can show. */
 export type ClaudeState = "active" | "idle" | "input";
@@ -43,8 +60,8 @@ const SIZE_CLS = {
 
 /**
  * A Claude status glyph — no glow, three states:
- * - `active` — Claude is working: the spark twinkles through every CLI glyph for
- *   a couple of seconds when it starts, then holds a full-strength spark.
+ * - `active` — Claude is working: the spark twinkles through every CLI glyph
+ *   while it works.
  * - `idle`   — Claude is sitting at its prompt: a steady, dimmed spark.
  * - `input`  — Claude is blocked asking you something: a "?" instead of a spark.
  *
@@ -59,32 +76,16 @@ export function ClaudeGlyph({
   size?: "sm" | "md";
   className?: string;
 }) {
-  const [frame, setFrame] = useState(FULL);
-
+  // (working: the shared clock writes each frame into this element's data-g, shown by ::before; React keeps out of it)
+  const spark = useRef<HTMLSpanElement>(null);
   useEffect(() => {
-    if (state !== "active") return;
-    const reduced =
-      typeof window !== "undefined" && window.matchMedia
-        ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        : false;
-    if (reduced) return;
-    // Ping-pong through the frames for the swell-and-fade twinkle. Start at -1
-    // so the first tick lands on the bare dot.
-    let idx = -1;
-    let dir = 1;
-    const id = window.setInterval(() => {
-      idx += dir;
-      if (idx >= FULL) dir = -1;
-      else if (idx <= 0) dir = 1;
-      setFrame(idx);
-    }, FRAME_MS);
-    const stop = window.setTimeout(() => {
-      window.clearInterval(id);
-      setFrame(FULL);
-    }, TWINKLE_MS);
+    const el = spark.current;
+    if (state !== "active" || !el) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const stop = pageTicker().add((g) => el.setAttribute("data-g", g));
     return () => {
-      window.clearInterval(id);
-      window.clearTimeout(stop);
+      stop();
+      el.setAttribute("data-g", FRAMES[FULL]);
     };
   }, [state]);
 
@@ -101,10 +102,5 @@ export function ClaudeGlyph({
 
   // active = full-strength twinkle; idle = steady, dimmed spark.
   const tone = state === "active" ? "text-orange-500" : "text-orange-500/60";
-  const shown = state === "active" ? FRAMES[frame] : FRAMES[FULL];
-  return (
-    <span aria-hidden className={`${base} ${tone}`}>
-      {shown}
-    </span>
-  );
+  return <span ref={spark} aria-hidden data-g={FRAMES[FULL]} className={`${base} ${tone} before:content-[attr(data-g)]`} />;
 }
