@@ -27,7 +27,7 @@ export function rackOf(cities: CityBounds[], belts: Belt[], wu: number): Rack {
   return { x0: mid - w / 2, x1: mid + w / 2, z0: z1 - d, z1, h: RACK.h * wu, wu };
 }
 
-/** what the fit takes in for the rack: its top, and its label over it (screen units) */
+/** what the fit takes in for the rack alone: its top, and its label over it (screen units) */
 export const rackExtent = (r: Rack): P2[] => [iso(r.x0, r.z0, r.h + 3 * r.wu), iso(r.x1, r.z0, r.h + 3 * r.wu), iso(r.x0, r.z1, 0), iso(r.x1, r.z1, 0)];
 
 /** a core's blade colour by its load: dark when idle, through amber, to red (null: no data) */
@@ -55,3 +55,40 @@ export function meters(r: Rack): { z0: number; z1: number; h0: number; h1: numbe
     return { z0: r.z0 + pad, z1: r.z1 - pad, h0: h1 - 1.1 * r.wu, h1 };
   });
 }
+
+/** the network box beside the rack (T209b): its public ports' sockets on its front, the bandwidth over it; desk units */
+export const NET_BOX = { w: 4, d: 4, gap: 3, minH: 5 };
+export type NetBox = { x0: number; x1: number; z0: number; z1: number; h: number; wu: number };
+
+/** the network box: left of the rack (on screen, up and left), level with its front, as tall as its ports need */
+export function netBoxOf(r: Rack, ports: number): NetBox {
+  const wu = r.wu, h = Math.max(NET_BOX.minH, 1.6 + ports * 0.9) * wu;
+  const x1 = r.x0 - NET_BOX.gap * wu;
+  return { x0: x1 - NET_BOX.w * wu, x1, z0: r.z1 - NET_BOX.d * wu, z1: r.z1, h, wu };
+}
+
+/** a port's sockets on the network box's front, top to bottom (world units) */
+export function sockets(b: NetBox, n: number): { x0: number; x1: number; h0: number; h1: number }[] {
+  const top = b.h - 0.8 * b.wu;
+  return Array.from({ length: n }, (_, i) => ({ x0: b.x0 + 0.6 * b.wu, x1: b.x0 + 1.4 * b.wu, h1: top - i * 0.9 * b.wu, h0: top - i * 0.9 * b.wu - 0.6 * b.wu }));
+}
+
+/** what the fit takes in for the rack and the network box (and their labels; the box's tallest with ~10 ports) */
+export const serverExtent = (r: Rack): P2[] => {
+  const b = netBoxOf(r, 10);
+  return [...rackExtent(r), iso(b.x0 - 6 * r.wu, b.z0, b.h + 5 * r.wu), iso(b.x0 - 6 * r.wu, b.z1, 0)];
+};
+
+/** a rate as people read it: "340 B/s", "12 kB/s", "1.2 MB/s" (decimal units, as network rates are) */
+export function formatRate(bps: number): string {
+  if (!Number.isFinite(bps) || bps < 0) return "—";
+  if (bps < 1000) return `${Math.round(bps)} B/s`;
+  if (bps < 1e6) return `${bps < 1e4 ? (bps / 1e3).toFixed(1) : Math.round(bps / 1e3)} kB/s`;
+  return `${bps < 1e7 ? (bps / 1e6).toFixed(1) : Math.round(bps / 1e6)} MB/s`;
+}
+
+/** a port's label: its number and service ("22 ssh", "443 https"), with "/udp" for UDP; the number alone without a name */
+export const portLabel = (p: { port: number; proto: "tcp" | "udp"; service: string }) => `${p.port}${p.proto === "udp" ? "/udp" : ""}${p.service ? ` ${p.service}` : ""}`;
+
+/** how fast a pulse runs along the cable for this much traffic (seconds; faster with more): 2.4 s idle … 0.5 s at 10 MB/s+ */
+export const pulseSeconds = (bps: number) => Math.max(0.5, 2.4 - 0.48 * Math.max(0, Math.log10(Math.max(1, bps)) - 3));

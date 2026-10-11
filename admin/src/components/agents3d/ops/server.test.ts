@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import type { CityBounds } from "@/lib/city-layout";
 
 import { deskLine } from "./desks";
-import { blades, coreColor, meters, rackExtent, rackOf } from "./server";
+import { blades, coreColor, formatRate, meters, netBoxOf, portLabel, pulseSeconds, rackExtent, rackOf, serverExtent, sockets } from "./server";
 
 const cities: CityBounds[] = [
   { repo: "/r/admin", name: "admin", x: 0, z: 0, w: 40, d: 30 },
@@ -34,5 +34,18 @@ describe("our server beyond the belts (T209)", () => {
     assert.equal(coreColor(70), "rgb(245,158,11)");
     assert.equal(coreColor(95), "rgb(239,68,68)");
     assert.equal(coreColor(null), "#1f2937");
+  });
+  it("the network box (T209b): left of the rack, level with its front, a socket a port top to bottom inside it", () => {
+    const b = netBoxOf(r, 6), s = sockets(b, 6);
+    assert.ok(b.x1 < r.x0 && b.z1 === r.z1);
+    for (let i = 1; i < 6; i++) assert.ok(s[i].h1 < s[i - 1].h0);
+    assert.ok(s[5].h0 > 0 && s[0].h1 < b.h && s.every((x) => x.x0 > b.x0 && x.x1 < b.x1));
+    assert.ok(netBoxOf(r, 12).h > netBoxOf(r, 2).h, "as tall as its ports need");
+    assert.equal(serverExtent(r).length, rackExtent(r).length + 2);
+  });
+  it("rates and port labels as people read them; the cable's pulse faster with more traffic", () => {
+    assert.deepEqual([formatRate(340), formatRate(1234), formatRate(13_000), formatRate(400_000), formatRate(1_234_567), formatRate(25e6)], ["340 B/s", "1.2 kB/s", "13 kB/s", "400 kB/s", "1.2 MB/s", "25 MB/s"]);
+    assert.deepEqual([portLabel({ port: 22, proto: "tcp", service: "ssh" }), portLabel({ port: 68, proto: "udp", service: "dhcp" }), portLabel({ port: 3000, proto: "tcp", service: "" })], ["22 ssh", "68/udp dhcp", "3000"]);
+    assert.ok(pulseSeconds(0) > pulseSeconds(1e5) && pulseSeconds(1e5) > pulseSeconds(1e7) && pulseSeconds(1e9) === 0.5);
   });
 });

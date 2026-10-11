@@ -8,7 +8,7 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
-import { rackExtent, rackOf } from "./server";
+import { rackOf, serverExtent } from "./server";
 import { ServerRack } from "./server-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
@@ -403,7 +403,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, seatKey, line, kEst]);
   // (our server beyond the belts, T209)
   const rack = useMemo(() => rackOf(layout.cities, line.belts, line.wu), [layout.cities, line]);
-  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent, ...rackExtent(rack)]), [map, line, desks, rack]);
+  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent, ...serverExtent(rack)]), [map, line, desks, rack]);
   const fit0 = useMemo(() => fitOf(framed, size.w, size.h, NAMES_H), [framed, size.w, size.h]);
   // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
   // when it ends the view is set, the layers drawn again and the labels picked again
