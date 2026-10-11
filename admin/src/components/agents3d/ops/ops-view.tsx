@@ -8,7 +8,7 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
-import { bubbleAt, Bubbles, HEAD_TOP, layoutBubbles } from "./bubbles";
+import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
 import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS } from "./desk-sprites";
 import { deskLine, deskParts, deskSpots, L } from "./desks";
@@ -473,12 +473,21 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const deskOrder = useMemo(() => [...model.agents].sort((a, b) => { const p = desks.seats.get(a.key)!, q = desks.seats.get(b.key)!; return p.x + p.z - (q.x + q.z); }), [model.agents, desks]);
   // (the sprites' scale: a desk unit in pixels at this zoom, over its full-size pixels)
   const u = (line.wu * fit.k) / L;
+  // (the bubbles' text measured as drawn: the admin's sans at 12 px, T205d)
+  const measureText = useMemo<Measure>(() => {
+    const g = typeof document !== "undefined" ? document.createElement("canvas").getContext("2d") : null;
+    if (!g) return estimate;
+    g.font = `12px ${getComputedStyle(document.body).fontFamily || "ui-sans-serif, system-ui, sans-serif"}`;
+    return (t) => g.measureText(t).width;
+  }, []);
   // (the bubbles over the heads, laid out when the agents' steps or the view change: T205)
   const bubbles = useMemo(() => {
     const heads = new Map<string, P2>();
     for (const [k, s] of spots) if (s.at) heads.set(k, { x: s.at.x + deskLocal(0, 0, HEAD_TOP, u).x, y: s.at.y + deskLocal(0, 0, HEAD_TOP, u).y });
-    return layoutBubbles(model.agents, heads, u);
-  }, [model.agents, spots, u]);
+    return layoutBubbles(model.agents, heads, u, measureText);
+  }, [model.agents, spots, u, measureText]);
+  // (a bubble under the pointer: its thoughts whole, T205d)
+  const [thought, setThought] = useState<{ x: number; y: number; name: string; lines: string[] } | null>(null);
   const beamFrom = deskParts(u).beam;
   const blockPeak = (file: string) => {
     const i = layout.index.get(file), m = i !== undefined ? map.order.get(i) : undefined;
@@ -584,12 +593,16 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       onMouseMove={(e) => {
         if (drag.current?.moved || live.current) return;
         const { sx, sy, p } = toMap(e);
+        // (over a bubble: its thoughts whole; T205d)
+        const bub = bubbleAt(bubbles, { x: sx, y: sy });
+        setThought((t) => (!bub ? null : t?.name === bub.key && Math.abs(t.x - sx) < 40 ? t : { x: sx, y: sy, name: byKey.get(bub.key)?.name ?? bub.key, lines: bub.full }));
+        if (bub) { setHover(null); return; }
         // (over a block: its file; over the ground: its neighbourhood, the deepest folder there)
         const b = blockAt(map, p), folder = districtAt(map, p);
         const path = b ? layout.buildings[b.i].path : folder ? `${folder.dir}/` : null;
         setHover((h) => (path === null ? null : h?.path === path && h.folder === folder && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path, folder, block: b }));
       }}
-      onMouseLeave={() => setHover(null)}
+      onMouseLeave={() => { setHover(null); setThought(null); }}
       onClick={(e) => {
         if (dragged.current) { dragged.current = false; return; }
         // (a bubble: its agent picked, its card shown)
@@ -691,6 +704,12 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           {!hover.path.endsWith("/") && hover.folder && (
             <span className="block text-white/60">in {hover.folder.dir}/ · {filesIn.get(`${hover.folder.repo}\n${hover.folder.dir}`) ?? 0} files</span>
           )}
+        </div>
+      )}
+      {thought && (
+        <div className="pointer-events-none absolute z-10 max-w-[30rem] rounded bg-black/85 px-2 py-1 text-[12px] leading-snug text-white" style={{ left: Math.min(thought.x + 12, size.w - 320), top: thought.y + 12 }}>
+          <span className="block text-[11px] text-white/60">{thought.name} is thinking</span>
+          {thought.lines.map((l, i) => <span key={i} className="block">{l}</span>)}
         </div>
       )}
       {/* zoom: + − and the whole map (also + − 0, the wheel or a pinch, a drag pans, a double-click on a city frames it) */}

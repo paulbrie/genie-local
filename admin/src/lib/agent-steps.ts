@@ -4,13 +4,14 @@ import { SECRET_PATTERNS } from "@/lib/repo-file-guard";
 /**
  * An agent's thinking for Agents City's bubbles (T205; T205b: thinking only, the user's choice): the first line of
  * each thinking block its transcript holds. Every line goes through the panes' redaction and the team secrets hook's
- * patterns, and is at most STEP_MAX characters: never more than a line, never a secret.
+ * patterns, and is at most STEP_MAX characters (the bubble wraps it on two lines, T205d): never more than a line,
+ * never a secret.
  */
 
 export type StepKind = "tool" | "say" | "think";
 export type AgentStep = { t: string; kind: StepKind; text: string };
 
-export const STEP_MAX = 60;
+export const STEP_MAX = 140;
 
 
 /** a line made safe to show: redacted, one line, at most STEP_MAX characters */

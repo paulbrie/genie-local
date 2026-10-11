@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { bubbleAt, layoutBubbles, MIN_U } from "./bubbles";
+import { bubbleAt, estimate, layoutBubbles, MIN_U, wrap } from "./bubbles";
 import { BUBBLE_MS, bubbleOf, type OpsAgent } from "./model";
 
 const T = Date.parse("2026-10-11T18:00:00Z"), iso = (ago: number) => new Date(T - ago).toISOString();
@@ -30,15 +30,27 @@ describe("thinking bubbles (T205)", () => {
   it("lays bubbles out over the heads without overlaps (raised, then narrowed), none when zoomed far out; finds the one clicked", () => {
     const line = { kind: "tool" as const, text: "running: a fairly long description of a check", fade: 1 };
     const agents = ["a", "b", "c", "d"].map((k) => agent(k, { lines: [line, line], thinking: false }));
-    const heads = new Map(agents.map((a, i) => [a.key, { x: 200 + i * 50, y: 300 }]));
+    const heads = new Map(agents.map((a, i) => [a.key, { x: 200 + i * 120, y: 300 }]));
     const boxes = layoutBubbles(agents, heads, 1);
     assert.equal(boxes.length, 4);
     for (const p of boxes) for (const q of boxes) if (p !== q) assert.ok(!(p.x < q.x + q.w && q.x < p.x + p.w && p.y < q.y + q.h && q.y < p.y + p.h), `${p.key} over ${q.key}`);
     assert.ok(boxes.every((b) => b.y + b.h <= 300), "above the heads");
     assert.deepEqual(layoutBubbles(agents, heads, MIN_U / 2), [], "zoomed far out");
-    assert.deepEqual(layoutBubbles(agents, new Map(agents.map((a, i) => [a.key, { x: 200 + i * 20, y: 300 }])), 1), [], "the figures too close for a readable bubble");
+    // (figures crowded together: bubbles keep a readable width, and any that can't be placed without overlapping are left out)
+    const crowded = layoutBubbles(agents, new Map(agents.map((a, i) => [a.key, { x: 200 + i * 20, y: 300 }])), 1);
+    assert.ok(crowded.length >= 1 && crowded.length < agents.length && crowded.every((b) => b.w >= 140));
     const b = boxes[1];
     assert.equal(bubbleAt(boxes, { x: b.x + 2, y: b.y + 2 })?.key, b.key);
     assert.equal(bubbleAt(boxes, { x: 0, y: 0 }), null);
+  });
+  it("wraps a thought by words on two lines at most, cutting only past that (T205d)", () => {
+    const m = (t: string) => t.length * 10;
+    assert.deepEqual(wrap("the ring needs a gap", 110, m), ["the ring", "needs a gap"]);
+    assert.deepEqual(wrap("short", 100, m), ["short"]);
+    const long = wrap("keep your lane and drive is now down to the last two failures in the check", 100, m);
+    assert.equal(long.length, 2);
+    assert.ok(long[1].endsWith("…") && m(long[1]) <= 100);
+    assert.ok(m(wrap("x".repeat(30), 100, m)[0]) <= 100, "a word longer than the width is cut");
+    assert.ok(estimate("abc") > 0);
   });
 });
