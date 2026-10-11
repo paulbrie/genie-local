@@ -52,13 +52,15 @@ export type OpsAgent = {
   city?: string | null;
   /** its last actions, oldest first, for the lines on its screen (T204g): what kind, a size (no text), when */
   acts?: OpsAct[];
+  /** the team's manager (T204e): its recipe's manager role, else the one named Alice; sits in a row of its own */
+  manager?: boolean;
 };
 export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
 /** a curve from an agent's computer to a file (T201): editing, reading (fading with age, 0..1 on STEP), or claimed */
 export type OpsLink = { by: string; file: string; kind: "edit" | "read" | "claim"; fade: number; /** its latest touch (a new one pulses the curve) */ ms: number };
 /** a commit on the belt (T201): who made it, where it went, its label (the task id in its subject, else the short hash), pushed yet */
 export type OpsCommit = { hash: string; label: string; subject: string; repo: string | null; by: string; ms: number; pushed: boolean };
-export type OpsMsg = { id: string; from: string; to: string; tag: TagName | null; color: string; label: string; ms: number };
+export type OpsMsg = { id: string; from: string; to: string; tag: TagName | null; color: string; label: string; ms: number; /** 1 new … 0 at MSG_MS old, on STEP (T204e) */ fade: number };
 /** an action on an agent's screen (T204g): an edit or write, a read, a command, or another tool; its size (characters
  * written, a command's length; 0 else) */
 export type OpsAct = { kind: "edit" | "read" | "bash" | "other"; len: number; ms: number };
@@ -212,8 +214,11 @@ export function opsModel(
   for (const x of snap.tasks) if (!x.guessed) counts[x.state]++;
   const msgs = tl.messages
     .filter((m) => m.ms <= snap.t && t - m.ms < MSG_MS)
-    .slice(-6)
-    .map((m) => ({ id: m.id, from: m.from, to: m.to, tag: m.tag, color: m.color, label: m.label, ms: m.ms }));
+    .slice(-12)
+    .map((m) => ({ id: m.id, from: m.from, to: m.to, tag: m.tag, color: m.color, label: m.label, ms: m.ms, fade: Math.round((1 - Math.max(0, t - m.ms) / MSG_MS) * 9) / 9 }));
+  // (the manager: by the recipe's role, else by name)
+  const boss = tl.agents.find((a) => !a.node.guest && a.role === "manager")?.key ?? agents.find((a) => /^alice$/i.test(a.name))?.key;
+  for (const a of agents) if (a.key === boss) a.manager = true;
   const named = new Set(agents.map((a) => a.key));
   // (each repo's newest BELT_N: counted from the newest back)
   const perRepo = new Map<string | null, number>();

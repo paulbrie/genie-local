@@ -95,4 +95,11 @@ describe("opsModel (T163)", () => {
     assert.equal(actsOf([...acts, { kind: "edit", at: new Date(T + 60_000).toISOString(), len: 5 }], T).length, SCREEN_N, "a later one (replay) not shown");
     assert.deepEqual(actsOf(undefined, T), []);
   });
+  it("the manager and the messages' fade (T204e): by the recipe's role, else the one named Alice; a message 1 new, fading over 2 min", () => {
+    const msg = (id: string, ago: number) => ({ id, ms: T - ago, from: "Alice", to: "Bob", tag: "TASK" as const, color: "#fff", label: id, text: id, cc: [] as string[] });
+    const t = tl([agent("Bob", []), agent("Alice", [])], { messages: [msg("m2", 60_000), msg("m1", 0)] as never });
+    const m = opsModel(t, snapshotAt(t, T, false));
+    assert.deepEqual(m.agents.map((a) => [a.key, !!a.manager]), [["Bob", false], ["Alice", true]]);
+    assert.deepEqual(m.msgs.map((x) => [x.id, x.fade]), [["m2", Math.round(0.5 * 9) / 9], ["m1", 1]]);
+  });
 });

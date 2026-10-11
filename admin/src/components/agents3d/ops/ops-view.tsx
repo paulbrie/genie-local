@@ -10,7 +10,7 @@ import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
-import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS } from "./desk-sprites";
+import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS, linkColor, ManagerLink } from "./desk-sprites";
 import { deskLine, deskParts, deskSpots, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
@@ -48,6 +48,8 @@ const shade = (hex: string, k: number) => {
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
 type Fit = { k: number; ox: number; oy: number };
+/** the manager's desk, larger than the agents' (T204e) */
+const MANAGER_SCALE = 1.25;
 /** room under the map for the front desks' names (px) */
 const NAMES_H = 26;
 /** the map's zoom and pan, kept for the browser session (T200) */
@@ -232,7 +234,7 @@ function Messages({ model, onMessage }: { model: OpsModel; onMessage?: (id: stri
   const name = (k: string) => model.agents.find((a) => a.key === k)?.name ?? "…";
   return (
     <div className="flex flex-wrap gap-1 text-[11px]">
-      {model.msgs.map((m) => (
+      {model.msgs.slice(-6).map((m) => (
         <button key={m.id} type="button" onClick={() => onMessage?.(m.id)} className="max-w-[24rem] truncate rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-left text-white/75 hover:bg-white/[0.08]">
           <span className="font-mono font-bold" style={{ color: m.tag ? TAG_COLORS[m.tag] : "#94a3b8" }}>{m.tag ?? "note"}</span> {name(m.from)} → {name(m.to)} · {m.label}
         </button>
@@ -666,7 +668,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         {/* (in the map's own units, so a zoom doesn't set off the glide a move to another city makes, T204c) */}
         <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
           {deskOrder.map((a) => {
-            const seat = desks.seats.get(a.key)!, p = iso(seat.x, seat.z), uu = line.wu / L;
+            const seat = desks.seats.get(a.key)!, p = iso(seat.x, seat.z), uu = (line.wu / L) * (a.manager ? MANAGER_SCALE : 1);
             return (
               <g key={a.key} className="ops-seat" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}>
                 <Desk a={a} u={uu} selected={selected === a.key} onClick={() => onAgentClick(a.key)} />
@@ -681,8 +683,21 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           if (!s?.at || !to || !a) return null;
           return <Curve key={`${l.by}\n${l.file}`} l={l} from={{ x: s.at.x + beamFrom.x, y: s.at.y + beamFrom.y }} to={to} color={a.color} dim={!!selected && selected !== l.by} u={u} />;
         })}
-        {/* the latest messages: an arc from sender to receiver, over the row, head to head */}
+        {/* the manager's connections (T204e): to each agent it messaged or heard from lately, the latest, by tag */}
+        {(() => {
+          const boss = model.agents.find((x) => x.manager);
+          if (!boss) return null;
+          const latest = new Map<string, OpsModel["msgs"][number]>();
+          for (const m of model.msgs) if (m.from === boss.key || m.to === boss.key) latest.set(m.from === boss.key ? m.to : m.from, m);
+          const head = (k: string, s: number) => { const p = spots.get(k)?.at; return p ? { x: p.x + deskLocal(0, 0, 5, u * s).x, y: p.y + deskLocal(0, 0, 5, u * s).y } : null; };
+          return [...latest].map(([other, m]) => {
+            const a = head(boss.key, MANAGER_SCALE), b = head(other, 1);
+            return a && b ? <ManagerLink key={`m${other}`} id={m.id} from={a} to={b} color={linkColor(m.tag)} fade={m.fade} dim={!!selected && selected !== other && selected !== boss.key} /> : null;
+          });
+        })()}
+        {/* the latest messages between agents (not the manager's): an arc from sender to receiver, head to head */}
         {model.msgs.map((m) => {
+          if (byKey.get(m.from)?.manager || byKey.get(m.to)?.manager) return null;
           const a = spots.get(m.from)?.at, b = spots.get(m.to)?.at;
           if (!a || !b || (a.x === b.x && a.y === b.y)) return null;
           const lift = 46 * u, mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - lift - 10 - Math.abs(a.x - b.x) * 0.12;

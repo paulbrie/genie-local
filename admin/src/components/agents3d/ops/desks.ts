@@ -25,6 +25,8 @@ export type DeskLine = {
 const BELT_GAP = 3.2, BELT_W = 1.8, TO_MAP = 1.2, DESK_FAR = 3.6;
 /** a seat's room at most (world units): a desk about as long as a few files' blocks, its monitor a little over the tallest */
 export const SEAT_MAX = 14;
+/** the manager's row: at least this far (desk units) in front of the agents' desks */
+const MANAGER_GAP = 10;
 
 /** the desks' scale for `n` agents along `cities`, and each city's belt a gap behind its far edge */
 export function deskLine(cities: CityBounds[], n: number): DeskLine {
@@ -51,7 +53,7 @@ export type DeskSpots = {
  * by twice `lift` (world units: the height over a seat that must stay clear of the city, the head and its bubble; in
  * this projection a point that high shows over the ground twice as far back).
  */
-export function deskSpots(cities: CityBounds[], agents: { key: string; city?: string | null }[], wu: number, lift: number): DeskSpots {
+export function deskSpots(cities: CityBounds[], agents: { key: string; city?: string | null; manager?: boolean }[], wu: number, lift: number): DeskSpots {
   const sp = 7 * wu, gap = Math.max((TO_MAP + DESK_FAR) * wu, 2 * lift);
   const byRepo = new Map(cities.map((c) => [c.repo, c]));
   const left = cities.length ? Math.min(...cities.map((c) => c.x)) : 0;
@@ -62,6 +64,7 @@ export function deskSpots(cities: CityBounds[], agents: { key: string; city?: st
   };
   const groups = new Map<string, string[]>();
   for (const a of agents) {
+    if (a.manager) continue;
     const k = a.city && byRepo.has(a.city) ? a.city : "";
     groups.set(k, [...(groups.get(k) ?? []), a.key]);
   }
@@ -77,6 +80,16 @@ export function deskSpots(cities: CityBounds[], agents: { key: string; city?: st
   // (the fit: every city's desk band, and the lounge's, so the view doesn't change when an agent moves)
   const band = (x0: number, x1: number) => { const z = frontOver(x0, x1) + gap; return [iso(x0, z + 2.5 * wu), iso(x1, z + 2.5 * wu), iso(x0, z - 3.6 * wu, 6 * wu), iso(x1, z - 3.6 * wu, 6 * wu)]; };
   const extent = [...cities.flatMap((c) => band(c.x, c.x + c.w)), ...(groups.has("") ? band(left - sp * (groups.get("")!.length + 0.5), left) : [])];
+  // (the manager, T204e: a row of its own in front of every desk, centred on the cities; as far out again as the
+  // bubbles need, so its own and the agents' don't meet)
+  const boss = agents.find((a) => a.manager);
+  if (boss) {
+    const right = cities.length ? Math.max(...cities.map((c) => c.x + c.w)) : 40;
+    const front = Math.max(...cities.map((c) => frontOver(c.x, c.x + c.w) + gap), 0);
+    const seat = { x: (left + right) / 2, z: front + Math.max(MANAGER_GAP * wu, gap) };
+    seats.set(boss.key, seat);
+    extent.push(iso(seat.x - sp, seat.z + 3.5 * wu), iso(seat.x + sp, seat.z + 3.5 * wu));
+  }
   return { seats, extent };
 }
 

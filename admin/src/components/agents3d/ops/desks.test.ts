@@ -38,6 +38,13 @@ describe("the Ops view's desks, each in front of its city (T204c)", () => {
     assert.ok(bob.z - 2 * lift >= 40 - 1e-9);
     assert.ok(d.extent.length >= 8, "every city's desk band in the fit, and the lounge's");
   });
+  it("the manager (T204e): no city, a row of its own in front of every desk, centred on the cities", () => {
+    const d = deskSpots(cities, [...team, { key: "Alice", city: "/r/admin", manager: true }], l.wu, 6);
+    const boss = d.seats.get("Alice")!, others = team.map((t) => d.seats.get(t.key)!);
+    assert.ok(Math.abs(boss.x - 50) < 1e-9);
+    assert.ok(others.every((o) => boss.z >= o.z + 10 * l.wu - 1e-9), "in front of all the others by its row's gap");
+    assert.ok(d.seats.get("Tom")!.x === deskSpots(cities, team, l.wu, 6).seats.get("Tom")!.x, "the agents' seats as without it");
+  });
   it("a desk at the files' scale, however long the cities", () => {
     assert.ok(7 * l.wu <= SEAT_MAX + 1e-9);
   });

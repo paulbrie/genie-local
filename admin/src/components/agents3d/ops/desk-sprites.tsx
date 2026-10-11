@@ -195,10 +195,44 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
 
 /** an agent's name under its desk, round the seat as Desk is; `k`: screen pixels a unit there (the text kept 9–13 px) */
 export function DeskName({ a, u, k, onClick }: { a: OpsAgent; u: number; k: number; onClick: () => void }) {
+  const fs = Math.min(13, Math.max(9, 11 * u * k)) / k;
   return (
-    <text y={14 * u * 1.45} textAnchor="middle" fill="#fff" fontSize={Math.min(13, Math.max(9, 11 * u * k)) / k} fontWeight={500}
-      className="pointer-events-auto cursor-pointer" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 / k }} onClick={(e) => { e.stopPropagation(); onClick(); }}>
-      {a.name}
-    </text>
+    <g className="pointer-events-auto cursor-pointer" onClick={(e) => { e.stopPropagation(); onClick(); }}>
+      <text y={14 * u * 1.45} textAnchor="middle" fill="#fff" fontSize={fs} fontWeight={500} style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 / k }}>
+        {a.name}
+      </text>
+      {/* (the manager's plate, T204e) */}
+      {a.manager && (
+        <g transform={`translate(0,${14 * u * 1.45 + fs * 1.15})`}>
+          <rect x={-fs * 2.6} y={-fs * 0.8} width={fs * 5.2} height={fs * 1.15} rx={fs * 0.3} fill={a.color} fillOpacity={0.85} />
+          <text y={fs * 0.05} textAnchor="middle" fill={INK} fontSize={fs * 0.8} fontWeight={700} letterSpacing={fs * 0.05}>MANAGER</text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+/** a message's colour on the manager's connections, by its tag (T204e): TASK blue, DONE green, STATUS amber, BLOCKED red, else white */
+export const linkColor = (tag: string | null) =>
+  tag === "TASK" || tag === "APPROVED" ? "#3b82f6" : tag === "DONE" ? "#22c55e" : tag === "STATUS" || tag === "ACK" ? "#f59e0b" : tag === "BLOCKED" ? "#ef4444" : "#e2e8f0";
+
+/**
+ * A connection between the manager and an agent (T204e): an arc from head to head in the message's tag colour, glowing
+ * as the file curves do (three strokes, no filter), fading over the messages' two minutes, one pulse along it when the
+ * message is new (CSS; none under reduced motion or Low power).
+ */
+export function ManagerLink({ id, from, to, color, fade, dim }: { id: string; from: P2; to: P2; color: string; fade: number; dim: boolean }) {
+  const d = Math.hypot(to.x - from.x, to.y - from.y);
+  const mx = (from.x + to.x) / 2, my = Math.min(from.y, to.y) - Math.max(20, d * 0.22);
+  const path = `M${from.x.toFixed(1)},${from.y.toFixed(1)} Q${mx.toFixed(1)},${my.toFixed(1)} ${to.x.toFixed(1)},${to.y.toFixed(1)}`;
+  return (
+    <g className="pointer-events-none" opacity={(dim ? 0.3 : 1) * (0.2 + 0.8 * fade)} fill="none" strokeLinecap="round">
+      <path d={path} stroke={color} strokeOpacity={0.12} strokeWidth={8} />
+      <path d={path} stroke={color} strokeOpacity={0.35} strokeWidth={3.4} />
+      <path d={path} stroke={color} strokeOpacity={0.95} strokeWidth={1.3} />
+      {fade > 0.85 && <path key={id} d={path} pathLength={100} className="ops-pulse" stroke="#ffffff" strokeWidth={2.4} />}
+      <circle cx={from.x} cy={from.y} r={2.6} fill={color} />
+      <circle cx={to.x} cy={to.y} r={2.6} fill={color} />
+    </g>
   );
 }
