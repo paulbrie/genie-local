@@ -208,6 +208,22 @@ export function DeskName({ a, u, k, onClick }: { a: OpsAgent; u: number; k: numb
           <text y={fs * 0.05} textAnchor="middle" fill={INK} fontSize={fs * 0.8} fontWeight={700} letterSpacing={fs * 0.05}>MANAGER</text>
         </g>
       )}
+      {/* (its last hour as on its card, T204f: a bar a 3-minute step; not when the desks are too small to read it) */}
+      {u * k >= 0.45 && <Spark spark={a.spark} color={a.color} k={k} y={14 * u * 1.45 + fs * (a.manager ? 1.9 : 0.55)} />}
+    </g>
+  );
+}
+
+/** the card's activity bars (tool calls per step, the last hour) on a small dark plate, `y` under the seat; px sizes over `k` */
+function Spark({ spark, color, k, y }: { spark: number[]; color: string; k: number; y: number }) {
+  const max = Math.max(1, ...spark), bw = 3 / k, bh = 12 / k, w = spark.length * bw;
+  return (
+    <g transform={`translate(${-w / 2},${y})`}>
+      <rect x={-3 / k} y={-2 / k} width={w + 5 / k} height={bh + 4 / k} rx={2 / k} fill={INK} fillOpacity={0.7} />
+      {spark.map((n, i) => {
+        const h = Math.max(1 / k, (n / max) * bh);
+        return <rect key={i} x={i * bw} y={bh - h} width={2 / k} height={h} fill={n ? color : "#ffffff22"} />;
+      })}
     </g>
   );
 }
