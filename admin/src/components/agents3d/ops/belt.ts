@@ -1,8 +1,7 @@
 /**
- * The commits' conveyor belt in the Ops view (T201): along the cities' front, in front of the agents' desks (towards
- * the viewer, T202). Each commit is a package; a new one drops onto the belt at its author's desk and rides to the
- * city of the repo it went into (or to the belt's far end, a repo not on the map), where it waits in that repo's
- * queue, the newest at the front. Pure: where each package rests along the belt (world x), packages never closer
+ * The commits' conveyor belt in the Ops view (T201): along the cities' far side, the top right on screen, behind them
+ * (T204). Each commit is a package; a new one drops onto the belt beside the city of the repo it went into (or at the
+ * belt's far end, a repo not on the map), where it waits in that repo's queue, the newest at the front. Pure: where each package rests along the belt (world x), packages never closer
  * than a slot, all on the belt.
  */
 import type { CityBounds } from "@/lib/city-layout";

@@ -15,16 +15,15 @@ const pts = (ps: P2[]) => ps.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).j
 const INK = "#0b0f17";
 
 /**
- * The commits' conveyor belt (T201), drawn on the map (it zooms and pans with it): the belt along the cities' front,
- * and on it the newest commits as packages in their authors' colours, labelled with the task id or short hash (the
- * subject, repo and hash on hover), a tick on those pushed. A new commit drops onto the belt at its author's desk
- * and rides to its place in a CSS transition (0.9 s, once; none under reduced motion); the packages it pushes back
- * slide the same way. Nothing moves otherwise, nothing runs per frame.
+ * The commits' conveyor belt (T201), drawn on the map (it zooms and pans with it) under the cities, along their far
+ * side (T204), and on it the newest commits as packages in their authors' colours, labelled with the task id or short
+ * hash (the subject, repo and hash on hover), a tick on those pushed. A new commit appears over its place beside its
+ * repo's city and drops onto the belt in a CSS transition (0.9 s, once; none under reduced motion); the packages it
+ * pushes back slide along the same way. Nothing moves otherwise, nothing runs per frame.
  */
 export function Belt({ line, fit, cities, commits, agents }: { line: DeskLine; fit: Fit; cities: CityBounds[]; commits: OpsCommit[]; agents: OpsAgent[] }) {
   const { belt, wu } = line;
   const places = useMemo(() => beltPlaces(commits, cities, line), [commits, cities, line]);
-  const seatOf = useMemo(() => new Map(agents.map((a, i) => [a.key, line.seats[i]?.x ?? belt.x0])), [agents, line, belt.x0]);
   const colorOf = useMemo(() => new Map(agents.map((a) => [a.key, a.color])), [agents]);
   const nameOf = useMemo(() => new Map(agents.map((a) => [a.key, a.name])), [agents]);
 
@@ -66,7 +65,8 @@ export function Belt({ line, fit, cities, commits, agents }: { line: DeskLine; f
       <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
         {commits.map((c) => {
           const drop = fresh.includes(c);
-          const at = drop ? iso(seatOf.get(c.by) ?? belt.x0, zc, h + 2.5 * wu) : iso(places.get(c.hash) ?? belt.x1, zc, h);
+          // (a new one appears over its place, beside its repo's city, and drops onto the belt)
+          const at = iso(places.get(c.hash) ?? belt.x1, zc, drop ? h + 3 * wu : h);
           const color = colorOf.get(c.by) ?? "#94a3b8";
           return (
             <g key={c.hash} className="ops-pkg pointer-events-auto" style={{ transform: `translate(${at.x.toFixed(3)}px, ${at.y.toFixed(3)}px)` }}>

@@ -22,7 +22,7 @@ const CodeWindows = dynamic(() => import("./code-window"), { ssr: false });
  * The 2D "Ops" view of Agents City (T163, T143's concepts A and B): each agent's card and the tasks' swimlanes on
  * top, the repos below as an isometric map (files as small blocks, height by size; folders as districts), the agents
  * seated at a row of desks on the map's ground in front of it (T198, T201), glowing curves from each one's computer to
- * the files it edits, reads or has claimed, the commits riding a conveyor belt in front of the desks to their repos, the
+ * the files it edits, reads or has claimed, the commits riding a conveyor belt along the cities' far side to their repos, the
  * latest messages as arcs between them.
  *
  * Cheap by design (T143): the blocks are two Canvas 2D layers, the whole map drawn once per layout (back to front)
@@ -590,6 +590,10 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     >
       {/* the map's layers: moved together by CSS during a gesture (T200) */}
       <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
+      {/* the commits' belt along the cities' far side, under them (T204): the cities' ground hides what is behind it */}
+      <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
+        <Belt line={line} fit={fit} cities={layout.cities} commits={model.commits} agents={model.agents} />
+      </svg>
       <canvas ref={base} className="absolute inset-0 size-full" aria-hidden />
       <canvas ref={litC} className="absolute inset-0 size-full" aria-hidden />
       <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
@@ -622,14 +626,13 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
           </g>
         ))}
-        {/* on the map's ground, so they zoom and pan with it (T201), back to front (T202): the desks, the belt in front of
-            them, the names, then the curves and the messages over all */}
+        {/* on the map's ground, so they zoom and pan with it (T201), back to front (T202): the desks, the names, then the
+            curves and the messages over all (the belt is under the cities: above) */}
         <DeskStyles />
         {model.agents.map((a) => {
           const s = spots.get(a.key);
           return s?.at ? <Desk key={a.key} a={a} at={s.at} u={u} selected={selected === a.key} onClick={() => onAgentClick(a.key)} /> : null;
         })}
-        <Belt line={line} fit={fit} cities={layout.cities} commits={model.commits} agents={model.agents} />
         {model.agents.map((a) => {
           const s = spots.get(a.key);
           return s?.at ? <DeskName key={`n${a.key}`} a={a} at={s.at} u={u} onClick={() => onAgentClick(a.key)} /> : null;
