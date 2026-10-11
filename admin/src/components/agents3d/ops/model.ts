@@ -78,7 +78,8 @@ export const BUBBLE_N = 3, BUBBLE_MS = 2 * 60_000;
 
 /** an agent's bubble at `t` (on STEP) from its steps (the comms model's, newest last); null when none is recent */
 export function bubbleOf(steps: { t: string; kind: "tool" | "say" | "think"; text: string }[] | undefined, t: number): OpsAgent["bubble"] {
-  const recent = (steps ?? []).map((x) => ({ ...x, ms: Date.parse(x.t) })).filter((x) => x.ms <= t + STEP && t - x.ms < BUBBLE_MS).slice(-BUBBLE_N);
+  // (thinking lines only: T205b, the user's choice)
+  const recent = (steps ?? []).filter((x) => x.kind === "think").map((x) => ({ ...x, ms: Date.parse(x.t) })).filter((x) => x.ms <= t + STEP && t - x.ms < BUBBLE_MS).slice(-BUBBLE_N);
   if (!recent.length) return null;
   const lines = recent.map((x) => ({ kind: x.kind, text: x.text, fade: Math.round((1 - 0.7 * Math.max(0, t - x.ms) / BUBBLE_MS) * 10) / 10 }));
   return { lines, thinking: recent[recent.length - 1].kind === "think" };

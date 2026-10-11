@@ -10,19 +10,21 @@ const agent = (key: string, bubble: OpsAgent["bubble"]): OpsAgent => ({
 });
 
 describe("thinking bubbles (T205)", () => {
-  it("shows the last 3 steps of the last 2 minutes, the newest last, older ones fainter; a thought when the newest is thinking", () => {
+  it("shows the last 3 thinking lines of the last 2 minutes, the newest last, older ones fainter; nothing else (T205b)", () => {
     const steps = [
       { t: iso(5 * 60_000), kind: "tool" as const, text: "too old" },
       { t: iso(90_000), kind: "tool" as const, text: "reading a.ts" },
+      { t: iso(70_000), kind: "think" as const, text: "a first: the gap" },
       { t: iso(60_000), kind: "say" as const, text: "Done: a works" },
       { t: iso(20_000), kind: "tool" as const, text: "editing b.ts" },
       { t: iso(5_000), kind: "think" as const, text: "the ring needs a gap" },
     ];
     const b = bubbleOf(steps, T)!;
-    assert.deepEqual(b.lines.map((l) => l.text), ["Done: a works", "editing b.ts", "the ring needs a gap"]);
-    assert.ok(b.lines[0].fade < b.lines[2].fade && b.lines[2].fade <= 1);
+    assert.deepEqual(b.lines.map((l) => l.text), ["a first: the gap", "the ring needs a gap"], "thinking only");
+    assert.ok(b.lines[0].fade < b.lines[1].fade && b.lines[1].fade <= 1);
     assert.equal(b.thinking, true);
     assert.equal(bubbleOf(steps.slice(0, 1), T), null, "nothing recent: no bubble");
+    assert.equal(bubbleOf(steps.filter((x) => x.kind !== "think"), T), null, "no thinking: no bubble");
     assert.equal(bubbleOf([{ t: iso(BUBBLE_MS + 1000), kind: "tool", text: "x" }], T), null);
   });
   it("lays bubbles out over the heads without overlaps (raised, then narrowed), none when zoomed far out; finds the one clicked", () => {

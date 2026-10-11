@@ -6,7 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { firstLine, toolStep, type AgentStep } from "@/lib/agent-steps";
+import { firstLine, type AgentStep } from "@/lib/agent-steps";
 import { asksUser } from "@/lib/asking";
 import { CLAUDE_HOME } from "@/lib/claude";
 import {
@@ -188,17 +188,13 @@ function ingestLine(st: FileState, line: string): void {
       if (tools) st.ask = null;
       else if (text !== null) st.ask = asksUser(text) ? { ts } : null;
     }
-    // (its steps in words, for the bubbles: its own turns only, not a helper's)
+    // (its thinking, for the bubbles (T205b: thinking only, the user's choice): its own turns only, not a helper's)
     if (!obj.isSidechain && ts)
       for (const raw of content) {
         const b = raw as Record<string, unknown>;
-        const line =
-          b?.type === "tool_use" ? toolStep(str(b.name) ?? "tool", (b.input ?? {}) as Record<string, unknown>)
-          : b?.type === "text" && typeof b.text === "string" ? firstLine(b.text)
-          : b?.type === "thinking" && typeof b.thinking === "string" ? firstLine(b.thinking)
-          : null;
+        const line = b?.type === "thinking" && typeof b.thinking === "string" ? firstLine(b.thinking) : null;
         if (!line) continue;
-        st.steps.push({ t: ts, kind: b.type === "tool_use" ? "tool" : b.type === "text" ? "say" : "think", text: line });
+        st.steps.push({ t: ts, kind: "think", text: line });
         if (st.steps.length > MAX_STEPS) st.steps.splice(0, st.steps.length - MAX_STEPS);
       }
     for (const raw of content) {
