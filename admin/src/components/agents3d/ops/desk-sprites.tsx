@@ -1,9 +1,9 @@
 "use client";
 
-import { deskParts, local, pts } from "./desks";
+import { deskParts, L, local, pts } from "./desks";
 import { facing, figureBones, figureFaces, type Face, type V3 } from "./figure";
 import type { P2 } from "./iso";
-import type { OpsAgent, OpsLink } from "./model";
+import type { OpsAct, OpsAgent, OpsLink } from "./model";
 
 /**
  * An agent at its desk in the Ops view (T198), in the map's isometric style: the desk and its computer, the monitor's
@@ -29,22 +29,29 @@ function faceFill(f: Face, color: string, faceOut: boolean) {
   return shade(skin ? SKIN : base, k * f.shade);
 }
 
+/** a screen log line's colour, by action (T204g): an edit or write orange, a read green, a command light green, else grey */
+const ACT_COLORS: Record<OpsAct["kind"], string> = { edit: "#f59e0b", read: "#22c55e", bash: "#d9f99d", other: "#94a3b8" };
+/** a screen log line's spacing (desk units) */
+const ROW = 0.3;
+/** a line's length (desk units, of the screen's 2): by its size on a log scale, like text of that length; a read or
+ * other tool (no size) a middling length that varies with when it came */
+export function actWidth(x: OpsAct): number {
+  if (x.len > 0) return 0.35 + 1.5 * Math.min(1, Math.log10(1 + x.len) / 4);
+  return 0.5 + (((x.ms / 1000) * 2654435761) % 997) / 997 * 0.6;
+}
+
 /** the curves' colours, by kind (T201, the user's): editing orange, reading green, claimed red; the legend's too */
 export const KIND_COLORS = { edit: "#f59e0b", read: "#22c55e", claim: "#ef4444" } as const;
 /** a curve's bright core: its colour, lighter (so the glow reads as that colour, not white) */
 const CORE = { edit: "#fde68a", read: "#86efac", claim: "#fecaca" } as const;
 
 /**
- * the keyframes for the screens' blinks, a curve's pulse, the typing hands, the packages' ride and the desks' moves
+ * the keyframes for the screens' scroll, a curve's pulse, the typing hands, the packages' ride and the desks' moves
  * (once per map); none under reduced motion, nor with Low power on (T162: `data-low-power` on the view)
  */
 export function DeskStyles() {
   return (
     <style>{`
-      @keyframes ops-desk-line { 0% { opacity: .25 } 100% { opacity: 1 } }
-      .ops-desk-lines rect { animation: ops-desk-line .3s ease-in-out 6 alternate both; }
-      .ops-desk-lines rect:nth-child(2) { animation-delay: .1s }
-      .ops-desk-lines rect:nth-child(3) { animation-delay: .2s }
       @keyframes ops-tap { 0% { transform: translateY(0) } 100% { transform: translateY(var(--tap, 1.5px)) } }
       .ops-tap-l, .ops-tap-r { animation: ops-tap .11s ease-in-out infinite alternate; }
       .ops-tap-r { animation-delay: -.11s; }
@@ -52,8 +59,10 @@ export function DeskStyles() {
       .ops-pulse { stroke-dasharray: 14 100; stroke-dashoffset: 14; animation: ops-pulse .9s ease-out 1 forwards; }
       .ops-pkg, .ops-seat { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
       .ops-desk :is(polygon, ellipse, circle, line, rect, path) { vector-effect: non-scaling-stroke; }
-      @media (prefers-reduced-motion: reduce) { .ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r { animation: none } .ops-pkg, .ops-seat { transition: none } }
-      [data-low-power] :is(.ops-desk-lines rect, .ops-pulse, .ops-tap-l, .ops-tap-r) { animation: none }
+      @keyframes ops-scroll { from { transform: translateY(var(--line, 3px)) } to { transform: none } }
+      .ops-scroll { animation: ops-scroll .28s ease-out 1; }
+      @media (prefers-reduced-motion: reduce) { .ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll { animation: none } .ops-pkg, .ops-seat { transition: none } }
+      [data-low-power] :is(.ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll) { animation: none }
       [data-low-power] :is(.ops-pkg, .ops-seat) { transition: none }
     `}</style>
   );
@@ -94,13 +103,14 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
   const busy = a.doing === "type" || a.doing === "read" || a.doing === "run" || a.doing === "think";
   const off = a.doing === "nap", idle = a.doing === "idle" || off;
   const screen = off ? "#0f141c" : a.doing === "run" ? "#0b1410" : a.doing === "read" ? "#123448" : busy ? "#1d2a3f" : "#151b26";
-  const lineColor = a.doing === "read" ? KIND_COLORS.read : a.doing === "type" ? KIND_COLORS.edit : "#94a3b8";
-  // (the screen's lines, along its face: three rows of code)
-  const sx = (x: number, h: number) => local(x, -3.0, h, u);
-  const line = (row: number, len: number) => {
-    const a0 = sx(-0.9, 4.6 - row * 0.5), a1 = sx(-0.9 + len, 4.6 - row * 0.5);
-    return { x: Math.min(a0.x, a1.x), y: Math.min(a0.y, a1.y), w: Math.abs(a1.x - a0.x), h: Math.max(1, 1.6 * u) };
+  // (the screen's log, T204g: a bar a line for each of its last actions, newest at the bottom, on the screen's face)
+  const acts = a.acts ?? [];
+  const barFrom = (row: number, from: number, w: number) => {
+    const h = 3.35 + row * ROW, x0 = -1.0 + from, x1 = Math.min(0.95, -1.0 + w);
+    return pts([local(x0, -3.0, h + 0.07, u), local(x1, -3.0, h + 0.07, u), local(x1, -3.0, h - 0.07, u), local(x0, -3.0, h - 0.07, u)]);
   };
+  // (a bash line: a bright prompt, then the command)
+  const bar = (row: number, w: number) => barFrom(row, 0, w);
   // (the agent: boxes along its bones, back to front, in the pose of what it does (figure.ts); the head's middle top
   // for the bubbles and badges)
   // (editing or running a command, T204d: the typing pose, the hands tapping the keys for as long as the step goes on
@@ -132,12 +142,18 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
       <polygon points={pts(d.monitor.top)} fill={a.color} stroke={INK} strokeWidth={0.6} />
       <polygon points={pts(d.monitor.front)} fill={a.color} stroke={INK} strokeWidth={0.6} />
       <polygon points={pts(d.screen)} fill={screen} />
-      {!off && !idle && a.doing !== "wait" && (
-        // (keyed on the last tool call: a new one blinks the lines a few times, then they hold)
-        <g key={a.lastTool ?? ""} className={a.doing === "type" || a.doing === "read" ? "ops-desk-lines" : undefined}>
-          {(a.doing === "run" ? [[0, 0.5], [1, 1.4]] : [[0, 1.5], [1, 1.1], [2, 1.7]]).map(([r, len]) => {
-            const b = line(r, len);
-            return <rect key={r} x={b.x} y={b.y} width={b.w} height={b.h} fill={a.doing === "run" ? "#4ade80" : lineColor} opacity={0.9} />;
+      {!off && acts.length > 0 && (
+        // (keyed on the newest action: a new one scrolls the log up a line, once; dimmer while idle or waiting)
+        <g key={acts[acts.length - 1].ms} className="ops-scroll" opacity={idle || a.doing === "wait" ? 0.45 : 0.95}
+          style={{ "--line": `${(ROW * L * u).toFixed(2)}px` } as React.CSSProperties}>
+          {acts.map((x, i) => {
+            const row = acts.length - 1 - i;
+            return (
+              <g key={`${x.ms}${i}`}>
+                {x.kind === "bash" && <polygon points={bar(row, 0.14)} fill="#4ade80" />}
+                <polygon points={x.kind === "bash" ? barFrom(row, 0.22, actWidth(x)) : bar(row, actWidth(x))} fill={ACT_COLORS[x.kind]} />
+              </g>
+            );
           })}
         </g>
       )}

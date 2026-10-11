@@ -50,6 +50,8 @@ export type OpsAgent = {
   /** the repo (city) it works in (T204c): of its latest edit, read or claim, a new one only once it has been there
    * CITY_SWITCH_MS; else its working directory's repo */
   city?: string | null;
+  /** its last actions, oldest first, for the lines on its screen (T204g): what kind, a size (no text), when */
+  acts?: OpsAct[];
 };
 export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
 /** a curve from an agent's computer to a file (T201): editing, reading (fading with age, 0..1 on STEP), or claimed */
@@ -57,6 +59,9 @@ export type OpsLink = { by: string; file: string; kind: "edit" | "read" | "claim
 /** a commit on the belt (T201): who made it, where it went, its label (the task id in its subject, else the short hash), pushed yet */
 export type OpsCommit = { hash: string; label: string; subject: string; repo: string | null; by: string; ms: number; pushed: boolean };
 export type OpsMsg = { id: string; from: string; to: string; tag: TagName | null; color: string; label: string; ms: number };
+/** an action on an agent's screen (T204g): an edit or write, a read, a command, or another tool; its size (characters
+ * written, a command's length; 0 else) */
+export type OpsAct = { kind: "edit" | "read" | "bash" | "other"; len: number; ms: number };
 export type OpsModel = {
   /** the time shown, on a STEP */
   t: number;
@@ -76,6 +81,14 @@ export type OpsModel = {
 const RANK: Record<LitKind, number> = { read: 0, edit: 1, held: 2, clash: 3 };
 
 /** the Ops view's model at the snapshot's time (named agents only, as the Table seats them) */
+/** the lines an agent's screen shows: its last this many actions (T204g) */
+export const SCREEN_N = 6;
+
+/** an agent's last SCREEN_N actions up to `t` (oldest first), from the comms model's (live: its last 12) */
+export function actsOf(acts: { kind: OpsAct["kind"]; at: string; len: number }[] | undefined, t: number): OpsAct[] {
+  return (acts ?? []).map((x) => ({ kind: x.kind, len: x.len, ms: Date.parse(x.at) })).filter((x) => x.ms <= t + STEP).slice(-SCREEN_N);
+}
+
 /** an agent's desk moves to a new repo's city only once it has worked there this long (T204c) */
 export const CITY_SWITCH_MS = 2 * 60_000;
 
@@ -110,7 +123,10 @@ export function bubbleOf(steps: { t: string; kind: "tool" | "say" | "think"; tex
   return { lines, thinking: recent[recent.length - 1].kind === "think" };
 }
 
-export function opsModel(tl: Timeline, snap: Snapshot, steps?: Record<string, { t: string; kind: "tool" | "say" | "think"; text: string }[]>): OpsModel {
+export function opsModel(
+  tl: Timeline, snap: Snapshot, steps?: Record<string, { t: string; kind: "tool" | "say" | "think"; text: string }[]>,
+  acts?: Record<string, { kind: OpsAct["kind"]; at: string; len: number }[]>,
+): OpsModel {
   const t = Math.floor(snap.t / STEP) * STEP;
   const lit = new Map<string, { kind: LitKind; by: string | null }>();
   const light = (k: string, kind: LitKind, by: string | null) => {
@@ -163,6 +179,7 @@ export function opsModel(tl: Timeline, snap: Snapshot, steps?: Record<string, { 
       spark,
       bubble: bubbleOf(steps?.[a.key], t),
       city: cityOf(touchesOf(a), t, a.repo),
+      acts: actsOf(acts?.[a.key], t),
     });
   }
   // (edits seen on disk, by whoever)

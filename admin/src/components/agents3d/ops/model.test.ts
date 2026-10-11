@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { fileKey, snapshotAt, type Timeline, type TLAgent } from "@/lib/agents3d-timeline";
 import type { CommsNode } from "@/lib/claude-comms-parse";
-import { cityOf, CITY_SWITCH_MS, litKey, opsModel } from "./model";
+import { actsOf, cityOf, CITY_SWITCH_MS, litKey, opsModel, SCREEN_N } from "./model";
 
 const T = Date.parse("2026-10-10T12:00:00Z");
 const node = (key: string, guest = false): CommsNode => ({
@@ -86,5 +86,13 @@ describe("opsModel (T163)", () => {
     assert.equal(cityOf([], T, "/h"), "/h");
     assert.equal(cityOf([at(-5000, "/z")], T, null), null, "a touch after t doesn't count");
     assert.equal(CITY_SWITCH_MS, 120_000);
+  });
+  it("an agent's screen (T204g): its last 6 actions up to t, oldest first; none recorded, none", () => {
+    const acts = Array.from({ length: 12 }, (_, i) => ({ kind: (["edit", "read", "bash", "other"] as const)[i % 4], at: new Date(T - (12 - i) * 1000).toISOString(), len: i * 10 }));
+    const a = actsOf(acts, T);
+    assert.equal(a.length, SCREEN_N);
+    assert.deepEqual(a.map((x) => x.len), [60, 70, 80, 90, 100, 110]);
+    assert.equal(actsOf([...acts, { kind: "edit", at: new Date(T + 60_000).toISOString(), len: 5 }], T).length, SCREEN_N, "a later one (replay) not shown");
+    assert.deepEqual(actsOf(undefined, T), []);
   });
 });
