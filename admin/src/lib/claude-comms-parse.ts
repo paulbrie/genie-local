@@ -180,6 +180,8 @@ export type CommsModel = {
   commits: CommitInfo[];
   /** Tool calls per node key; only when asked for (the 3D views). */
   activity?: Record<string, ActivityEvent[]>;
+  /** Each agent's last steps in plain, redacted, one-line words (lib/agent-steps.ts); with `activity` (T205). */
+  steps?: Record<string, { t: string; kind: "tool" | "say" | "think"; text: string }[]>;
 };
 
 // ── Redaction ────────────────────────────────────────────────────────────────
@@ -215,6 +217,25 @@ export function redact(text: string): string {
   for (const [re, rep] of REDACTIONS) out = out.replace(re, rep);
   return out;
 }
+
+// ── Terminal-specific redaction (on top of the Comms redactor; the panes' and the bubbles') ──
+
+const TERMINAL_REDACTIONS: [RegExp, string][] = [
+  // Authorization / cookie / API-key headers, as in curl -v or HTTP dumps.
+  [/\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key)(\s*[:=]\s*)\S.*$/gim, "$1$2***"],
+  // env dumps: KEY=value where the key looks sensitive (wider than the Comms rule).
+  [/^(\s*(?:export\s+)?[A-Z][A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASS|PASSWORD|PWD|AUTH|CREDENTIAL|COOKIE|SESSION|PRIVATE|DSN|URL)[A-Z0-9_]*\s*=\s*).+$/gm, "$1***"],
+  // Long opaque tokens: base64-ish runs mixing cases and digits, or very long hex.
+  [/\b(?=[A-Za-z0-9+/_-]{40,}={0,2})(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)[A-Za-z0-9+/_-]{40,}={0,2}/g, "[redacted token]"],
+  [/\b[0-9a-f]{48,}\b/gi, "[redacted hex]"],
+];
+
+export function redactTerminal(text: string): string {
+  let out = redact(text);
+  for (const [re, rep] of TERMINAL_REDACTIONS) out = out.replace(re, rep);
+  return out;
+}
+
 
 // ── Tags ─────────────────────────────────────────────────────────────────────
 

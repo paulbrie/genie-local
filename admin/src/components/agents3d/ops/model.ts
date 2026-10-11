@@ -45,6 +45,8 @@ export type OpsAgent = {
   managing: number;
   /** tool calls per SPARK_MS bucket, oldest first */
   spark: number[];
+  /** its bubble (T205): its last steps in words, newest last, each fading with age (1 new … 0.3 old); null when idle */
+  bubble: { lines: { kind: "tool" | "say" | "think"; text: string; fade: number }[]; thinking: boolean } | null;
 };
 export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
 /** a curve from an agent's computer to a file (T201): editing, reading (fading with age, 0..1 on STEP), or claimed */
@@ -71,7 +73,18 @@ export type OpsModel = {
 const RANK: Record<LitKind, number> = { read: 0, edit: 1, held: 2, clash: 3 };
 
 /** the Ops view's model at the snapshot's time (named agents only, as the Table seats them) */
-export function opsModel(tl: Timeline, snap: Snapshot): OpsModel {
+/** a bubble shows the last BUBBLE_N steps of the last BUBBLE_MS */
+export const BUBBLE_N = 3, BUBBLE_MS = 2 * 60_000;
+
+/** an agent's bubble at `t` (on STEP) from its steps (the comms model's, newest last); null when none is recent */
+export function bubbleOf(steps: { t: string; kind: "tool" | "say" | "think"; text: string }[] | undefined, t: number): OpsAgent["bubble"] {
+  const recent = (steps ?? []).map((x) => ({ ...x, ms: Date.parse(x.t) })).filter((x) => x.ms <= t + STEP && t - x.ms < BUBBLE_MS).slice(-BUBBLE_N);
+  if (!recent.length) return null;
+  const lines = recent.map((x) => ({ kind: x.kind, text: x.text, fade: Math.round((1 - 0.7 * Math.max(0, t - x.ms) / BUBBLE_MS) * 10) / 10 }));
+  return { lines, thinking: recent[recent.length - 1].kind === "think" };
+}
+
+export function opsModel(tl: Timeline, snap: Snapshot, steps?: Record<string, { t: string; kind: "tool" | "say" | "think"; text: string }[]>): OpsModel {
   const t = Math.floor(snap.t / STEP) * STEP;
   const lit = new Map<string, { kind: LitKind; by: string | null }>();
   const light = (k: string, kind: LitKind, by: string | null) => {
@@ -117,6 +130,7 @@ export function opsModel(tl: Timeline, snap: Snapshot): OpsModel {
       task: s?.task ? { id: s.task.id, title: s.task.title, state: s.task.state } : null,
       managing: s?.managing ?? 0,
       spark,
+      bubble: bubbleOf(steps?.[a.key], t),
     });
   }
   // (edits seen on disk, by whoever)

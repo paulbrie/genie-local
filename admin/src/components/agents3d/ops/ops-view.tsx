@@ -8,6 +8,8 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
+import { bubbleAt, Bubbles, HEAD_TOP, layoutBubbles } from "./bubbles";
+import { local as deskLocal } from "./desks";
 import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS } from "./desk-sprites";
 import { deskLine, deskParts, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
@@ -461,6 +463,12 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   }, [model.agents, layout, map, fit, line]);
   // (the sprites' scale: a desk unit in pixels at this zoom, over its full-size pixels)
   const u = (line.wu * fit.k) / L;
+  // (the bubbles over the heads, laid out when the agents' steps or the view change: T205)
+  const bubbles = useMemo(() => {
+    const heads = new Map<string, P2>();
+    for (const [k, s] of spots) if (s.at) heads.set(k, { x: s.at.x + deskLocal(0, 0, HEAD_TOP, u).x, y: s.at.y + deskLocal(0, 0, HEAD_TOP, u).y });
+    return layoutBubbles(model.agents, heads, u);
+  }, [model.agents, spots, u]);
   const beamFrom = deskParts(u).beam;
   const blockPeak = (file: string) => {
     const i = layout.index.get(file), m = i !== undefined ? map.order.get(i) : undefined;
@@ -574,6 +582,9 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       onMouseLeave={() => setHover(null)}
       onClick={(e) => {
         if (dragged.current) { dragged.current = false; return; }
+        // (a bubble: its agent picked, its card shown)
+        const { sx, sy } = toMap(e), bub = bubbleAt(bubbles, { x: sx, y: sy });
+        if (bub) { onAgentClick(bub.key); return; }
         const b = blockAt(map, toMap(e).p);
         if (b) onFile?.(b.key);
       }}
@@ -650,6 +661,8 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           const lift = 46 * u, mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - lift - 10 - Math.abs(a.x - b.x) * 0.12;
           return <path key={m.id} d={`M${a.x},${a.y - lift} Q${mx},${my} ${b.x},${b.y - lift}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
         })}
+        {/* the agents' bubbles, their last steps, over everything (T205) */}
+        <Bubbles boxes={bubbles} color={(k) => byKey.get(k)?.color ?? "#94a3b8"} />
       </svg>
       </div>
       {hover && (

@@ -6,7 +6,9 @@ import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
 
 import { readRegistry } from "@/lib/claude-comms";
-import { redact } from "@/lib/claude-comms-parse";
+import { redactTerminal } from "@/lib/claude-comms-parse";
+
+export { redactTerminal };
 
 /**
  * Live text of each Claude Code session's tmux pane, for the Agents City
@@ -27,24 +29,6 @@ export type PaneCapture = {
   hash: string | null;
   at: string;
 };
-
-// ── Terminal-specific redaction (on top of the Comms redactor) ──────────────
-
-const TERMINAL_REDACTIONS: [RegExp, string][] = [
-  // Authorization / cookie / API-key headers, as in curl -v or HTTP dumps.
-  [/\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key)(\s*[:=]\s*)\S.*$/gim, "$1$2***"],
-  // env dumps: KEY=value where the key looks sensitive (wider than the Comms rule).
-  [/^(\s*(?:export\s+)?[A-Z][A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASS|PASSWORD|PWD|AUTH|CREDENTIAL|COOKIE|SESSION|PRIVATE|DSN|URL)[A-Z0-9_]*\s*=\s*).+$/gm, "$1***"],
-  // Long opaque tokens: base64-ish runs mixing cases and digits, or very long hex.
-  [/\b(?=[A-Za-z0-9+/_-]{40,}={0,2})(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)[A-Za-z0-9+/_-]{40,}={0,2}/g, "[redacted token]"],
-  [/\b[0-9a-f]{48,}\b/gi, "[redacted hex]"],
-];
-
-export function redactTerminal(text: string): string {
-  let out = redact(text);
-  for (const [re, rep] of TERMINAL_REDACTIONS) out = out.replace(re, rep);
-  return out;
-}
 
 // ── Session → pane ──────────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { firstLine, toolStep, type AgentStep } from "@/lib/agent-steps";
 import { asksUser } from "@/lib/asking";
 import { CLAUDE_HOME } from "@/lib/claude";
 import {
@@ -51,6 +52,8 @@ const MAX_DAYS = 60;
 export const DEFAULT_DAYS = 7;
 /** Latest tool calls kept per session in the activity stream. */
 const MAX_ACTIVITY = 20_000;
+/** Latest thinking steps kept per session, and sent per agent (the bubbles, T205). */
+const MAX_STEPS = 12, SENT_STEPS = 6;
 
 // Only lines containing one of these can matter; the rest are never JSON-parsed.
 // ('"type":"text"': an assistant's words, to tell when a turn ended on a question to the user.)
@@ -63,6 +66,7 @@ const NEEDLES = [
   '"msg_id"',
   "Session renamed to",
   '"tool_use"',
+  '"type":"thinking"',
 ];
 
 // Tools whose file_path is kept in the activity stream; nothing else of a tool's input is.
@@ -105,6 +109,8 @@ type FileState = {
   renames: { name: string; ts: string | null }[];
   /** Every tool call, oldest first (file only for FILE_TOOLS). */
   activity: ActivityEvent[];
+  /** Its last steps in words, oldest first (lib/agent-steps.ts: redacted, one line each) */
+  steps: AgentStep[];
   /** The last assistant entry was text asking the user something (lib/asking.ts): when; else null. */
   ask: { ts: string | null } | null;
   /** The name its first prompt gives ("You are Bob, …"), for when nothing else names it; checked once. */
@@ -182,6 +188,19 @@ function ingestLine(st: FileState, line: string): void {
       if (tools) st.ask = null;
       else if (text !== null) st.ask = asksUser(text) ? { ts } : null;
     }
+    // (its steps in words, for the bubbles: its own turns only, not a helper's)
+    if (!obj.isSidechain && ts)
+      for (const raw of content) {
+        const b = raw as Record<string, unknown>;
+        const line =
+          b?.type === "tool_use" ? toolStep(str(b.name) ?? "tool", (b.input ?? {}) as Record<string, unknown>)
+          : b?.type === "text" && typeof b.text === "string" ? firstLine(b.text)
+          : b?.type === "thinking" && typeof b.thinking === "string" ? firstLine(b.thinking)
+          : null;
+        if (!line) continue;
+        st.steps.push({ t: ts, kind: b.type === "tool_use" ? "tool" : b.type === "text" ? "say" : "think", text: line });
+        if (st.steps.length > MAX_STEPS) st.steps.splice(0, st.steps.length - MAX_STEPS);
+      }
     for (const raw of content) {
       const b = raw as Record<string, unknown>;
       if (b?.type !== "tool_use") continue;
@@ -306,6 +325,7 @@ async function refreshFile(abs: string, sessionId: string): Promise<FileState | 
       seenIn: new Set(),
       renames: [],
       activity: [],
+      steps: [],
       ask: null,
       promptName: null,
       promptChecked: false,
@@ -829,7 +849,14 @@ async function assemble(
   const { tasks, files, mentions } = deriveState(messages);
   const windowed = messages.filter((m) => (m.sentAt ?? m.receivedAt ?? "") >= cutoff);
   let activity: CommsModel["activity"];
+  let steps: CommsModel["steps"];
   if (withActivity) {
+    steps = {};
+    for (const st of states) {
+      if (!st.steps.length || st.steps[st.steps.length - 1].t < cutoff) continue;
+      const k = canon(sessionNode(st.sessionId));
+      steps[k] = [...(steps[k] ?? []), ...st.steps].sort((a, b) => a.t.localeCompare(b.t)).slice(-SENT_STEPS);
+    }
     activity = {};
     for (const [key, events] of recentActivity) {
       const k = canon(key);
@@ -851,6 +878,7 @@ async function assemble(
     files,
     commits,
     ...(activity ? { activity } : {}),
+    ...(steps ? { steps } : {}),
   };
 }
 

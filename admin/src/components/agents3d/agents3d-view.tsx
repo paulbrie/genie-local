@@ -318,7 +318,7 @@ export function Agents3DView() {
   );
 
   // The 2D view's model, from the same snapshot (T163)
-  const ops = useMemo(() => (tl && snap && view === "2d" ? opsModel(tl, snap) : null), [tl, snap, view]);
+  const ops = useMemo(() => (tl && snap && view === "2d" ? opsModel(tl, snap, model?.comms.steps) : null), [tl, snap, view, model]);
 
   const followKey = useMemo(() => {
     if (!snap || !tl) return null;
