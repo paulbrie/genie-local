@@ -8,6 +8,8 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
+import { rackExtent, rackOf } from "./server";
+import { ServerRack } from "./server-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
 import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS, linkColor, ManagerLink } from "./desk-sprites";
@@ -343,8 +345,14 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   // (each agent's desk in front of its city (T204c), far enough out that its head and a bubble (T205: 59 px at the
   // whole map's zoom, as near as the fit without the desks tells) stay clear of the city's blocks)
   const kEst = useMemo(() => fitOf(withExtent(map, line.extent), size.w || 1, size.h || 1, NAMES_H).k, [map, line, size.w, size.h]);
-  const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, model.agents, line, kEst]);
-  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent]), [map, line, desks]);
+  // (by what decides the seats, not the agents' array: a new one comes with every tick, and a new fit would draw the map
+  // again each time)
+  const seatKey = model.agents.map((a) => `${a.key}:${a.city ?? ""}:${a.manager ? 1 : 0}`).join("|");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, seatKey, line, kEst]);
+  // (our server beyond the belts, T209)
+  const rack = useMemo(() => rackOf(layout.cities, line.belts, line.wu), [layout.cities, line]);
+  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent, ...rackExtent(rack)]), [map, line, desks, rack]);
   const fit0 = useMemo(() => fitOf(framed, size.w, size.h, NAMES_H), [framed, size.w, size.h]);
   // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
   // when it ends the view is set, the layers drawn again and the labels picked again
@@ -630,6 +638,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
       {/* the commits' belts, one along each city's far side, under them (T204): the cities' ground hides what is behind it */}
       <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
+        <ServerRack rack={rack} fit={fit} />
         <Belts line={line} fit={fit} commits={model.commits} agents={model.agents} />
       </svg>
       <canvas ref={base} className="absolute inset-0 size-full" aria-hidden />
