@@ -714,7 +714,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           const lift = 46 * u, mx = (a.x + b.x) / 2, my = Math.min(a.y, b.y) - lift - 10 - Math.abs(a.x - b.x) * 0.12;
           return <path key={m.id} d={`M${a.x},${a.y - lift} Q${mx},${my} ${b.x},${b.y - lift}`} fill="none" stroke={m.tag ? TAG_COLORS[m.tag] : "#94a3b8"} strokeWidth={1.4} strokeDasharray="4 3" opacity={0.75} />;
         })}
-        {/* the agents' bubbles, their last steps, over everything (T205) */}
+      </svg>
+      {/* the agents' bubbles, their last thoughts, over everything on the map (T205, T205e): their own layer, kept the
+          map layer's last, so nothing drawn on the map covers them; the zoom buttons, the legend and the hover cards are
+          over them (z-10), the code windows over all */}
+      <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
         <Bubbles boxes={bubbles} color={(k) => byKey.get(k)?.color ?? "#94a3b8"} />
       </svg>
       </div>
