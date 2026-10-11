@@ -1,9 +1,14 @@
 import "server-only";
 
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
+import { promisify } from "node:util";
 
+import { NET_SAMPLES, parseNetDev, parseSs, publicIface, rateOf, type IfaceBytes, type NetSample, type NetStats, type PublicPort } from "@/lib/net-stats";
 import { coreBusyPercent, parseProcStat, type CoreTimes } from "@/lib/proc-stat";
+
+const execFileP = promisify(execFile);
 
 const STATS_FILE = process.env.STATS_FILE ?? "/run/genie/stats.jsonl";
 
@@ -18,6 +23,10 @@ export type SystemStats = {
   diskPercent: number;
   diskUsedBytes: number;
   diskTotalBytes: number;
+  /** bandwidth in/out on the public interface (T211); null if /proc/net is unreadable */
+  net: NetStats | null;
+  /** the ports listening on a non-loopback address (T211); null if `ss` failed */
+  ports: PublicPort[] | null;
   ts: number;
 };
 
@@ -114,9 +123,57 @@ async function readPerCore(): Promise<number[] | null> {
   return lastPerCore;
 }
 
-/** CPU/mem/disk summary for the top toolbar. */
+/**
+ * Bandwidth on the public interface (the default route's), read by the admin from /proc/net/dev when /api/stats is
+ * read, at least NET_MIN_MS apart (a closer call gets the last result): the rate since the reading before, and the
+ * last NET_SAMPLES of them.
+ */
+const NET_MIN_MS = 2000;
+let lastNetRead: { t: number; iface: string; b: IfaceBytes } | null = null;
+let netHistory: NetSample[] = [];
+let lastNet: NetStats | null = null;
+
+async function readNet(): Promise<NetStats | null> {
+  const now = Date.now();
+  if (lastNetRead && now - lastNetRead.t < NET_MIN_MS) return lastNet;
+  let dev: Map<string, IfaceBytes>, route: string;
+  try {
+    [dev, route] = await Promise.all([fs.readFile("/proc/net/dev", "utf8").then(parseNetDev), fs.readFile("/proc/net/route", "utf8").catch(() => "")]);
+  } catch {
+    return null;
+  }
+  const iface = publicIface(route, dev);
+  if (!iface) return null;
+  const read = { t: now, iface, b: dev.get(iface)! };
+  if (lastNetRead?.iface !== iface) netHistory = [];
+  else netHistory = [...netHistory, rateOf(lastNetRead, read)].slice(-NET_SAMPLES);
+  lastNetRead = read;
+  const last = netHistory.at(-1);
+  lastNet = { iface, inBps: last?.inBps ?? 0, outBps: last?.outBps ?? 0, history: netHistory };
+  return lastNet;
+}
+
+/** The public ports, from `ss` (a fixed argv, no shell), kept PORTS_TTL_MS. */
+const PORTS_TTL_MS = 5000;
+let lastPorts: { at: number; ports: PublicPort[] | null } | null = null;
+
+async function readPorts(): Promise<PublicPort[] | null> {
+  const now = Date.now();
+  if (lastPorts && now - lastPorts.at < PORTS_TTL_MS) return lastPorts.ports;
+  let ports: PublicPort[] | null;
+  try {
+    const { stdout } = await execFileP("/usr/bin/ss", ["-tulnpH"], { timeout: 3000, maxBuffer: 1024 * 1024 });
+    ports = parseSs(stdout);
+  } catch {
+    ports = null;
+  }
+  lastPorts = { at: now, ports };
+  return ports;
+}
+
+/** CPU/mem/disk summary for the top toolbar, with the bandwidth and public ports for the Ops view's server rack. */
 export async function readLatestStats(): Promise<SystemStats | null> {
-  const [rec, cpuPerCore] = await Promise.all([readLatestRecord(), readPerCore()]);
+  const [rec, cpuPerCore, net, ports] = await Promise.all([readLatestRecord(), readPerCore(), readNet(), readPorts()]);
   if (!rec) return null;
   const s = rec.stats;
   return {
@@ -131,6 +188,8 @@ export async function readLatestStats(): Promise<SystemStats | null> {
     diskPercent: s.diskPercent,
     diskUsedBytes: s.diskUsedBytes,
     diskTotalBytes: s.diskTotalBytes,
+    net,
+    ports,
     ts: rec.ts,
   };
 }
