@@ -543,6 +543,7 @@ export function Agents3DView() {
               onAgentClick={onAgentClick}
               onMessage={setOpenMsg}
               onFile={(key) => setSelected({ kind: "file", key })}
+              resetCam={resetCam}
             />
           ) : tl && snap && mode && view === "3d" ? (
             <SceneOrDesk

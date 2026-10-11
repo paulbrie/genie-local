@@ -8,8 +8,9 @@ import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { beamColor, Desk, DeskStyles } from "./desk-sprites";
 import { deskParts, deskRow, rowRoom } from "./desks";
-import { blockAt, districtAt, districtLabels, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
+import { blockAt, districtAt, districtLabels, inPoly, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
+import { cssBetween, FIT_VIEW, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
 
 // (Monaco and its windows: loaded only when the first file is opened, T197)
@@ -41,6 +42,8 @@ const shade = (hex: string, k: number) => {
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
 
 type Fit = { k: number; ox: number; oy: number };
+/** the map's zoom and pan, kept for the browser session (T200) */
+const VIEW_KEY = "admin.agents3d.ops.view";
 /** the map fitted to its box, with room above for the cities' names and below (`bottom` px) for the desks' row */
 function fitOf(map: IsoMap, w: number, h: number, bottom: number): Fit {
   const b = map.bounds, side = 24, top = 28;
@@ -105,7 +108,7 @@ function useVisible() {
   return v;
 }
 
-export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage, onFile }: {
+export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage, onFile, resetCam }: {
   model: OpsModel;
   layout: CityLayout;
   selectedAgent: string | null;
@@ -113,6 +116,8 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
   onMessage?: (id: string) => void;
   /** a block clicked: its file key */
   onFile?: (key: string) => void;
+  /** a new value: back to the whole map (Escape with nothing else to close, as the 3D camera's reset) */
+  resetCam?: number;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const draws = useRef(0);
@@ -137,7 +142,7 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
         <Messages model={model} onMessage={onMessage} />
         <Lanes model={model} visible={visible} onDraw={count} />
       </div>
-      <IsoCity model={model} layout={layout} selected={selectedAgent} visible={visible} onDraw={count} onAgentClick={onAgentClick} onFile={onFile} onOpenFile={openFile} />
+      <IsoCity model={model} layout={layout} selected={selectedAgent} visible={visible} onDraw={count} onAgentClick={onAgentClick} onFile={onFile} onOpenFile={openFile} resetCam={resetCam} />
     </div>
   );
 }
@@ -280,11 +285,12 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
   );
 }
 
-function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFile, onOpenFile }: {
+function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFile, onOpenFile, resetCam }: {
   model: OpsModel; layout: CityLayout; selected: string | null; visible: boolean; onDraw: () => void;
   onAgentClick: (k: string) => void; onFile?: (k: string) => void;
   /** a block right-clicked: its file, to read (T197) */
   onOpenFile?: (repo: string, path: string) => void;
+  resetCam?: number;
 }) {
   const [box, size] = useSize<HTMLDivElement>();
   const base = useRef<HTMLCanvasElement>(null);
@@ -292,11 +298,58 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const map = useMemo(() => isoMap(layout), [layout]);
   // (the desks' row along the front, under the map: its scale decides the room it takes)
   const row = useMemo(() => deskRow(model.agents.length, size.w, size.h), [model.agents.length, size.w, size.h]);
-  const fit = useMemo(() => fitOf(map, size.w, size.h, rowRoom(row.u)), [map, size.w, size.h, row.u]);
+  const fit0 = useMemo(() => fitOf(map, size.w, size.h, rowRoom(row.u)), [map, size.w, size.h, row.u]);
+  // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
+  // when it ends the view is set, the layers drawn again and the labels picked again
+  const [view, setViewRaw] = useState<View>(FIT_VIEW);
+  const fit = useMemo(() => viewFit(fit0, view), [fit0, view]);
+  const top = maxS(fit0, size.w || 1);
+  const layer = useRef<HTMLDivElement>(null);
+  const live = useRef<View | null>(null);
+  const commitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  });
+  const setView = (v: View) => {
+    live.current = null;
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = null;
+    setViewRaw(v);
+    if (size.w) sessionStorage.setItem(VIEW_KEY, JSON.stringify(viewToStore(v, size.w, size.h)));
+  };
+  /** a gesture's step: the layers moved by CSS, the view set a moment after the last step (`settle` ms) */
+  const preview = (v: View, settle: number | null) => {
+    live.current = v;
+    if (layer.current) layer.current.style.transform = cssBetween(viewRef.current, v);
+    box.current?.setAttribute("data-moving", "");
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = settle === null ? null : setTimeout(() => setView(v), settle);
+  };
+  // (the kept view, once the box has a size)
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !size.w) return;
+    restored.current = true;
+    try {
+      const v = viewFromStore(JSON.parse(sessionStorage.getItem(VIEW_KEY) ?? "null"), size.w, size.h, top);
+      if (v) setViewRaw(v); // eslint-disable-line react-hooks/set-state-in-effect
+    } catch {
+      // a malformed value: the whole map
+    }
+  }, [size.w, size.h, top]);
+  // (Escape with nothing else to close: the whole map, as the 3D camera goes home)
+  const resetSeen = useRef(resetCam);
+  useEffect(() => {
+    if (resetCam === resetSeen.current) return;
+    resetSeen.current = resetCam;
+    setView(FIT_VIEW);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetCam]);
   const lk = litKey(model.lit);
 
-  // the map, once per layout and size
-  useEffect(() => {
+  // the map, once per layout, size and view (before the frame is shown, with the gesture's CSS taken off)
+  useLayoutEffect(() => {
     const c = base.current;
     if (!c || !visible || !size.w || !size.h) return;
     const g = prepare(c, size.w, size.h, fit);
@@ -319,7 +372,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   }, [map, fit, visible]);
 
   // the lit files, when that set changes (at most 4 a second: the clock's ticks), with what stands in front of them
-  useEffect(() => {
+  useLayoutEffect(() => {
     const c = litC.current;
     if (!c || !visible || !size.w || !size.h) return;
     const g = prepare(c, size.w, size.h, fit);
@@ -348,6 +401,13 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lk, map, fit, visible]);
 
+  // (the view set: the layers are drawn for it above, so the gesture's CSS comes off before the frame is shown)
+  useLayoutEffect(() => {
+    if (live.current) return;
+    if (layer.current) layer.current.style.transform = "";
+    box.current?.removeAttribute("data-moving");
+  }, [view, box]);
+
   // each agent's seat at its desk (in the agents' order), and the top of the file it works on, if laid out
   const spots = useMemo(() => {
     const out = new Map<string, { at: P2; peak: P2 | null }>();
@@ -362,7 +422,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
 
   // the neighbourhoods' (folders') names: the biggest first, where they fit, never overlapping (T192); once per layout and size
   const cityBoxes = useMemo(() => map.cities.map((c) => { const p = px(fit, c.at); return { x: p.x, y: p.y - 10, w: c.name.length * 8 + 8, h: 14 }; }), [map, fit]);
-  const labels = useMemo(() => (size.w ? districtLabels(map, (p) => px(fit, p), fit.k, cityBoxes) : []), [map, fit, size.w, cityBoxes]);
+  // (zoomed in, deeper folders get names too; only those in the box)
+  const labels = useMemo(
+    () => (size.w ? districtLabels(map, (p) => px(fit, p), fit.k, cityBoxes, 6, 14, 3 + Math.max(0, Math.floor(Math.log2(view.s)))).filter((l) => l.x > -l.w && l.x < size.w + l.w && l.y > -20 && l.y < size.h + 20) : []),
+    [map, fit, size.w, size.h, cityBoxes, view.s],
+  );
   // (files in each folder, for its hover card)
   const filesIn = useMemo(() => {
     const m = new Map<string, number>();
@@ -379,11 +443,81 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     return { sx, sy, p: { x: (sx - fit.ox) / fit.k, y: (sy - fit.oy) / fit.k } };
   };
   const byKey = new Map(model.agents.map((a) => [a.key, a]));
+
+  // zoom: the wheel or a trackpad pinch (ctrl + wheel), about the pointer; the view set 180 ms after the last step
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015) * (e.deltaMode === 1 ? 16 : 1));
+      setHover(null);
+      preview(zoomAt(live.current ?? viewRef.current, f, { x: e.clientX - r.left, y: e.clientY - r.top }, top), 180);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  });
+  // keys: + / − zoom about the middle, 0 the whole map (not while typing, nor in a code window)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target instanceof HTMLElement ? e.target : null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.closest("[role=dialog]"))) return;
+      const mid = { x: size.w / 2, y: size.h / 2 };
+      if (e.key === "+" || e.key === "=") setView(zoomAt(viewRef.current, 1.5, mid, top));
+      else if (e.key === "-" || e.key === "_") setView(zoomAt(viewRef.current, 1 / 1.5, mid, top));
+      else if (e.key === "0") setView(FIT_VIEW);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+  // pan: drag with the left button (a click if it doesn't move), the middle one, or the right one from off a column
+  const drag = useRef<{ x: number; y: number; from: View; button: number; moved: boolean } | null>(null);
+  const dragged = useRef(false);
+  const onPointerDown = (e: React.PointerEvent) => {
+    if ((e.target as Element).closest("button")) return;
+    if (e.button === 2 && blockAt(map, toMap(e).p)) return;
+    if (e.button > 2) return;
+    drag.current = { x: e.clientX, y: e.clientY, from: live.current ?? view, button: e.button, moved: false };
+    dragged.current = false;
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const dx = e.clientX - d.x, dy = e.clientY - d.y;
+    if (!d.moved && Math.hypot(dx, dy) < 5) return;
+    if (!d.moved) { d.moved = true; setHover(null); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }
+    preview(panBy(d.from, dx, dy), null);
+  };
+  const onPointerUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.moved) {
+      dragged.current = true;
+      if (live.current) setView(live.current);
+    }
+  };
+  // a double-click on a city: zoomed to it
+  const onDoubleClick = (e: React.MouseEvent) => {
+    const p = toMap(e).p;
+    const c = map.cities.find((x) => inPoly(p, x.ground));
+    if (!c) return;
+    const pts = c.ground.map((q) => px(fit0, q));
+    setView(viewOfBox({ x0: Math.min(...pts.map((q) => q.x)), y0: Math.min(...pts.map((q) => q.y)) - 30, x1: Math.max(...pts.map((q) => q.x)), y1: Math.max(...pts.map((q) => q.y)) }, size.w, size.h - rowRoom(row.u), top));
+  };
   return (
     <div
       ref={box}
-      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-white/10 bg-[#0b0f17]"
+      className="group relative min-h-0 flex-1 touch-none overflow-hidden rounded-md border border-white/10 bg-[#0b0f17] select-none data-[moving]:cursor-grabbing"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onDoubleClick={onDoubleClick}
       onMouseMove={(e) => {
+        if (drag.current?.moved || live.current) return;
         const { sx, sy, p } = toMap(e);
         // (over a block: its file; over the ground: its neighbourhood, the deepest folder there)
         const b = blockAt(map, p), folder = districtAt(map, p);
@@ -392,10 +526,13 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       }}
       onMouseLeave={() => setHover(null)}
       onClick={(e) => {
+        if (dragged.current) { dragged.current = false; return; }
         const b = blockAt(map, toMap(e).p);
         if (b) onFile?.(b.key);
       }}
       onContextMenu={(e) => {
+        // (the end of a right-drag: no menu)
+        if (dragged.current) { e.preventDefault(); dragged.current = false; return; }
         // (a file's column: read it in a code window; elsewhere the browser's own menu)
         const b = blockAt(map, toMap(e).p);
         if (!b || !onOpenFile) return;
@@ -404,6 +541,8 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         onOpenFile(f.repo, f.path);
       }}
     >
+      {/* the map's layers: moved together by CSS during a gesture (T200) */}
+      <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
       <canvas ref={base} className="absolute inset-0 size-full" aria-hidden />
       <canvas ref={litC} className="absolute inset-0 size-full" aria-hidden />
       <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
@@ -436,6 +575,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             <text y={3.5} textAnchor="middle" className={`font-mono ${l.depth === 0 ? "fill-slate-100 text-[10px] font-semibold" : "fill-slate-300 text-[10px]"}`}>{l.text}</text>
           </g>
         ))}
+      </svg>
+      </div>
+      {/* (the desks' row stands clear of the map: the map fades out under it) */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#0b0f17] from-60% to-transparent" style={{ height: rowRoom(row.u) + 24 }} />
+      <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
         {/* the latest messages: an arc from sender to receiver */}
         {model.msgs.map((m) => {
           const a = spots.get(m.from)?.at, b = spots.get(m.to)?.at;
@@ -451,7 +595,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           if (!s?.peak || !s.at) return null;
           const x1 = s.at.x + beamFrom.x, y1 = s.at.y + beamFrom.y;
           return (
-            <g key={`b${a.key}`} className="pointer-events-none" opacity={selected && selected !== a.key ? 0.3 : 0.85}>
+            <g key={`b${a.key}`} className="pointer-events-none group-data-[moving]:hidden" opacity={selected && selected !== a.key ? 0.3 : 0.85}>
               <line x1={x1} y1={y1} x2={s.peak.x} y2={s.peak.y} stroke={beamColor(a)} strokeWidth={1.4} />
               <circle cx={s.peak.x} cy={s.peak.y} r={2.4} fill={beamColor(a)} />
             </g>
@@ -477,6 +621,12 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
           )}
         </div>
       )}
+      {/* zoom: + − and the whole map (also + − 0, the wheel or a pinch, a drag pans, a double-click on a city frames it) */}
+      <div className="absolute top-2 right-2 z-10 flex flex-col overflow-hidden rounded-md border border-white/15 bg-black/60 text-white/80">
+        <button type="button" aria-label="Zoom in" title="Zoom in (+, the wheel)" className="px-2 py-0.5 hover:bg-white/10" onClick={() => setView(zoomAt(view, 1.5, { x: size.w / 2, y: size.h / 2 }, top))}>+</button>
+        <button type="button" aria-label="Zoom out" title="Zoom out (−)" className="border-t border-white/10 px-2 py-0.5 hover:bg-white/10" onClick={() => setView(zoomAt(view, 1 / 1.5, { x: size.w / 2, y: size.h / 2 }, top))}>−</button>
+        <button type="button" aria-label="The whole map" title="The whole map (0, Esc)" className="border-t border-white/10 px-1.5 py-0.5 text-[11px] hover:bg-white/10" onClick={() => setView(FIT_VIEW)}>fit</button>
+      </div>
       <div className="pointer-events-none absolute bottom-1.5 right-2 flex gap-2 text-[10px] text-white/60">
         <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: LIT.edit }} />edited</span>
         <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: LIT.read }} />read</span>

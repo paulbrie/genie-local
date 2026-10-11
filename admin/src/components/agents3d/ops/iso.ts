@@ -87,6 +87,8 @@ export function litDrawList(map: IsoMap, lit: Iterable<number>): number[] {
   return [...out].sort((a, b) => a - b);
 }
 
+/** whether `p` is inside polygon `poly` */
+export const inPoly = (p: P2, poly: P2[]) => inside(p, poly);
 const inside = (p: P2, poly: P2[]) => {
   let r = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
