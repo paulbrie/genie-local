@@ -1,26 +1,27 @@
 /**
  * The agents' desks in the Ops view (T198, T201): on the isometric ground itself, in a row along the map's front
  * edge (a line parallel to the cities' edges: the cities lie along x, so the row does too, in front of them), one desk
- * and computer per agent, each agent seated facing the codebases; and the commits' conveyor belt (belt.ts) along the
- * cities' far side, the top right on screen (T204: from the viewer, desks, cities, then the belt beyond them). Pure: the row's seats and scale in world units, the belt's strip, the points the
- * map's fit must take in; and a desk's shapes in its own isometric frame.
- */
+ * and computer per agent, each agent seated facing the codebases; and the commits' conveyor belts (belt.ts), one per
+ * city along its far side, the top right on screen (T204: from the viewer, desks, cities, then the belts beyond them).
+ * Pure: the row's seats and scale in world units, the belts' strips, the points the map's fit must take in; and a
+ * desk's shapes in its own isometric frame. */
 import type { CityBounds } from "@/lib/city-layout";
 import { iso, type P2 } from "./iso";
 
 export type XZ = { x: number; z: number };
+export type Belt = { repo: string; x0: number; x1: number; z0: number; z1: number; h: number };
 export type DeskLine = {
   /** each agent's seat on the ground (world units), in the agents' order */
   seats: XZ[];
   /** world units to a desk's own unit (the desk is 4.4 of them long) */
   wu: number;
-  /** the belt: along x from x0 to x1, across z from z0 (the far side) to z1 (the cities' side), its top at h */
-  belt: { x0: number; x1: number; z0: number; z1: number; h: number };
+  /** each city's belt (T204): along x from x0 to x1, across z from z0 (the far side) to z1 (the city's side), its top at h */
+  belts: Belt[];
   /** what the map's fit must take in besides the cities (screen units) */
   extent: P2[];
 };
 
-/** in a desk's own units: the belt's gap behind the cities' far edge and its width; the gap from the desks' far edge
+/** in a desk's own units: a belt's gap behind its city's far edge and its width; the gap from the desks' far edge
  * (the monitors, at −3.6) to the cities */
 const BELT_GAP = 3.2, BELT_W = 1.8, TO_MAP = 1.2, DESK_FAR = 3.6;
 /** a seat's room at most (world units): a desk about as long as a few files' blocks, its monitor a little over the tallest */
@@ -29,21 +30,20 @@ export const SEAT_MAX = 14;
 /**
  * The row for `n` agents in front of `cities`: seats spaced evenly along x, centred on the cities, a seat's room a
  * seventh of its spacing to a desk unit; spacing at most SEAT_MAX, and a quarter of the cities' length (a short team
- * keeps together). The belt runs the cities' length, a little past each end, behind the backmost city edge.
+ * keeps together). Each city's belt runs its length, a gap behind its far edge.
  */
 export function deskLine(cities: CityBounds[], n: number): DeskLine {
   const x0 = cities.length ? Math.min(...cities.map((c) => c.x)) : 0;
   const x1 = cities.length ? Math.max(...cities.map((c) => c.x + c.w)) : 40;
   const front = cities.length ? Math.max(...cities.map((c) => c.z + c.d)) : 0;
-  const back = cities.length ? Math.min(...cities.map((c) => c.z)) : 0;
   const len = Math.max(1, x1 - x0), sp = Math.min(SEAT_MAX, len / Math.max(n, 4)), wu = sp / 7;
   const z = front + (TO_MAP + DESK_FAR) * wu, mid = (x0 + x1) / 2;
   const seats = Array.from({ length: n }, (_, i) => ({ x: mid + (i - (n - 1) / 2) * sp, z }));
-  const belt = { x0: x0 - 2 * wu, x1: x1 + 2 * wu, z0: back - (BELT_GAP + BELT_W) * wu, z1: back - BELT_GAP * wu, h: 0.9 * wu };
-  // (the fit takes in the belt's far side with its packages, and the desks' near side with the names)
+  const belts = cities.map((c) => ({ repo: c.repo, x0: c.x, x1: c.x + c.w, z0: c.z - (BELT_GAP + BELT_W) * wu, z1: c.z - BELT_GAP * wu, h: 0.9 * wu }));
+  // (the fit takes in each belt's far side with its packages, and the desks' near side with the names)
   const near = z + 2.5 * wu;
-  const extent = [iso(belt.x0, belt.z0, 3.5 * wu), iso(belt.x1, belt.z0, 3.5 * wu), iso(belt.x0, near), iso(belt.x1, near)];
-  return { seats, wu, belt, extent };
+  const extent = [...belts.flatMap((b) => [iso(b.x0, b.z0, 3.5 * wu), iso(b.x1, b.z0, 3.5 * wu)]), iso(x0, near), iso(x1, near)];
+  return { seats, wu, belts, extent };
 }
 
 /** a desk unit in pixels at full sprite scale (desk-sprites draws with `u` = wu × fit's k ÷ L) */

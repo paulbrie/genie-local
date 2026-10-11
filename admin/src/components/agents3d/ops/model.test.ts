@@ -60,17 +60,22 @@ describe("opsModel (T163)", () => {
     const links = opsModel(t, snapshotAt(t, T, false)).links.map((l) => [l.file.split("\n")[1], l.kind, l.fade]).sort();
     assert.deepEqual(links, [["a.ts", "edit", 1], ["b.ts", "read", Math.round((1 - 60 / 90) * 9) / 9], ["c.ts", "claim", 1]]);
   });
-  it("the belt (T201): the newest 20 commits of named agents, labelled by task id (else the short hash), pushed by then", () => {
-    const commits = Array.from({ length: 25 }, (_, i) => ({
-      hash: `h${i}`.padEnd(40, "0"), abbrev: `h${i}`, subject: i === 24 ? "admin: desks (T201)" : `commit ${i}`, repo: "/r", node: i === 23 ? "guest" : "Bob",
-      ms: T - (25 - i) * 1000, pushedMs: i === 24 ? T + 1000 : i === 22 ? T - 100 : null, remote: false,
-    }));
+  it("the belts (T201, T204): each repo's newest 15 commits of named agents, labelled by task id (else the short hash), pushed by then", () => {
+    const commits = [
+      ...Array.from({ length: 3 }, (_, i) => ({ hash: `s${i}`.padEnd(40, "0"), abbrev: `s${i}`, subject: `other ${i}`, repo: "/s", node: "Bob", ms: T - (40 - i) * 1000, pushedMs: null, remote: false })),
+      ...Array.from({ length: 25 }, (_, i) => ({
+        hash: `h${i}`.padEnd(40, "0"), abbrev: `h${i}`, subject: i === 24 ? "admin: desks (T201)" : `commit ${i}`, repo: "/r", node: i === 23 ? "guest" : "Bob",
+        ms: T - (25 - i) * 1000, pushedMs: i === 24 ? T + 1000 : i === 22 ? T - 100 : null, remote: false,
+      })),
+    ];
     const t = tl([agent("Bob", []), agent("guest", [], true)], { commits });
     const m = opsModel(t, snapshotAt(t, T, false));
-    assert.equal(m.commits.length, 20);
+    assert.equal(m.commits.filter((c) => c.repo === "/r").length, 15);
+    assert.equal(m.commits.filter((c) => c.repo === "/s").length, 3, "another repo's older commits kept: its own 15");
     assert.ok(!m.commits.some((c) => c.by === "guest"));
     const last = m.commits[m.commits.length - 1];
     assert.deepEqual([last.label, last.pushed], ["T201", false]);
-    assert.deepEqual([m.commits.find((c) => c.hash.startsWith("h22"))?.pushed, m.commits[0].label], [true, "h4"]);
+    assert.deepEqual([m.commits.find((c) => c.hash.startsWith("h22"))?.pushed, m.commits.find((c) => c.repo === "/r")?.label, m.commits[0].label], [true, "h9", "s0"]);
   });
+
 });

@@ -23,8 +23,8 @@ const STEP = 10_000;
 export const LINK_MS = 90_000;
 /** curves to files an agent holds by CLAIM, at most this many an agent */
 const CLAIM_LINKS = 12;
-/** commits on the belt: the newest this many (T201) */
-export const BELT_N = 20;
+/** commits on the belts: each repo's newest this many (T201; per repo since T204, a belt per city) */
+export const BELT_N = 15;
 
 export type LitKind = "edit" | "read" | "held" | "clash";
 
@@ -64,7 +64,7 @@ export type OpsModel = {
   lit: Map<string, { kind: LitKind; by: string | null }>;
   counts: Record<TaskState, number>;
   links: OpsLink[];
-  /** the newest BELT_N commits, oldest first */
+  /** each repo's newest BELT_N commits, oldest first */
   commits: OpsCommit[];
 };
 
@@ -152,9 +152,13 @@ export function opsModel(tl: Timeline, snap: Snapshot): OpsModel {
     .slice(-6)
     .map((m) => ({ id: m.id, from: m.from, to: m.to, tag: m.tag, color: m.color, label: m.label, ms: m.ms }));
   const named = new Set(agents.map((a) => a.key));
+  // (each repo's newest BELT_N: counted from the newest back)
+  const perRepo = new Map<string | null, number>();
   const commits = snap.commits
     .filter((c) => named.has(c.node))
-    .slice(-BELT_N)
+    .reverse()
+    .filter((c) => { const n = perRepo.get(c.repo) ?? 0; perRepo.set(c.repo, n + 1); return n < BELT_N; })
+    .reverse()
     .map((c) => ({
       hash: c.hash,
       label: /\bT\d+[a-z']*/i.exec(c.subject ?? "")?.[0] ?? c.abbrev,

@@ -31,12 +31,16 @@ describe("the Ops view's desks on the map's ground (T201)", () => {
     const two = deskLine(cities, 2);
     assert.ok(two.seats[1].x - two.seats[0].x <= Math.min(SEAT_MAX, 100 / 4) + 1e-9);
   });
-  it("the belt runs the cities' length along their far side (from the viewer: desks, cities, belt)", () => {
+  it("a belt per city (T204): along its far side, its length, a gap behind it (from the viewer: desks, cities, belts)", () => {
     const l = deskLine(cities, 6), deskFar = l.seats[0].z - 3.6 * l.wu;
-    assert.ok(l.belt.x0 < 0 && l.belt.x1 > 100);
+    assert.deepEqual(l.belts.map((b) => b.repo), ["/r/admin", "/r/trafficsim"]);
+    l.belts.forEach((b, i) => {
+      const c = cities[i];
+      assert.deepEqual([b.x0, b.x1], [c.x, c.x + c.w]);
+      assert.ok(b.z1 < c.z - 2 * l.wu && b.z0 < b.z1, "behind its city's far edge, with a gap");
+    });
     assert.ok(deskFar > 40, "the desks clear of the cities");
-    assert.ok(l.belt.z1 < 0 && l.belt.z0 < l.belt.z1, "behind the backmost city edge (z = 0)");
-    assert.equal(l.extent.length, 4);
+    assert.equal(l.extent.length, 2 * 2 + 2);
   });
   it("the computer stands on the desk towards the map, the curve leaving its top", () => {
     const d = deskParts(1);
@@ -46,25 +50,25 @@ describe("the Ops view's desks on the map's ground (T201)", () => {
   });
 });
 
-describe("the commits' belt (T201)", () => {
-  const line = deskLine(cities, 6), slot = SLOT * line.wu;
-  it("each repo's packages queue back from its city's middle, the newest in front", () => {
-    const p = beltPlaces([commit("a1", "/r/admin"), commit("a2", "/r/admin"), commit("t1", "/r/trafficsim")], cities, line);
-    assert.equal(p.get("a2"), 20);
-    assert.ok(Math.abs(p.get("a1")! - (20 - slot)) < 1e-9);
-    assert.equal(p.get("t1"), 72);
+describe("the commits' belts (T201, T204)", () => {
+  const line = deskLine(cities, 6), slot = SLOT * line.wu, half = (PKG * line.wu) / 2;
+  it("each repo's packages on its own city's belt, the newest at the city's middle, the older ones a slot back each", () => {
+    const p = beltPlaces([commit("a1", "/r/admin"), commit("a2", "/r/admin"), commit("t1", "/r/trafficsim")], line);
+    assert.deepEqual([p.get("a2")?.belt.repo, p.get("a2")?.x], ["/r/admin", 20]);
+    assert.ok(Math.abs(p.get("a1")!.x - (20 - slot)) < 1e-9);
+    assert.deepEqual([p.get("t1")?.belt.repo, p.get("t1")?.x], ["/r/trafficsim", 72]);
   });
-  it("a repo not on the map: to the belt's far end", () => {
-    const p = beltPlaces([commit("x", "/elsewhere"), commit("n", null)], cities, line);
-    const end = line.belt.x1 - (PKG * line.wu) / 2;
-    assert.equal(p.get("n"), end);
-    assert.ok(Math.abs(p.get("x")! - (end - slot)) < 1e-9);
+  it("a repo with no city on the map: no belt, not shown", () => {
+    const p = beltPlaces([commit("x", "/elsewhere"), commit("n", null)], line);
+    assert.equal(p.size, 0);
   });
-  it("twenty packages: never two closer than a slot, all on the belt", () => {
-    const many = Array.from({ length: 20 }, (_, i) => commit(`c${String(i).padStart(2, "0")}`, i % 3 ? "/r/admin" : "/r/trafficsim"));
-    const xs = [...beltPlaces(many, cities, line).values()].sort((a, b) => a - b);
-    assert.equal(xs.length, 20);
-    for (let i = 1; i < xs.length; i++) assert.ok(xs[i] - xs[i - 1] >= Math.min(slot, (line.belt.x1 - line.belt.x0 - PKG * line.wu) / 19) - 1e-9);
-    assert.ok(xs[0] >= line.belt.x0 && xs[19] <= line.belt.x1);
+  it("a full belt keeps its newest; never two closer than a slot, all on their belt", () => {
+    const many = Array.from({ length: 40 }, (_, i) => commit(`c${String(i).padStart(2, "0")}`, "/r/admin"));
+    const p = beltPlaces(many, line), b = line.belts[0];
+    const xs = [...p.values()].map((v) => v.x).sort((a, z) => a - z);
+    assert.equal(xs.length, Math.floor((b.x1 - b.x0 - 2 * half) / slot) + 1);
+    assert.ok(p.has("c39") && !p.has("c00"), "the newest kept, the oldest gone");
+    for (let i = 1; i < xs.length; i++) assert.ok(xs[i] - xs[i - 1] >= slot - 1e-9);
+    assert.ok(xs[0] >= b.x0 + half - 1e-9 && xs[xs.length - 1] <= b.x1 - half + 1e-9);
   });
 });

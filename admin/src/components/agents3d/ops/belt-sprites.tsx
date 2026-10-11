@@ -2,10 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import type { CityBounds } from "@/lib/city-layout";
-
 import { beltPlaces, PKG } from "./belt";
-import type { DeskLine } from "./desks";
+import type { Belt as BeltStrip, DeskLine } from "./desks";
 import { iso, type P2 } from "./iso";
 import type { OpsAgent, OpsCommit } from "./model";
 
@@ -15,15 +13,15 @@ const pts = (ps: P2[]) => ps.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).j
 const INK = "#0b0f17";
 
 /**
- * The commits' conveyor belt (T201), drawn on the map (it zooms and pans with it) under the cities, along their far
- * side (T204), and on it the newest commits as packages in their authors' colours, labelled with the task id or short
- * hash (the subject, repo and hash on hover), a tick on those pushed. A new commit appears over its place beside its
- * repo's city and drops onto the belt in a CSS transition (0.9 s, once; none under reduced motion); the packages it
- * pushes back slide along the same way. Nothing moves otherwise, nothing runs per frame.
+ * The commits' conveyor belts (T201, T204), drawn on the map (they zoom and pan with it) under the cities: one along
+ * each city's far side, and on it that repo's newest commits as packages in their authors' colours, labelled with the
+ * task id or short hash (the subject, repo and hash on hover), a tick on those pushed. A new commit appears over its
+ * place and drops onto its belt in a CSS transition (0.9 s, once; none under reduced motion); the packages it pushes
+ * back slide along the same way. Nothing moves otherwise, nothing runs per frame.
  */
-export function Belt({ line, fit, cities, commits, agents }: { line: DeskLine; fit: Fit; cities: CityBounds[]; commits: OpsCommit[]; agents: OpsAgent[] }) {
-  const { belt, wu } = line;
-  const places = useMemo(() => beltPlaces(commits, cities, line), [commits, cities, line]);
+export function Belts({ line, fit, commits, agents }: { line: DeskLine; fit: Fit; commits: OpsCommit[]; agents: OpsAgent[] }) {
+  const { wu } = line;
+  const places = useMemo(() => beltPlaces(commits, line), [commits, line]);
   const colorOf = useMemo(() => new Map(agents.map((a) => [a.key, a.color])), [agents]);
   const nameOf = useMemo(() => new Map(agents.map((a) => [a.key, a.name])), [agents]);
 
@@ -40,14 +38,19 @@ export function Belt({ line, fit, cities, commits, agents }: { line: DeskLine; f
     return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
   }, [commits, landed]);
 
-  const zc = (belt.z0 + belt.z1) / 2, s = PKG * wu, h = belt.h;
-  // the belt: a long low box, its top ribbed across
-  const quad = (x0: number, x1: number, z0: number, z1: number, y: number) => [iso(x0, z0, y), iso(x1, z0, y), iso(x1, z1, y), iso(x0, z1, y)].map((p) => px(fit, p));
-  const top = quad(belt.x0, belt.x1, belt.z0, belt.z1, h);
-  const front = [iso(belt.x0, belt.z1, h), iso(belt.x1, belt.z1, h), iso(belt.x1, belt.z1, 0), iso(belt.x0, belt.z1, 0)].map((p) => px(fit, p));
-  const end = [iso(belt.x1, belt.z0, h), iso(belt.x1, belt.z1, h), iso(belt.x1, belt.z1, 0), iso(belt.x1, belt.z0, 0)].map((p) => px(fit, p));
-  const ribs: [P2, P2][] = [];
-  for (let x = belt.x0 + wu; x < belt.x1; x += 1.5 * wu) ribs.push([px(fit, iso(x, belt.z0, h)), px(fit, iso(x, belt.z1, h))]);
+  const s = PKG * wu;
+  // a belt: a long low box, its top ribbed across
+  const strip = (b: BeltStrip) => {
+    const P = (x: number, z: number, y: number) => px(fit, iso(x, z, y));
+    const ribs: [P2, P2][] = [];
+    for (let x = b.x0 + wu; x < b.x1; x += 1.5 * wu) ribs.push([P(x, b.z0, b.h), P(x, b.z1, b.h)]);
+    return {
+      top: [P(b.x0, b.z0, b.h), P(b.x1, b.z0, b.h), P(b.x1, b.z1, b.h), P(b.x0, b.z1, b.h)],
+      front: [P(b.x0, b.z1, b.h), P(b.x1, b.z1, b.h), P(b.x1, b.z1, 0), P(b.x0, b.z1, 0)],
+      end: [P(b.x1, b.z0, b.h), P(b.x1, b.z1, b.h), P(b.x1, b.z1, 0), P(b.x1, b.z0, 0)],
+      ribs,
+    };
+  };
   // a package, in the map's own units (its group scaled by the fit, so a zoom doesn't set off the ride)
   const box = (x0: number, x1: number, z0: number, z1: number, h0: number, h1: number) => ({
     top: [iso(x0, z0, h1), iso(x1, z0, h1), iso(x1, z1, h1), iso(x0, z1, h1)],
@@ -58,15 +61,24 @@ export function Belt({ line, fit, cities, commits, agents }: { line: DeskLine; f
   const label = s * fit.k >= 14;
   return (
     <g className="pointer-events-none">
-      <polygon points={pts(front)} fill="#1c2230" stroke={INK} strokeWidth={0.6} />
-      <polygon points={pts(end)} fill="#161b26" stroke={INK} strokeWidth={0.6} />
-      <polygon points={pts(top)} fill="#2b3343" stroke={INK} strokeWidth={0.6} />
-      {ribs.map(([a, b], i) => <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#3b4557" strokeWidth={1} />)}
+      {line.belts.map((b) => {
+        const g = strip(b);
+        return (
+          <g key={b.repo}>
+            <polygon points={pts(g.front)} fill="#1c2230" stroke={INK} strokeWidth={0.6} />
+            <polygon points={pts(g.end)} fill="#161b26" stroke={INK} strokeWidth={0.6} />
+            <polygon points={pts(g.top)} fill="#2b3343" stroke={INK} strokeWidth={0.6} />
+            {g.ribs.map(([p, q], i) => <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke="#3b4557" strokeWidth={1} />)}
+          </g>
+        );
+      })}
       <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
         {commits.map((c) => {
-          const drop = fresh.includes(c);
-          // (a new one appears over its place, beside its repo's city, and drops onto the belt)
-          const at = iso(places.get(c.hash) ?? belt.x1, zc, drop ? h + 3 * wu : h);
+          const place = places.get(c.hash);
+          if (!place) return null;
+          const drop = fresh.includes(c), b = place.belt;
+          // (a new one appears over its place on its repo's belt, and drops onto it)
+          const at = iso(place.x, (b.z0 + b.z1) / 2, drop ? b.h + 3 * wu : b.h);
           const color = colorOf.get(c.by) ?? "#94a3b8";
           return (
             <g key={c.hash} className="ops-pkg pointer-events-auto" style={{ transform: `translate(${at.x.toFixed(3)}px, ${at.y.toFixed(3)}px)` }}>
