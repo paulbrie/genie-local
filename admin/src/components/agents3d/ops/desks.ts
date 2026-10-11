@@ -25,6 +25,8 @@ export type DeskLine = {
 const BELT_GAP = 3.2, BELT_W = 1.8, TO_MAP = 1.2, DESK_FAR = 3.6;
 /** a seat's room at most (world units): a desk about as long as a few files' blocks, its monitor a little over the tallest */
 export const SEAT_MAX = 14;
+/** the cafeteria table's radius (desk units) */
+export const CAFE_R = 2.6;
 /** the manager's row: at least this far (desk units) in front of the agents' desks */
 const MANAGER_GAP = 10;
 
@@ -40,8 +42,11 @@ export function deskLine(cities: CityBounds[], n: number): DeskLine {
 }
 
 export type DeskSpots = {
-  /** each agent's seat on the ground (world units), by key */
+  /** each agent's seat on the ground (world units), by key (an agent at the cafeteria keeps its desk's) */
   seats: Map<string, XZ>;
+  /** the cafeteria (T210): its round table's middle and radius, and each away agent's chair round it, facing it (yaw) */
+  cafe: { x: number; z: number; r: number };
+  cafeSeats: Map<string, XZ & { yaw: number }>;
   /** what the map's fit must take in for the desks, wherever their agents go (screen units) */
   extent: P2[];
 };
@@ -53,7 +58,7 @@ export type DeskSpots = {
  * by twice `lift` (world units: the height over a seat that must stay clear of the city, the head and its bubble; in
  * this projection a point that high shows over the ground twice as far back).
  */
-export function deskSpots(cities: CityBounds[], agents: { key: string; city?: string | null; manager?: boolean }[], wu: number, lift: number): DeskSpots {
+export function deskSpots(cities: CityBounds[], agents: { key: string; city?: string | null; manager?: boolean; away?: boolean }[], wu: number, lift: number): DeskSpots {
   const sp = 7 * wu, gap = Math.max((TO_MAP + DESK_FAR) * wu, 2 * lift);
   const byRepo = new Map(cities.map((c) => [c.repo, c]));
   const left = cities.length ? Math.min(...cities.map((c) => c.x)) : 0;
@@ -80,6 +85,17 @@ export function deskSpots(cities: CityBounds[], agents: { key: string; city?: st
   // (the fit: every city's desk band, and the lounge's, so the view doesn't change when an agent moves)
   const band = (x0: number, x1: number) => { const z = frontOver(x0, x1) + gap; return [iso(x0, z + 2.5 * wu), iso(x1, z + 2.5 * wu), iso(x0, z - 3.6 * wu, 6 * wu), iso(x1, z - 3.6 * wu, 6 * wu)]; };
   const extent = [...cities.flatMap((c) => band(c.x, c.x + c.w)), ...(groups.has("") ? band(left - sp * (groups.get("")!.length + 0.5), left) : [])];
+  // (the cafeteria, T210: a round table near the front, in the manager's row at the cities' left end, clear of the
+  // desks; its chairs from the far side round, so the faces of the first few show)
+  const r = CAFE_R * wu, frontAll = Math.max(...cities.map((c) => frontOver(c.x, c.x + c.w) + gap), 0);
+  const cafe = { x: left + r + 2 * wu, z: frontAll + Math.max(MANAGER_GAP * wu, gap), r };
+  const away = agents.filter((a) => a.away && !a.manager);
+  const step = Math.min((2 * Math.PI) / Math.max(1, away.length), 0.95);
+  const cafeSeats = new Map(away.map((a, i) => {
+    const yaw = Math.PI + (i - (away.length - 1) / 2) * step, d = r + 1.2 * wu;
+    return [a.key, { x: cafe.x + d * Math.sin(yaw), z: cafe.z + d * Math.cos(yaw), yaw }];
+  }));
+  extent.push(iso(cafe.x - r - 3 * wu, cafe.z + r + 3 * wu), iso(cafe.x + r + 3 * wu, cafe.z - r - 3 * wu, 6 * wu), iso(cafe.x - r - 3 * wu, cafe.z - r - 3 * wu, 6 * wu));
   // (the manager, T204e: a row of its own in front of every desk, centred on the cities; as far out again as the
   // bubbles need, so its own and the agents' don't meet)
   const boss = agents.find((a) => a.manager);
@@ -90,7 +106,7 @@ export function deskSpots(cities: CityBounds[], agents: { key: string; city?: st
     seats.set(boss.key, seat);
     extent.push(iso(seat.x - sp, seat.z + 3.5 * wu), iso(seat.x + sp, seat.z + 3.5 * wu));
   }
-  return { seats, extent };
+  return { seats, extent, cafe, cafeSeats };
 }
 
 /** a desk unit in pixels at full sprite scale (desk-sprites draws with `u` = wu × fit's k ÷ L) */

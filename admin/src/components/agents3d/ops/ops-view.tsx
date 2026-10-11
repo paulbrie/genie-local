@@ -12,7 +12,7 @@ import { rackExtent, rackOf } from "./server";
 import { ServerRack } from "./server-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
-import { Curve, Desk, DeskName, DeskStyles, KIND_COLORS, linkColor, ManagerLink } from "./desk-sprites";
+import { CafeTable, Curve, Desk, DeskName, DeskStyles, Figure, KIND_COLORS, linkColor, ManagerLink } from "./desk-sprites";
 import { deskLine, deskParts, deskSpots, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
@@ -156,7 +156,8 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
     <div ref={rootRef} data-draws="0" data-low-power={lowPower || undefined} className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 text-white">
       {wins.length > 0 && <CodeWindows wins={wins} onClose={(id) => setWins((ws) => ws.filter((w) => w.id !== id))} />}
       {/* (on top: the counts, the latest messages, the folded timeline; under the map, the agents' cards: T207) */}
-      <div className="max-h-[40%] shrink-0 space-y-2 overflow-y-auto pr-1">
+      {/* (each row of a fixed height, so the map's never changes as messages come: T212; the "+N" list overlays the map) */}
+      <div className="shrink-0 space-y-2 pr-1">
         <Header model={model} />
         <Messages model={model} onMessage={onMessage} />
         <Lanes model={model} visible={visible} onDraw={count} />
@@ -170,10 +171,11 @@ export function OpsView({ model, layout, selectedAgent, onAgentClick, onMessage,
 function Header({ model }: { model: OpsModel }) {
   const c = model.counts;
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+    // (one row, always the same height: no wrap, numbers of one width, T212)
+    <div className="flex h-5 items-center gap-1.5 overflow-hidden text-[11px] whitespace-nowrap tabular-nums">
       <span className="mr-1 font-medium text-white/80">{model.agents.length} agents</span>
       {(["dispatched", "in_progress", "blocked", "done"] as const).map((s) => (
-        <span key={s} className="rounded-full bg-white/10 px-2 py-0.5" style={{ color: TASK_COLORS[s] }}>
+        <span key={s} className="shrink-0 rounded-full bg-white/10 px-2 py-0.5" style={{ color: TASK_COLORS[s] }}>
           {s.replace("_", " ")} {c[s]}
         </span>
       ))}
@@ -233,36 +235,77 @@ function Cards({ model, selected, onAgentClick }: { model: OpsModel; selected: s
   );
 }
 
+/** the latest messages: newest first */
+const CHIPS_MAX = 12;
+
+/**
+ * The latest messages as chips (T212): one row, always the same height, newest first; those that don't fit are left
+ * out from the end, and a "+N" chip lists them all (on hover, or a click keeps it open). Each chip as wide as
+ * CHIP_W at most, the whole message on hover. How many fit is measured on an unseen copy of the row.
+ */
 function Messages({ model, onMessage }: { model: OpsModel; onMessage?: (id: string) => void }) {
-  if (!model.msgs.length) return null;
   const name = (k: string) => model.agents.find((a) => a.key === k)?.name ?? "…";
+  const msgs = model.msgs.slice(-CHIPS_MAX).reverse();
+  const [row, size] = useSize<HTMLDivElement>();
+  const ruler = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(msgs.length);
+  const [open, setOpen] = useState(false);
+  const ids = msgs.map((m) => m.id).join(" ");
+  useLayoutEffect(() => {
+    const chips = [...(ruler.current?.children ?? [])] as HTMLElement[];
+    if (!size.w || !chips.length) return;
+    // (the "+N" chip is the ruler's last child: room kept for it unless all fit)
+    const more = chips.pop()!.offsetWidth + GAP;
+    let w = 0, n = 0;
+    for (const c of chips) {
+      w += c.offsetWidth + (n ? GAP : 0);
+      if (w > size.w - (n + 1 < chips.length ? more : 0)) break;
+      n++;
+    }
+    setFit(n);
+  }, [ids, size.w]);
+  const chip = (m: (typeof msgs)[number], extra = "") => (
+    <button key={m.id} type="button" onClick={() => onMessage?.(m.id)} title={`${m.tag ?? "note"} ${name(m.from)} → ${name(m.to)} · ${m.label}`} className={`max-w-[20rem] shrink-0 truncate rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-left text-white/75 hover:bg-white/[0.08] ${extra}`}>
+      <span className="font-mono font-bold" style={{ color: m.tag ? TAG_COLORS[m.tag] : "#94a3b8" }}>{m.tag ?? "note"}</span> {name(m.from)} → {name(m.to)} · {m.label}
+    </button>
+  );
+  const hidden = msgs.length - Math.min(fit, msgs.length);
   return (
-    <div className="flex flex-wrap gap-1 text-[11px]">
-      {model.msgs.slice(-6).map((m) => (
-        <button key={m.id} type="button" onClick={() => onMessage?.(m.id)} className="max-w-[24rem] truncate rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-left text-white/75 hover:bg-white/[0.08]">
-          <span className="font-mono font-bold" style={{ color: m.tag ? TAG_COLORS[m.tag] : "#94a3b8" }}>{m.tag ?? "note"}</span> {name(m.from)} → {name(m.to)} · {m.label}
-        </button>
-      ))}
+    <div className="relative h-[22px] text-[11px]" onMouseLeave={() => setOpen(false)}>
+      {/* (unseen: every chip at its own width, and a "+N", to measure how many fit) */}
+      <div ref={ruler} aria-hidden className="pointer-events-none invisible absolute top-0 left-0 flex gap-1 whitespace-nowrap">
+        {msgs.map((m) => chip(m))}
+        <span className="rounded border px-1.5 py-0.5">+{msgs.length}</span>
+      </div>
+      <div ref={row} className="flex h-full items-center gap-1 overflow-hidden whitespace-nowrap">
+        {msgs.length === 0 && <span className="text-white/35">no messages lately</span>}
+        {msgs.slice(0, msgs.length - hidden).map((m) => chip(m))}
+        {hidden > 0 && (
+          <button type="button" aria-expanded={open} title="All the latest messages" onMouseEnter={() => setOpen(true)} onClick={() => setOpen((o) => !o)} className="shrink-0 rounded border border-white/10 bg-white/[0.08] px-1.5 py-0.5 text-white/75 hover:bg-white/[0.14]">
+            +{hidden}
+          </button>
+        )}
+      </div>
+      {open && hidden > 0 && (
+        <div className="absolute top-full right-0 left-0 z-20 mt-1 flex max-h-64 flex-col items-start gap-1 overflow-y-auto rounded border border-white/15 bg-[#0b0f17]/95 p-1.5 shadow-xl">
+          {msgs.map((m) => chip(m, "max-w-full"))}
+        </div>
+      )}
     </div>
   );
 }
+/** the gap between chips (gap-1) */
+const GAP = 4;
 
 /** the tasks over the last hour, a row per agent; drawn when they change, or once a minute as time passes */
-/** the timeline folded or open, kept in this browser; folded until opened (T203) */
-const LANES_KEY = "admin.agents3d.ops.lanes";
-
 function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; onDraw: () => void }) {
+  // (folded on every load; opened, until the page is left: T203, T212)
   const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (localStorage.getItem(LANES_KEY) === "1") setOpen(true); // eslint-disable-line react-hooks/set-state-in-effect
-  }, []);
-  const toggle = () => {
-    localStorage.setItem(LANES_KEY, open ? "0" : "1");
-    setOpen(!open);
-  };
+  const toggle = () => setOpen(!open);
   const [box, size] = useSize<HTMLDivElement>();
   const canvas = useRef<HTMLCanvasElement>(null);
-  const rows = model.agents.filter((a) => model.bars.has(a.key));
+  // (a row per agent, with tasks or not: the timeline opened keeps its height as tasks come, T212)
+  const rows = model.agents;
   const t = Math.floor(model.t / 60_000) * 60_000;
   const key = JSON.stringify([t, size.w, rows.map((a) => [a.key, a.color, model.bars.get(a.key)])]);
   const H = 18 + rows.length * 18;
@@ -319,12 +362,16 @@ function Lanes({ model, visible, onDraw }: { model: OpsModel; visible: boolean; 
         onClick={toggle}
         aria-expanded={open}
         title={open ? "Fold the timeline away" : "Show the tasks over the last hour, a row per agent"}
-        className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-white/60 hover:bg-white/[0.06] hover:text-white/85"
+        className="flex h-5 w-full items-center gap-1.5 overflow-hidden rounded px-1 text-left text-[11px] whitespace-nowrap text-white/60 tabular-nums hover:bg-white/[0.06] hover:text-white/85"
       >
         <ChevronRight className={`size-3.5 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} aria-hidden />
         Timeline · {tasks} task{tasks === 1 ? "" : "s"} in the last {Math.round(LANE_MS / 60_000)} min
       </button>
-      {open && rows.length > 0 && <canvas ref={canvas} style={{ width: "100%", height: H }} aria-label="Tasks over the last hour, a row per agent" />}
+      {open && rows.length > 0 && (
+        <div className="max-h-[30vh] overflow-y-auto">
+          <canvas ref={canvas} style={{ width: "100%", height: H }} aria-label="Tasks over the last hour, a row per agent" />
+        </div>
+      )}
     </div>
   );
 }
@@ -347,7 +394,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const kEst = useMemo(() => fitOf(withExtent(map, line.extent), size.w || 1, size.h || 1, NAMES_H).k, [map, line, size.w, size.h]);
   // (by what decides the seats, not the agents' array: a new one comes with every tick, and a new fit would draw the map
   // again each time)
-  const seatKey = model.agents.map((a) => `${a.key}:${a.city ?? ""}:${a.manager ? 1 : 0}`).join("|");
+  const seatKey = model.agents.map((a) => `${a.key}:${a.city ?? ""}:${a.manager ? 1 : 0}:${a.away ? 1 : 0}`).join("|");
+  // (moves to and from the cafeteria glide once, but not on the first drawing: T210)
+  const [settled, setSettled] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- after the first paint, any figure that appears has moved
+  useEffect(() => setSettled(true), []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, seatKey, line, kEst]);
   // (our server beyond the belts, T209)
@@ -680,13 +731,37 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
           {deskOrder.map((a) => {
             const seat = desks.seats.get(a.key)!, p = iso(seat.x, seat.z), uu = (line.wu / L) * (a.manager ? MANAGER_SCALE : 1);
+            const away = desks.cafeSeats.has(a.key), c = iso(desks.cafe.x, desks.cafe.z);
             return (
               <g key={a.key} className="ops-seat" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}>
-                <Desk a={a} u={uu} selected={selected === a.key} onClick={() => onAgentClick(a.key)} />
+                <Desk a={a} u={uu} selected={selected === a.key} onClick={() => onAgentClick(a.key)} empty={away} arrive={settled ? { x: c.x - p.x, y: c.y - p.y } : null} />
                 <DeskName a={a} u={uu} k={fit.k} onClick={() => onAgentClick(a.key)} />
               </g>
             );
           })}
+          {/* the cafeteria (T210): its table, and the agents away from their desks round it, back to front */}
+          {(() => {
+            const c = desks.cafe, uu = line.wu / L, cp = iso(c.x, c.z);
+            const items = [
+              { depth: c.x + c.z, el: <g key="cafe-table" style={{ transform: `translate(${cp.x.toFixed(3)}px, ${cp.y.toFixed(3)}px)` }}><CafeTable u={uu} /></g> },
+              ...model.agents.flatMap((a, n) => {
+                const s = desks.cafeSeats.get(a.key);
+                if (!s) return [];
+                const p = iso(s.x, s.z), d = desks.seats.get(a.key)!, dp = iso(d.x, d.z);
+                return [{
+                  depth: s.x + s.z,
+                  el: (
+                    <g key={`cafe-${a.key}`} className="ops-desk pointer-events-auto cursor-pointer" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}
+                      opacity={a.doing === "nap" ? 0.75 : 1} onClick={(e) => { e.stopPropagation(); onAgentClick(a.key); }}>
+                      <title>{`${a.name} · on a coffee break`}</title>
+                      <Figure a={a} u={uu} pose={n % 2 ? "sip" : "cafe"} yaw={s.yaw} arrive={settled ? { x: dp.x - p.x, y: dp.y - p.y } : null} steam={settled} />
+                    </g>
+                  ),
+                }];
+              }),
+            ];
+            return items.sort((x, y) => x.depth - y.depth).map((x) => x.el);
+          })()}
         </g>
         {/* each agent's curves: from its computer to the files it edits, reads or has claimed */}
         {model.links.map((l) => {

@@ -7,9 +7,10 @@
  */
 
 export type V3 = { x: number; h: number; z: number };
-export type Doing = "type" | "read" | "run" | "think" | "wait" | "idle" | "nap";
-/** what a bone is made of: the shirt (the agent's colour), the trousers (its colour, darker), skin, hair, shoes */
-export type Stuff = "shirt" | "pants" | "skin" | "hair" | "shoe";
+/** the desk's poses, and the cafeteria's (T210): sitting at the table with a coffee, or sipping it */
+export type Doing = "type" | "read" | "run" | "think" | "wait" | "idle" | "nap" | "cafe" | "sip";
+/** what a bone is made of: the shirt (the agent's colour), the trousers (its colour, darker), skin, hair, shoes, a cup */
+export type Stuff = "shirt" | "pants" | "skin" | "hair" | "shoe" | "cup";
 /** a bone: a box from `a` to `b`, `w` across (along `side`, near x) and `t` thick */
 export type Bone = { name: string; a: V3; b: V3; w: number; t: number; stuff: Stuff; side?: V3 };
 
@@ -55,14 +56,28 @@ function joints(doing: Doing): Joints {
     case "idle":
       // (leaning back, arms crossed over the chest)
       return { hip, neck: v(0, 3.4, 0.6), elbow: [v(-0.85, 2.55, 0.0), v(0.85, 2.6, 0.0)], hand: [v(0.35, 2.85, -0.15), v(-0.35, 2.9, -0.1)], ...legs, facing: -1 };
+    case "cafe":
+      // (at the cafeteria's table: forearms on it, the right hand round a cup)
+      return { hip, neck: v(0, 3.5, -0.15), elbow: [v(-0.85, 2.6, -0.8), v(0.85, 2.6, -0.8)], hand: [v(-0.35, KEYS_H, -1.55), v(0.4, KEYS_H, -1.6)], ...legs, facing: -1 };
+    case "sip":
+      // (sipping: the right hand lifts the cup to the mouth)
+      return { hip, neck: v(0, 3.55, 0.0), elbow: [v(-0.85, 2.6, -0.8), v(0.75, 2.75, -0.55)], hand: [v(-0.35, KEYS_H, -1.55), v(0.15, 3.75, -0.75)], ...legs, facing: -1 };
     case "nap":
       // (bent over onto the desk, the head on folded arms)
       return { hip, neck: v(0, 2.95, -1.25), elbow: [v(-0.95, 2.72, -1.75), v(0.95, 2.72, -1.75)], hand: [v(0.2, 2.75, -2.15), v(-0.2, 2.8, -2.1)], ...legs, facing: -1 };
   }
 }
 
-/** a pose's bones (the head last but one, then nothing: sorting decides the order drawn) */
-export function figureBones(doing: Doing): Bone[] {
+/** turned by `yaw` about the seat (radians; 0 faces −z, the desk; π/2 faces −x): the figure faces (−sin yaw, −cos yaw) */
+const turn = (p: V3, yaw: number): V3 => (yaw ? v(p.x * Math.cos(yaw) + p.z * Math.sin(yaw), p.h, -p.x * Math.sin(yaw) + p.z * Math.cos(yaw)) : p);
+/** the way a figure turned by `yaw` looks, on the ground */
+export const forward = (doing: Doing, yaw = 0): V3 => turn(v(0, 0, facing(doing)), yaw);
+
+/** a pose's bones, turned by `yaw` about the seat (T210; the order doesn't matter: sorting decides the order drawn) */
+export function figureBones(doing: Doing, yaw = 0): Bone[] {
+  return poseBones(doing).map((b) => ({ ...b, a: turn(b.a, yaw), b: turn(b.b, yaw), side: turn(b.side ?? v(1, 0, 0), yaw) }));
+}
+function poseBones(doing: Doing): Bone[] {
   const j = joints(doing);
   const up = norm(sub(j.neck, j.hip));
   const shoulder = (k: number) => add(add(j.neck, mul(up, -0.3)), v(k * 0.85, 0, 0));
@@ -84,6 +99,11 @@ export function figureBones(doing: Doing): Bone[] {
       { name: `foot-${s}`, a: add(j.foot[i], v(0, 0, -0.15 * j.facing)), b: add(j.foot[i], v(0, 0, 0.6 * j.facing)), w: 0.45, t: 0.24, stuff: "shoe", side: v(1, 0, 0) },
     );
   });
+  // (the coffee, upright in the right hand)
+  if (doing === "cafe" || doing === "sip") {
+    const h = j.hand[1];
+    bones.push({ name: "cup", a: add(h, v(0.05, -0.05, -0.1)), b: add(h, v(0.05, 0.45, -0.1)), w: 0.36, t: 0.36, stuff: "cup", side: v(1, 0, 0) });
+  }
   return bones;
 }
 
@@ -117,4 +137,4 @@ export function boneFaces(b: Bone): Face[] {
 }
 
 /** a pose's faces, back to front (a bone's faces never cross one another: they keep their order) */
-export const figureFaces = (doing: Doing): Face[] => figureBones(doing).flatMap(boneFaces).sort((a, b) => a.depth - b.depth);
+export const figureFaces = (doing: Doing, yaw = 0): Face[] => figureBones(doing, yaw).flatMap(boneFaces).sort((a, b) => a.depth - b.depth);

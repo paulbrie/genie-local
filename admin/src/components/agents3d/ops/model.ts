@@ -54,6 +54,8 @@ export type OpsAgent = {
   acts?: OpsAct[];
   /** the team's manager (T204e): its recipe's manager role, else the one named Alice; sits in a row of its own */
   manager?: boolean;
+  /** away from its desk, at the cafeteria's table (T210): idle or napping, nothing done for AWAY_MS; not waiting, not the manager */
+  away?: boolean;
 };
 export type OpsBar = { key: string; id: string | null; title: string; state: TaskState; from: number; to: number | null };
 /** a curve from an agent's computer to a file (T201): editing, reading (fading with age, 0..1 on STEP), or claimed */
@@ -83,12 +85,21 @@ export type OpsModel = {
 const RANK: Record<LitKind, number> = { read: 0, edit: 1, held: 2, clash: 3 };
 
 /** the Ops view's model at the snapshot's time (named agents only, as the Table seats them) */
+/** an idle agent goes for a coffee once it has done nothing for this long (T210) */
+export const AWAY_MS = 2 * 60_000;
+
 /** the lines an agent's screen shows: its last this many actions (T204g) */
 export const SCREEN_N = 6;
 
 /** an agent's last SCREEN_N actions up to `t` (oldest first), from the comms model's (live: its last 12) */
 export function actsOf(acts: { kind: OpsAct["kind"]; at: string; len: number }[] | undefined, t: number): OpsAct[] {
   return (acts ?? []).map((x) => ({ kind: x.kind, len: x.len, ms: Date.parse(x.at) })).filter((x) => x.ms <= t + STEP).slice(-SCREEN_N);
+}
+
+/** an agent's last tool call at or before `t` (ms; −∞ for none), counted on STEP so it's steady between ticks */
+function lastEventAt(events: { ms: number }[], t: number): number {
+  for (let i = events.length - 1; i >= 0; i--) if (events[i].ms <= t) return Math.floor(events[i].ms / STEP) * STEP;
+  return -Infinity;
 }
 
 /** an agent's desk moves to a new repo's city only once it has worked there this long (T204c) */
@@ -181,6 +192,7 @@ export function opsModel(
       spark,
       bubble: bubbleOf(steps?.[a.key], t),
       city: cityOf(touchesOf(a), t, a.repo),
+      away: (d.doing === "idle" || d.doing === "nap") && t - lastEventAt(a.events, snap.t) >= AWAY_MS,
       acts: actsOf(acts?.[a.key], t),
     });
   }
@@ -218,7 +230,7 @@ export function opsModel(
     .map((m) => ({ id: m.id, from: m.from, to: m.to, tag: m.tag, color: m.color, label: m.label, ms: m.ms, fade: Math.round((1 - Math.max(0, t - m.ms) / MSG_MS) * 9) / 9 }));
   // (the manager: by the recipe's role, else by name)
   const boss = tl.agents.find((a) => !a.node.guest && a.role === "manager")?.key ?? agents.find((a) => /^alice$/i.test(a.name))?.key;
-  for (const a of agents) if (a.key === boss) a.manager = true;
+  for (const a of agents) if (a.key === boss) { a.manager = true; a.away = false; }
   const named = new Set(agents.map((a) => a.key));
   // (each repo's newest BELT_N: counted from the newest back)
   const perRepo = new Map<string | null, number>();

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
-import { boneFaces, facing, figureBones, figureFaces, type Doing } from "./figure";
+import { boneFaces, facing, figureBones, figureFaces, forward, type Doing } from "./figure";
 
 const POSES: Doing[] = ["type", "read", "run", "think", "wait", "idle", "nap"];
 const bone = (d: Doing, name: string) => figureBones(d).find((b) => b.name === name)!;
@@ -54,5 +54,14 @@ describe("the seated agent in isometric boxes (T202)", () => {
       const all = figureFaces(d);
       for (let i = 1; i < all.length; i++) assert.ok(all[i].depth >= all[i - 1].depth);
     }
+  });
+  it("the cafeteria's poses (T210): a cup in the right hand, at the mouth when sipping; turned by yaw, the same figure", () => {
+    const cup = (d: Doing) => figureBones(d).find((b) => b.name === "cup")!;
+    assert.ok(cup("cafe") && cup("sip"));
+    assert.ok(cup("sip").a.h > bone("sip", "head").a.h - 0.4, "lifted to the mouth");
+    assert.ok(!figureBones("type").some((b) => b.name === "cup"));
+    const a = figureBones("cafe", Math.PI), b = figureBones("cafe");
+    a.forEach((x, i) => { assert.ok(Math.abs(x.a.x + b[i].a.x) < 1e-9 && Math.abs(x.a.z + b[i].a.z) < 1e-9 && x.a.h === b[i].a.h, x.name); });
+    assert.deepEqual([Math.round(forward("cafe", Math.PI).z), Math.round(forward("cafe").z)], [1, -1]);
   });
 });

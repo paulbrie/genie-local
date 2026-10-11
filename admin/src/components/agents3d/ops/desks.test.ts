@@ -86,4 +86,17 @@ describe("the commits' belts (T201, T204)", () => {
     for (let i = 1; i < xs.length; i++) assert.ok(xs[i] - xs[i - 1] >= slot - 1e-9);
     assert.ok(xs[0] >= b.x0 + half - 1e-9 && xs[xs.length - 1] <= b.x1 - half + 1e-9);
   });
+  it("the cafeteria (T210): a table near the front, in front of every desk; away agents round it facing it, the first on its far side; their desks kept", () => {
+    const team = [{ key: "Tom", city: "/r/admin" }, { key: "Bob", city: "/r/trafficsim" }, { key: "Max", city: null }, { key: "Eve", city: "/elsewhere" }];
+    const d = deskSpots(cities, [...team.map((t) => ({ ...t, away: t.key === "Tom" || t.key === "Bob" })), { key: "Alice", city: null, manager: true, away: true }], line.wu, 0);
+    assert.ok(team.every((t) => d.cafe.z - d.cafe.r - 2.5 * line.wu > d.seats.get(t.key)!.z), "in front of every agent's desk, chairs and all");
+    assert.ok(Math.abs(d.cafe.x - d.seats.get("Alice")!.x) > d.cafe.r + 7 * line.wu, "clear of the manager's desk");
+    assert.deepEqual([...d.cafeSeats.keys()], ["Tom", "Bob"], "the manager stays at its desk");
+    for (const s of d.cafeSeats.values()) {
+      const toTable = { x: d.cafe.x - s.x, z: d.cafe.z - s.z }, fwd = { x: -Math.sin(s.yaw), z: -Math.cos(s.yaw) };
+      assert.ok((toTable.x * fwd.x + toTable.z * fwd.z) / Math.hypot(toTable.x, toTable.z) > 0.999, "facing the table");
+    }
+    assert.ok(Math.min(...[...d.cafeSeats.values()].map((s) => s.z)) < d.cafe.z, "on the far side, faces to the viewer");
+    assert.ok(d.seats.has("Tom") && d.seats.has("Bob"), "their desks stay");
+  });
 });

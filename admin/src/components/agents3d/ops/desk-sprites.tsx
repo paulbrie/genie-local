@@ -1,7 +1,8 @@
 "use client";
 
 import { deskParts, L, local, pts } from "./desks";
-import { facing, figureBones, figureFaces, type Face, type V3 } from "./figure";
+import { CAFE_R } from "./desks";
+import { figureBones, figureFaces, forward, type Doing, type Face, type V3 } from "./figure";
 import type { P2 } from "./iso";
 import type { OpsAct, OpsAgent, OpsLink } from "./model";
 
@@ -22,10 +23,11 @@ const shade = (hex: string, k: number) => {
   return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`;
 };
 /** a face's colour: what its bone is made of, lit as the blocks are; the head's hair but where the face or an ear shows */
-function faceFill(f: Face, color: string, faceOut: boolean) {
-  const [base, k] = f.bone.stuff === "shirt" ? [color, 1] : f.bone.stuff === "pants" ? [color, 0.55] : f.bone.stuff === "skin" ? [SKIN, 1] : f.bone.stuff === "shoe" ? [SHOE, 1] : [HAIR, 1];
-  // (the head's side towards +x: the cheek and ear; towards +z: the face when turned to the viewer, else the back of the head)
-  const skin = f.bone.name === "head" && f.normal.h < 0.7 && (Math.abs(f.normal.x) > Math.abs(f.normal.z) || faceOut);
+function faceFill(f: Face, color: string, fwd: V3) {
+  const [base, k] = f.bone.stuff === "shirt" ? [color, 1] : f.bone.stuff === "pants" ? [color, 0.55] : f.bone.stuff === "skin" ? [SKIN, 1]
+    : f.bone.stuff === "shoe" ? [SHOE, 1] : f.bone.stuff === "cup" ? ["#f8fafc", 1] : [HAIR, 1];
+  // (the head: hair on top and at the back; skin where it looks (the face) and at its sides (the cheeks and ears))
+  const skin = f.bone.name === "head" && f.normal.h < 0.7 && f.normal.x * fwd.x + f.normal.z * fwd.z > -0.7;
   return shade(skin ? SKIN : base, k * f.shade);
 }
 
@@ -58,11 +60,15 @@ export function DeskStyles() {
       @keyframes ops-pulse { from { stroke-dashoffset: 14 } to { stroke-dashoffset: -100 } }
       .ops-pulse { stroke-dasharray: 14 100; stroke-dashoffset: 14; animation: ops-pulse .9s ease-out 1 forwards; }
       .ops-pkg, .ops-seat { transition: transform .9s cubic-bezier(.2,.7,.3,1); }
+      @keyframes ops-arrive { from { transform: translate(var(--from-x, 0), var(--from-y, 0)) } to { transform: none } }
+      .ops-arrive { animation: ops-arrive .9s cubic-bezier(.2,.7,.3,1) 1; }
+      @keyframes ops-steam { 0% { opacity: 0; transform: translateY(0) } 30% { opacity: .7 } 100% { opacity: 0; transform: translateY(-6px) } }
+      .ops-steam circle { opacity: 0; animation: ops-steam 1.4s ease-out 3; }
       .ops-desk :is(polygon, ellipse, circle, line, rect, path) { vector-effect: non-scaling-stroke; }
       @keyframes ops-scroll { from { transform: translateY(var(--line, 3px)) } to { transform: none } }
       .ops-scroll { animation: ops-scroll .28s ease-out 1; }
-      @media (prefers-reduced-motion: reduce) { .ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll { animation: none } .ops-pkg, .ops-seat { transition: none } }
-      [data-low-power] :is(.ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll) { animation: none }
+      @media (prefers-reduced-motion: reduce) { .ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll, .ops-arrive, .ops-steam circle { animation: none } .ops-pkg, .ops-seat { transition: none } }
+      [data-low-power] :is(.ops-pulse, .ops-tap-l, .ops-tap-r, .ops-scroll, .ops-arrive, .ops-steam circle) { animation: none }
       [data-low-power] :is(.ops-pkg, .ops-seat) { transition: none }
     `}</style>
   );
@@ -98,10 +104,16 @@ export function Curve({ l, from, to, color, dim, u }: { l: OpsLink; from: P2; to
  * the desk, the computer and the seated agent, drawn round its seat (the origin; the caller's group puts it on the map
  * and glides it when it moves, T204c) at scale `u` (the caller's units a desk unit's L pixels at full size)
  */
-export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; selected: boolean; onClick: () => void }) {
+export function Desk({ a, u, selected, onClick, empty, arrive }: {
+  a: OpsAgent; u: number; selected: boolean; onClick: () => void;
+  /** its agent at the cafeteria (T210): the desk empty, the screen off, the stool pushed in */
+  empty?: boolean;
+  /** back from the cafeteria: the figure glides in once from there (this group's units) */
+  arrive?: P2 | null;
+}) {
   const d = deskParts(u);
   const busy = a.doing === "type" || a.doing === "read" || a.doing === "run" || a.doing === "think";
-  const off = a.doing === "nap", idle = a.doing === "idle" || off;
+  const off = a.doing === "nap" || !!empty, idle = a.doing === "idle" || off;
   const screen = off ? "#0f141c" : a.doing === "run" ? "#0b1410" : a.doing === "read" ? "#123448" : busy ? "#1d2a3f" : "#151b26";
   // (the screen's log, T204g: a bar a line for each of its last actions, newest at the bottom, on the screen's face)
   const acts = a.acts ?? [];
@@ -111,15 +123,6 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
   };
   // (a bash line: a bright prompt, then the command)
   const bar = (row: number, w: number) => barFrom(row, 0, w);
-  // (the agent: boxes along its bones, back to front, in the pose of what it does (figure.ts); the head's middle top
-  // for the bubbles and badges)
-  // (editing or running a command, T204d: the typing pose, the hands tapping the keys for as long as the step goes on
-  // (busy), alternating, about 5 taps a second; CSS, which a hidden tab doesn't run; still under reduced motion)
-  const pose = a.doing === "run" ? "type" : a.doing, tapping = pose === "type" && a.busy;
-  const faces = figureFaces(pose), faceOut = facing(pose) > 0;
-  const headBone = figureBones(pose).find((b) => b.name === "head")!;
-  const P = (p: V3) => local(p.x, p.z, p.h, u);
-  const head = P({ x: headBone.b.x, h: headBone.b.h - 0.2, z: headBone.b.z });
   const S = (v: number) => v * u * 1.45;
   return (
     <g className="ops-desk pointer-events-auto cursor-pointer" opacity={idle ? 0.6 : 1}
@@ -157,24 +160,51 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
           })}
         </g>
       )}
-      {/* the stool */}
-      <polygon points={pts([local(-0.8, -0.4, 1.3, u), local(0.8, -0.4, 1.3, u), local(0.8, 1.0, 1.3, u), local(-0.8, 1.0, 1.3, u)])} fill="#1f2633" stroke={INK} strokeWidth={0.6} />
+      {/* the stool (pushed in under the desk while its agent is away) */}
+      {(() => { const z = empty ? -1.3 : 0; return <polygon points={pts([local(-0.8, z - 0.4, 1.3, u), local(0.8, z - 0.4, 1.3, u), local(0.8, z + 1.0, 1.3, u), local(-0.8, z + 1.0, 1.3, u)])} fill="#1f2633" stroke={INK} strokeWidth={0.6} />; })()}
       {/* the mouse, by the keyboard */}
       <polygon points={pts([local(1.05, -2.05, 2.62, u), local(1.45, -2.05, 2.62, u), local(1.45, -1.75, 2.62, u), local(1.05, -1.75, 2.62, u)])} fill="#1f2633" stroke={INK} strokeWidth={0.5} />
-      {/* the agent, in isometric boxes (T202): back to front; typing, the hands tap while the step goes on (T204d) */}
+      {!empty && <Figure a={a} u={u} pose={a.doing === "run" ? "type" : a.doing} arrive={arrive} />}
+    </g>
+  );
+}
+
+/**
+ * An agent in isometric boxes (T202), in `pose`, turned by `yaw` about its seat (the origin): back to front; typing, the
+ * hands tap while the step goes on (T204d); its badges (thinking, waiting, asleep). `arrive`: it glides in once from
+ * there (T210: to the cafeteria, or back to its desk), none under reduced motion or Low power; `steam`: three puffs
+ * over its cup as it sits down.
+ */
+export function Figure({ a, u, pose, yaw = 0, arrive, steam }: { a: OpsAgent; u: number; pose: Doing; yaw?: number; arrive?: P2 | null; steam?: boolean }) {
+  // (editing or running a command, T204d: the hands tap the keys for as long as the step goes on (busy), alternating,
+  // about 5 taps a second; CSS, which a hidden tab doesn't run; still under reduced motion and Low power)
+  const tapping = pose === "type" && a.busy;
+  const bones = figureBones(pose, yaw), faces = figureFaces(pose, yaw), fwd = forward(pose, yaw), faceOut = fwd.x + fwd.z > 0.2;
+  const headBone = bones.find((b) => b.name === "head")!;
+  const P = (p: V3) => local(p.x, p.z, p.h, u);
+  const head = P({ x: headBone.b.x, h: headBone.b.h - 0.2, z: headBone.b.z });
+  const S = (v: number) => v * u * 1.45;
+  const cup = steam ? bones.find((b) => b.name === "cup") : undefined;
+  return (
+    <g className={arrive ? "ops-arrive" : undefined} style={arrive ? ({ "--from-x": `${arrive.x.toFixed(2)}px`, "--from-y": `${arrive.y.toFixed(2)}px` } as React.CSSProperties) : undefined}>
       {faces.map((f, i) => {
         const hand = tapping && f.bone.name.startsWith("hand") ? (f.bone.name.endsWith("-l") ? "ops-tap-l" : "ops-tap-r") : undefined;
         return (
-          <polygon key={`${f.bone.name}${i}`} points={pts(f.pts.map(P))} fill={faceFill(f, a.color, faceOut)} stroke={INK} strokeWidth={0.5} strokeLinejoin="round"
+          <polygon key={`${f.bone.name}${i}`} points={pts(f.pts.map(P))} fill={faceFill(f, a.color, fwd)} stroke={INK} strokeWidth={0.5} strokeLinejoin="round"
             className={hand} style={hand ? ({ "--tap": `${(1.3 * u).toFixed(2)}px` } as React.CSSProperties) : undefined} />
         );
       })}
       {faceOut && (() => {
-        // (turned to the viewer: eyes on the face towards +z)
-        const e = (dx: number) => P({ x: headBone.b.x + dx, h: headBone.b.h - 0.45, z: headBone.b.z + 0.56 });
-        return <g fill={INK}><circle cx={e(-0.22).x} cy={e(-0.22).y} r={Math.max(0.8, 0.9 * u)} /><circle cx={e(0.22).x} cy={e(0.22).y} r={Math.max(0.8, 0.9 * u)} /></g>;
+        // (looking towards the viewer: eyes on its face)
+        const c = { x: headBone.b.x + fwd.x * 0.56, h: headBone.b.h - 0.45, z: headBone.b.z + fwd.z * 0.56 };
+        const e = (k: number) => P({ x: c.x + k * 0.22 * -fwd.z, h: c.h, z: c.z + k * 0.22 * fwd.x });
+        return <g fill={INK}><circle cx={e(-1).x} cy={e(-1).y} r={Math.max(0.8, 0.9 * u)} /><circle cx={e(1).x} cy={e(1).y} r={Math.max(0.8, 0.9 * u)} /></g>;
       })()}
-      {a.doing === "think" && (
+      {cup && (() => {
+        const top = P(cup.b);
+        return <g className="ops-steam" fill="#e2e8f0">{[0, 1, 2].map((i) => <circle key={i} cx={top.x + S(i - 1) * 0.8} cy={top.y - S(2)} r={S(1.1)} style={{ animationDelay: `${i * 0.35}s` }} />)}</g>;
+      })()}
+      {pose === "think" && (
         <g fill="#e2e8f0" opacity={0.9}>
           <circle cx={head.x + S(6)} cy={head.y - S(6)} r={S(1.3)} />
           <circle cx={head.x + S(9)} cy={head.y - S(10)} r={S(1.8)} />
@@ -182,13 +212,30 @@ export function Desk({ a, u, selected, onClick }: { a: OpsAgent; u: number; sele
           <text x={head.x + S(15)} y={head.y - S(14.5)} textAnchor="middle" fill={INK} fontSize={S(8)} fontWeight={700}>…</text>
         </g>
       )}
-      {a.doing === "wait" && (
+      {pose === "wait" && (
         <g transform={`translate(${head.x + S(9)},${head.y - S(9)})`}>
           <circle r={S(6.5)} fill="#f59e0b" stroke={INK} strokeWidth={1} />
           <text y={S(3.5)} textAnchor="middle" fill="#000" fontSize={S(10)} fontWeight={700}>{a.waitFor === "permission" ? "!" : "?"}</text>
         </g>
       )}
-      {off && <text x={head.x + S(6)} y={head.y - S(6)} fill="#cbd5e1" fontSize={S(9)}>z</text>}
+      {pose === "nap" && <text x={head.x + S(6)} y={head.y - S(6)} fill="#cbd5e1" fontSize={S(9)}>z</text>}
+    </g>
+  );
+}
+
+/** the cafeteria's round table (T210), its middle at the origin: a pedestal and a top a desk high; `u` as Desk's */
+export function CafeTable({ u }: { u: number }) {
+  const r = CAFE_R;
+  const ring = (h: number, rr: number) => Array.from({ length: 28 }, (_, i) => { const t = (i / 28) * Math.PI * 2; return local(rr * Math.cos(t), rr * Math.sin(t), h, u); });
+  const top = ring(2.6, r), under = ring(2.4, r);
+  // (the rim: the near half of the top's edge, down to the underside)
+  const rim = [...top.slice(0, 15), ...under.slice(0, 15).reverse()];
+  return (
+    <g className="ops-desk">
+      <polygon points={pts(ring(0, r * 1.05))} fill="#000" opacity={0.3} />
+      <polygon points={pts([local(-0.3, 0.3, 0, u), local(0.3, 0.3, 0, u), local(0.3, 0.3, 2.4, u), local(-0.3, 0.3, 2.4, u)])} fill="#2a3242" stroke={INK} strokeWidth={0.6} />
+      <polygon points={pts(rim)} fill="#5b4636" stroke={INK} strokeWidth={0.6} />
+      <polygon points={pts(top)} fill="#8a6a4f" stroke={INK} strokeWidth={0.6} />
     </g>
   );
 }

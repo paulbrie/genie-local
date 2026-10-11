@@ -102,4 +102,9 @@ describe("opsModel (T163)", () => {
     assert.deepEqual(m.agents.map((a) => [a.key, !!a.manager]), [["Bob", false], ["Alice", true]]);
     assert.deepEqual(m.msgs.map((x) => [x.id, x.fade]), [["m2", Math.round(0.5 * 9) / 9], ["m1", 1]]);
   });
+  it("away at the cafeteria (T210): idle and nothing done for 2 min; not with a recent step, not the manager", () => {
+    const t = tl([agent("Bob", [[5 * 60_000, "Edit", "a.ts"]]), agent("Ann", [[20_000, "Edit", "a.ts"]]), agent("Alice", [[10 * 60_000, "Read", "b.ts"]])]);
+    const m = opsModel(t, snapshotAt(t, T, false)), by = (k: string) => m.agents.find((a) => a.key === k)!;
+    assert.deepEqual([by("Bob").away, by("Ann").away, by("Alice").away], [true, false, false]);
+  });
 });
