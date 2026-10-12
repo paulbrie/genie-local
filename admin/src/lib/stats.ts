@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import { cpus } from "node:os";
 import { promisify } from "node:util";
 
-import { NET_SAMPLES, parseNetDev, parseSs, publicIface, rateOf, type IfaceBytes, type NetSample, type NetStats, type PublicPort } from "@/lib/net-stats";
+import { NET_SAMPLES, parseDockerPs, parseNetDev, parseNginxListens, parseSs, parseSystemdSockets, publicIface, rateOf, type IfaceBytes, type NetSample, type NetStats, type PortHints, type PublicPort } from "@/lib/net-stats";
 import { coreBusyPercent, parseProcStat, type CoreTimes } from "@/lib/proc-stat";
 
 const execFileP = promisify(execFile);
@@ -153,7 +153,32 @@ async function readNet(): Promise<NetStats | null> {
   return lastNet;
 }
 
-/** The public ports, from `ss` (a fixed argv, no shell), kept PORTS_TTL_MS. */
+/** a command's output (a fixed argv, no shell, a timeout); "" if it fails */
+const run = (cmd: string, args: string[]) =>
+  execFileP(cmd, args, { timeout: 3000, maxBuffer: 1024 * 1024 }).then((r) => r.stdout, () => "");
+
+/** nginx's sites as nginx.conf includes them (conf.d/*.conf, sites-enabled/*): only their `listen` lines are read */
+async function nginxSites(): Promise<{ name: string; text: string }[]> {
+  const dirs = [{ dir: "/etc/nginx/conf.d", only: /\.conf$/ }, { dir: "/etc/nginx/sites-enabled", only: /^[^.]/ }];
+  const lists = await Promise.all(dirs.map(({ dir, only }) => fs.readdir(dir).then((ns) => ns.filter((n) => only.test(n)).map((n) => ({ dir, n })), () => [])));
+  const files = await Promise.all(lists.flat().map(({ dir, n }) => fs.readFile(`${dir}/${n}`, "utf8").then((text) => ({ name: n, text }), () => null)));
+  return files.filter((f) => f !== null);
+}
+
+/**
+ * What names each port without root (T218): docker's published ports (names, images and ports only: never `inspect`,
+ * nothing of a container's env), systemd's socket units, nginx's sites' `listen` lines.
+ */
+async function readPortHints(): Promise<PortHints> {
+  const [docker, systemd, nginx] = await Promise.all([
+    run("/usr/bin/docker", ["ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Ports}}"]),
+    run("/usr/bin/systemctl", ["list-sockets", "--all", "--show-types", "--no-legend", "--no-pager", "--full"]),
+    nginxSites(),
+  ]);
+  return { docker: parseDockerPs(docker), systemd: parseSystemdSockets(systemd), nginx: parseNginxListens(nginx) };
+}
+
+/** The public ports, from `ss` (a fixed argv, no shell) and what names them, kept PORTS_TTL_MS. */
 const PORTS_TTL_MS = 5000;
 let lastPorts: { at: number; ports: PublicPort[] | null } | null = null;
 
@@ -162,8 +187,8 @@ async function readPorts(): Promise<PublicPort[] | null> {
   if (lastPorts && now - lastPorts.at < PORTS_TTL_MS) return lastPorts.ports;
   let ports: PublicPort[] | null;
   try {
-    const { stdout } = await execFileP("/usr/bin/ss", ["-tulnpH"], { timeout: 3000, maxBuffer: 1024 * 1024 });
-    ports = parseSs(stdout);
+    const [{ stdout }, hints] = await Promise.all([execFileP("/usr/bin/ss", ["-tulnpH"], { timeout: 3000, maxBuffer: 1024 * 1024 }), readPortHints()]);
+    ports = parseSs(stdout, hints);
   } catch {
     ports = null;
   }

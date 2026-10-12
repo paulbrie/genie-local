@@ -22,13 +22,26 @@ export type NetStats = {
 export type PublicPort = {
   port: number;
   proto: "tcp" | "udp";
-  /** a well-known name ("ssh", "http", …), else the process's name when it is readable without root, else "" */
+  /** a well-known name ("ssh", "http", …), else the process's name when it is readable without root, else the tech's, else "" */
   service: string;
   /** the listening process's name, null when it isn't readable (another user's process) */
   process: string | null;
   /** the addresses it listens on ("0.0.0.0", "::", "*", or an interface's own address) */
   addrs: string[];
+  /** what serves it, told without root (T218); null when nothing names it */
+  tech: PortTech | null;
 };
+
+/**
+ * What serves a port (T218): `name` the technology ("nginx", "postgres", "ssh", "next", …), `via` how it was told,
+ * the most specific first: a docker container's published port (its image), the listening process (ours only), a
+ * systemd socket unit, an nginx site's `listen`, else the well-known port. `detail`: the container and image, the
+ * unit, or the nginx sites.
+ */
+export type PortTech = { name: string; via: "docker" | "process" | "systemd" | "nginx" | "port"; detail?: string };
+
+/** each source's names by "proto:port" ("tcp:5544") */
+export type PortHints = { docker?: Map<string, PortTech>; systemd?: Map<string, PortTech>; nginx?: Map<string, PortTech> };
 
 export const NET_SAMPLES = 60;
 
@@ -91,11 +104,67 @@ function isLoopback(addr: string): boolean {
   return /%lo$/.test(a) || /^127\./.test(a) || a === "::1" || /^::ffff:127\./i.test(a);
 }
 
+const portOf = (addr: string) => /:(\d+)$/.exec(addr)?.[1] ?? (/^\d+$/.test(addr) ? addr : null);
+
+/** `systemctl list-sockets --all --show-types --no-legend --full`: the inet sockets' units ("tcp:22" → ssh, via ssh.socket) */
+export function parseSystemdSockets(text: string): Map<string, PortTech> {
+  const out = new Map<string, PortTech>();
+  for (const line of text.split("\n")) {
+    const [listen, type, unit] = line.trim().split(/\s+/);
+    const port = listen && /^(?:\[[^\]]*\]|[\d.*]+):\d+$/.test(listen) ? portOf(listen) : null;
+    const proto = type === "Stream" ? "tcp" : type === "Datagram" ? "udp" : null;
+    if (!port || !proto || !unit?.endsWith(".socket")) continue;
+    out.set(`${proto}:${port}`, { name: unit.replace(/\.socket$/, "").replace(/@.*$/, ""), via: "systemd", detail: unit });
+  }
+  return out;
+}
+
+/** an image's own name: "ghcr.io/remsky/kokoro-fastapi-cpu:latest" → "kokoro-fastapi-cpu", "postgres:16-alpine" → "postgres" */
+const imageName = (image: string) => image.replace(/@.*$/, "").split("/").pop()!.replace(/:[^:]*$/, "");
+
+/**
+ * `docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}'` (names, images and ports only): each published host port
+ * ("0.0.0.0:5544->5432/tcp") named by its container's image.
+ */
+export function parseDockerPs(text: string): Map<string, PortTech> {
+  const out = new Map<string, PortTech>();
+  for (const line of text.split("\n")) {
+    const [container, image, ports] = line.split("\t");
+    if (!container || !image || !ports) continue;
+    for (const p of ports.split(/,\s*/)) {
+      const m = /:(\d+)(?:-(\d+))?->[\d-]+\/(tcp|udp)$/.exec(p.trim());
+      if (!m) continue;
+      const from = Number(m[1]), to = Math.min(Number(m[2] ?? m[1]), from + 100);
+      for (let n = from; n <= to; n++) out.set(`${m[3]}:${n}`, { name: imageName(image), via: "docker", detail: `${container} · ${image}` });
+    }
+  }
+  return out;
+}
+
+/** nginx's sites (each file's name and text): the ports their `listen` lines take, named nginx, the sites as the detail */
+export function parseNginxListens(files: { name: string; text: string }[]): Map<string, PortTech> {
+  const sites = new Map<string, string[]>();
+  for (const f of files)
+    for (const raw of f.text.split("\n")) {
+      const m = /^\s*listen\s+([^\s;]+)([^;]*);/.exec(raw.replace(/#.*$/, ""));
+      const port = m && portOf(m[1]);
+      if (!port) continue;
+      const key = `${/\bquic\b/.test(m[2]) ? "udp" : "tcp"}:${port}`;
+      const names = sites.get(key) ?? [];
+      if (!names.includes(f.name)) names.push(f.name);
+      sites.set(key, names);
+    }
+  return new Map([...sites].map(([k, names]) => [k, { name: "nginx", via: "nginx", detail: names.join(", ") }]));
+}
+
+/** a process's name as a technology: "next-server (v1" (cut by the kernel) → "next" */
+const processTech = (proc: string) => (/^next-server/.test(proc) ? "next" : proc.toLowerCase());
+
 /**
  * The ports listening on a non-loopback address, from `ss -tulnpH`: one entry per port and protocol (IPv4 and
- * IPv6 merged), by port. Loopback-only ports are left out.
+ * IPv6 merged), by port, each with what serves it (`hints`, T218). Loopback-only ports are left out.
  */
-export function parseSs(text: string): PublicPort[] {
+export function parseSs(text: string, hints: PortHints = {}): PublicPort[] {
   const byKey = new Map<string, PublicPort>();
   for (const line of text.split("\n")) {
     const f = line.trim().split(/\s+/);
@@ -107,12 +176,21 @@ export function parseSs(text: string): PublicPort[] {
     // (a name is cut at 15 characters by the kernel: "next-server (v1" → "next-server")
     const proc = /users:\(\("([^"]+)"/.exec(line)?.[1].replace(/\s*\(.*$/, "") || null;
     const key = `${proto}:${port}`;
-    const e = byKey.get(key) ?? { port, proto, service: "", process: null, addrs: [] };
+    const e: PublicPort = byKey.get(key) ?? { port, proto, service: "", process: null, addrs: [], tech: null };
     const shown = addr.replace(/%.*$/, "");
     if (!e.addrs.includes(shown)) e.addrs.push(shown);
     e.process ??= proc;
     byKey.set(key, e);
   }
-  for (const e of byKey.values()) e.service = WELL_KNOWN[`${e.proto}:${e.port}`] ?? e.process ?? "";
+  for (const [key, e] of byKey) {
+    const known = WELL_KNOWN[key];
+    e.tech =
+      hints.docker?.get(key) ??
+      (e.process ? { name: processTech(e.process), via: "process" } : null) ??
+      hints.systemd?.get(key) ??
+      hints.nginx?.get(key) ??
+      (known ? { name: known, via: "port" } : null);
+    e.service = known ?? e.process ?? e.tech?.name ?? "";
+  }
   return [...byKey.values()].sort((a, b) => a.port - b.port || a.proto.localeCompare(b.proto));
 }
