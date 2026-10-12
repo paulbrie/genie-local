@@ -7,7 +7,7 @@ import type { NetStats, PublicPort } from "@/lib/net-stats";
 
 import { coreBarsFor, coreBarsKey, dialKey, dialsFor, EASE_MS, easedAt, LEVEL_COLORS, retarget, type CoreBar, type Dial, type Eased, type StatsReading } from "../desk/gauge-levels";
 import { iso, type P2 } from "./iso";
-import { blades, coreColor, formatRate, HOST, meters, netBoxOf, portLabel, pulseSeconds, sockets, type Rack } from "./server";
+import { blades, cablePoints, coreColor, formatRate, gates, HOST, meters, plateSizes, portLabel, pulseSeconds, readoutPx, type Gateway, type Rack } from "./server";
 
 type Fit = { k: number; ox: number; oy: number };
 const px = (f: Fit, p: P2): P2 => ({ x: f.ox + p.x * f.k, y: f.oy + p.y * f.k });
@@ -86,8 +86,10 @@ function useEased(targets: (number | null)[], el: React.RefObject<SVGGElement | 
  * amber, red), its side's three meters (CPU, MEM used with what's free, DISK) in the Table gauges' colours, the host
  * over it. Drawn under the cities (its svg is under their canvas), so it never covers a block or a label.
  */
-export function ServerRack({ rack, fit }: { rack: Rack; fit: Fit }) {
+export function ServerRack({ rack, gateway, fit, onPorts }: { rack: Rack; gateway: Gateway; fit: Fit; /** how many public ports there are (the gateway is sized to them) */ onPorts?: (n: number) => void }) {
   const { dials, cores, net, ports } = useStats();
+  const n = ports?.length ?? 0;
+  useEffect(() => { if (ports) onPorts?.(n); }, [n, ports, onPorts]);
   const ref = useRef<SVGGElement>(null);
   const v = useEased([...dials.map((d) => d.pct), ...cores.map((c) => c.pct)], ref);
   const P = (x: number, z: number, h: number) => px(fit, iso(x, z, h));
@@ -95,10 +97,12 @@ export function ServerRack({ rack, fit }: { rack: Rack; fit: Fit }) {
   const front = [P(r.x0, r.z1, r.h), P(r.x1, r.z1, r.h), P(r.x1, r.z1, 0), P(r.x0, r.z1, 0)];
   const side = [P(r.x1, r.z0, r.h), P(r.x1, r.z1, r.h), P(r.x1, r.z1, 0), P(r.x1, r.z0, 0)];
   const top = [P(r.x0, r.z0, r.h), P(r.x1, r.z0, r.h), P(r.x1, r.z1, r.h), P(r.x0, r.z1, r.h)];
-  const fs = Math.max(8, Math.min(12, r.wu * fit.k * 0.9));
+  const fs = readoutPx(r.wu, fit.k);
   const label = P((r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2, r.h + 1.4 * r.wu);
   return (
     <g ref={ref} className="pointer-events-none">
+      {/* the gateway first: it stands behind the rack (T214) */}
+      <GatewayView g={gateway} rack={r} fit={fit} net={net} ports={ports} fs={fs} />
       <polygon points={pts(front)} fill="#1a2130" stroke={INK} strokeWidth={0.8} />
       <polygon points={pts(side)} fill="#141a26" stroke={INK} strokeWidth={0.8} />
       <polygon points={pts(top)} fill="#2a3446" stroke={INK} strokeWidth={0.8} />
@@ -122,7 +126,6 @@ export function ServerRack({ rack, fit }: { rack: Rack; fit: Fit }) {
         );
       })}
       <text x={label.x} y={label.y} textAnchor="middle" fill="#e2e8f0" fontSize={fs + 1} fontWeight={600} style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>{HOST}</text>
-      <NetBoxView rack={r} fit={fit} net={net} ports={ports} fs={fs} />
     </g>
   );
 }
@@ -130,50 +133,60 @@ export function ServerRack({ rack, fit }: { rack: Rack; fit: Fit }) {
 const IN = "#22c55e", OUT = "#60a5fa";
 
 /**
- * The network box beside the rack (T209b): its public ports as lit sockets on its front, labelled ("22 ssh"); over it,
- * the bandwidth in and out and their last minutes as a sparkline; a cable to the rack along the ground, a pulse running
- * along it at each new reading, faster with more traffic (CSS, once a reading; none under reduced motion or Low power).
+ * The gateway (T214): a low wall set apart behind the rack, a gate a public port lit (TCP green, UDP violet), its
+ * number and service on a plate on the wall's face over the gate (drawn on that face, in iso); over its left end the
+ * bandwidth in and out and their last minutes; a cable along the ground to the rack, a pulse along it at each new
+ * reading, faster with more traffic (CSS, once a reading; none under reduced motion or Low power). Drawn before the
+ * rack: it stands behind it.
  */
-function NetBoxView({ rack, fit, net, ports, fs }: { rack: Rack; fit: Fit; net: NetStats | null; ports: PublicPort[] | null; fs: number }) {
-  const list = ports ?? [], b = netBoxOf(rack, list.length);
+function GatewayView({ g, rack, fit, net, ports, fs }: { g: Gateway; rack: Rack; fit: Fit; net: NetStats | null; ports: PublicPort[] | null; fs: number }) {
+  const list = ports ?? [], shown = gates(g, list.length), plate = plateSizes(g, fit.k);
+  // (more ports than the wall has gates for, until it is laid out again: the rest counted)
   const P = (x: number, z: number, h: number) => px(fit, iso(x, z, h));
-  const front = [P(b.x0, b.z1, b.h), P(b.x1, b.z1, b.h), P(b.x1, b.z1, 0), P(b.x0, b.z1, 0)];
-  const side = [P(b.x1, b.z0, b.h), P(b.x1, b.z1, b.h), P(b.x1, b.z1, 0), P(b.x1, b.z0, 0)];
-  const top = [P(b.x0, b.z0, b.h), P(b.x1, b.z0, b.h), P(b.x1, b.z1, b.h), P(b.x0, b.z1, b.h)];
-  // (the cable: from the box's side, along the ground, into the rack's front)
-  const zc = (b.z0 + b.z1) / 2, cable = [P(b.x1, zc, 0.4 * b.wu), P(rack.x0 - 0.8 * b.wu, zc, 0.4 * b.wu), P(rack.x0 + 0.5 * b.wu, rack.z1, 0.4 * b.wu)];
-  const path = `M${cable.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L")}`;
+  const front = [P(g.x0, g.z1, g.h), P(g.x1, g.z1, g.h), P(g.x1, g.z1, 0), P(g.x0, g.z1, 0)];
+  const side = [P(g.x1, g.z0, g.h), P(g.x1, g.z1, g.h), P(g.x1, g.z1, 0), P(g.x1, g.z0, 0)];
+  const top = [P(g.x0, g.z0, g.h), P(g.x1, g.z0, g.h), P(g.x1, g.z1, g.h), P(g.x0, g.z1, g.h)];
+  // (the cable: arching from the gateway's top over to the rack's, clear of its readouts)
+  const path = `M${cablePoints(g, rack).map((p) => px(fit, p)).map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L")}`;
   const rate = net ? net.inBps + net.outBps : 0, last = net?.history.length ? net.history[net.history.length - 1].t : 0;
-  // (the sparkline: the last minutes' in and out, each on its own scale (the rates give the sizes), 90 × 18 px, over
-  // the box's left end, clear of the host's name over the rack)
-  const hist = net?.history ?? [];
-  const max = (k: "inBps" | "outBps") => Math.max(1, ...hist.map((h) => h[k]));
-  const at = (() => { const p = P(b.x0, b.z1, b.h); return { x: p.x - 10, y: p.y - 16 }; })(), W = 90, H = 18;
-  const line = (k: "inBps" | "outBps") => hist.map((h, i) => `${(at.x - W / 2 + (i / Math.max(1, hist.length - 1)) * W).toFixed(1)},${(at.y - 6 - (h[k] / max(k)) * H).toFixed(1)}`).join(" ");
+  // (text on the wall's face: along it, x; up it, h; world units)
+  const C = Math.cos(Math.PI / 6), k = fit.k;
+  const onFace = (x: number, h: number) => { const p = P(x, g.z1, h); return `matrix(${(C * k).toFixed(4)} ${(0.5 * k).toFixed(4)} 0 ${k.toFixed(4)} ${p.x.toFixed(1)} ${p.y.toFixed(1)})`; };
+  // (the bandwidth over the left end: rates, and the last minutes, each on its own scale, 90 × 18 px)
+  const hist = net?.history ?? [], max = (key: "inBps" | "outBps") => Math.max(1, ...hist.map((h) => h[key]));
+  const tl = P(g.x0, g.z1, g.h), at = { x: tl.x + 45, y: tl.y - 10 }, W = 90, H = 18;
+  const line = (key: "inBps" | "outBps") => hist.map((h, i) => `${(at.x - W / 2 + (i / Math.max(1, hist.length - 1)) * W).toFixed(1)},${(at.y - (h[key] / max(key)) * H).toFixed(1)}`).join(" ");
   return (
     <g>
       <path d={path} fill="none" stroke="#334155" strokeWidth={3} strokeLinecap="round" />
       {net && last > 0 && <path key={last} d={path} pathLength={100} className="ops-pulse" fill="none" stroke={rate > 0 ? "#e2e8f0" : "#64748b"} strokeWidth={2.4} style={{ animationDuration: `${pulseSeconds(rate).toFixed(2)}s` }} />}
-      <polygon points={pts(front)} fill="#1a2130" stroke={INK} strokeWidth={0.8} />
-      <polygon points={pts(side)} fill="#141a26" stroke={INK} strokeWidth={0.8} />
       <polygon points={pts(top)} fill="#2a3446" stroke={INK} strokeWidth={0.8} />
-      {sockets(b, list.length).map((s, i) => {
-        const p = list[i], q = [P(s.x0, b.z1, s.h1), P(s.x1, b.z1, s.h1), P(s.x1, b.z1, s.h0), P(s.x0, b.z1, s.h0)], tag = P(b.x0, b.z1, (s.h0 + s.h1) / 2);
+      <polygon points={pts(side)} fill="#141a26" stroke={INK} strokeWidth={0.8} />
+      <polygon points={pts(front)} fill="#1a2130" stroke={INK} strokeWidth={0.8} />
+      {shown.map((s, i) => {
+        const p = list[i], lit = p.proto === "udp" ? "#a78bfa" : IN;
+        const gate = [P(s.x0, g.z1, s.h1), P(s.x1, g.z1, s.h1), P(s.x1, g.z1, s.h0), P(s.x0, g.z1, s.h0)];
+        const service = p.service.length > 11 ? `${p.service.slice(0, 10)}…` : p.service;
         return (
           <g key={`${p.port}/${p.proto}`}>
-            <polygon points={pts(q)} fill={p.proto === "udp" ? "#a78bfa" : IN} stroke={INK} strokeWidth={0.5} />
-            <text x={tag.x - 4} y={tag.y + fs * 0.35} textAnchor="end" fill="#cbd5e1" fontSize={fs - 1} fontFamily="ui-monospace, monospace" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>
-              {portLabel(p)}
-            </text>
+            <title>{`${portLabel(p)} · ${p.proto.toUpperCase()} · on ${p.addrs.join(", ")}${p.process ? ` · ${p.process}` : ""}`}</title>
+            <polygon points={pts(gate)} fill={lit} fillOpacity={0.22} stroke={lit} strokeWidth={1.2} />
+            {/* (the plate over the gate: the number, and the service under it) */}
+            <g transform={onFace(s.x0, g.h - 0.2 * g.wu)}>
+              <rect x={0} y={0} width={s.x1 - s.x0} height={plate.h} rx={0.2 * g.wu} fill={INK} fillOpacity={0.85} />
+              <text x={0.2 * g.wu} y={plate.num * 1.0} fill={lit} fontSize={plate.num} fontWeight={700} fontFamily="ui-monospace, monospace">{`${p.port}${p.proto === "udp" ? "/u" : ""}`}</text>
+              {service && plate.service && <text x={0.2 * g.wu} y={plate.num * 1.15 + plate.service} fill="#e2e8f0" fontSize={plate.service} fontFamily="ui-monospace, monospace">{service}</text>}
+            </g>
           </g>
         );
       })}
-      {ports === null && (() => { const t = P(b.x0, b.z1, b.h * 0.5); return <text x={t.x - 4} y={t.y} textAnchor="end" fill="#64748b" fontSize={fs - 1}>ports: no data</text>; })()}
-      {/* the bandwidth over the box: a sparkline plate and the rates */}
-      <rect x={at.x - W / 2 - 4} y={at.y - 6 - H - 3} width={W + 8} height={H + 6} rx={3} fill={INK} fillOpacity={0.75} />
+      {list.length > shown.length && (() => { const t = P(g.x1, g.z1, g.h * 0.5); return <text x={t.x + 6} y={t.y} fill="#94a3b8" fontSize={fs - 1}>+{list.length - shown.length} more</text>; })()}
+      {ports === null && (() => { const t = P(g.x0 + 1.5 * g.wu, g.z1, g.h * 0.45); return <text x={t.x} y={t.y} fill="#64748b" fontSize={fs - 1}>ports: no data</text>; })()}
+      {/* the bandwidth over the left end */}
+      <rect x={at.x - W / 2 - 4} y={at.y - H - 3} width={W + 8} height={H + 6} rx={3} fill={INK} fillOpacity={0.75} />
       {hist.length > 1 && <polyline points={line("inBps")} fill="none" stroke={IN} strokeWidth={1.2} />}
       {hist.length > 1 && <polyline points={line("outBps")} fill="none" stroke={OUT} strokeWidth={1.2} />}
-      <text x={at.x} y={at.y - 6 - H - 8} textAnchor="middle" fontSize={fs} fontFamily="ui-monospace, monospace" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>
+      <text x={at.x} y={at.y - H - 8} textAnchor="middle" fontSize={fs} fontFamily="ui-monospace, monospace" style={{ paintOrder: "stroke", stroke: INK, strokeWidth: 3 }}>
         <tspan fill={IN}>↓ {net ? formatRate(net.inBps) : "—"}</tspan><tspan fill={OUT}> ↑ {net ? formatRate(net.outBps) : "—"}</tspan>
       </text>
     </g>

@@ -8,7 +8,7 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
-import { rackOf, serverExtent } from "./server";
+import { placeGateway, rackOf, serverExtent, serverObstacles } from "./server";
 import { ServerRack } from "./server-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
 import { local as deskLocal } from "./desks";
@@ -403,7 +403,11 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const desks = useMemo(() => deskSpots(layout.cities, model.agents, line.wu, HEAD_TOP * line.wu + 59 / kEst), [layout.cities, seatKey, line, kEst]);
   // (our server beyond the belts, T209)
   const rack = useMemo(() => rackOf(layout.cities, line.belts, line.wu), [layout.cities, line]);
-  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent, ...serverExtent(rack)]), [map, line, desks, rack]);
+  // (the gateway for the public ports, clear of everything round the rack at the whole map's zoom: T214)
+  // (sized to the public ports: laid out again when their number changes, which is rare)
+  const [portCount, setPortCount] = useState(6);
+  const gateway = useMemo(() => placeGateway(rack, serverObstacles(rack, line.belts, layout.cities, kEst), kEst, portCount), [rack, line, layout.cities, kEst, portCount]);
+  const framed = useMemo(() => withExtent(map, [...line.extent, ...desks.extent, ...serverExtent(rack, gateway, kEst)]), [map, line, desks, rack, gateway, kEst]);
   const fit0 = useMemo(() => fitOf(framed, size.w, size.h, NAMES_H), [framed, size.w, size.h]);
   // the zoom and pan (T200): `view` is what the layers are drawn for; a gesture moves them by CSS only (`live`), and
   // when it ends the view is set, the layers drawn again and the labels picked again
@@ -689,7 +693,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
       {/* the commits' belts, one along each city's far side, under them (T204): the cities' ground hides what is behind it */}
       <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
-        <ServerRack rack={rack} fit={fit} />
+        <ServerRack rack={rack} gateway={gateway} fit={fit} onPorts={setPortCount} />
         <Belts line={line} fit={fit} commits={model.commits} agents={model.agents} />
       </svg>
       <canvas ref={base} className="absolute inset-0 size-full" aria-hidden />
