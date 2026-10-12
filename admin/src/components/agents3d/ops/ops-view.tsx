@@ -596,6 +596,8 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     return m;
   }, [layout]);
   const [hover, setHover] = useState<{ x: number; y: number; path: string; folder: IsoDistrict | null; block: IsoBlock | null } | null>(null);
+  // (the desk under the pointer: its agent's claimed curves shown, T230)
+  const [hoverDesk, setHoverDesk] = useState<string | null>(null);
   const toMap = (e: React.MouseEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -779,7 +781,8 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             const seat = desks.seats.get(a.key)!, p = iso(seat.x, seat.z), uu = (line.wu / L) * (a.manager ? MANAGER_SCALE : 1);
             const away = desks.cafeSeats.has(a.key), c = iso(desks.cafe.x, desks.cafe.z);
             return (
-              <g key={a.key} className="ops-seat" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}>
+              <g key={a.key} className="ops-seat" style={{ transform: `translate(${p.x.toFixed(3)}px, ${p.y.toFixed(3)}px)` }}
+                onMouseEnter={() => setHoverDesk(a.key)} onMouseLeave={() => setHoverDesk((h) => (h === a.key ? null : h))}>
                 <Desk a={a} u={uu} selected={selected === a.key} onClick={() => onAgentClick(a.key)} empty={away} arrive={settled ? { x: c.x - p.x, y: c.y - p.y } : null} />
                 <DeskName a={a} u={uu} k={fit.k} onClick={() => onAgentClick(a.key)} />
               </g>
@@ -809,8 +812,10 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
             return items.sort((x, y) => x.depth - y.depth).map((x) => x.el);
           })()}
         </g>
-        {/* each agent's curves: from its computer to the files it edits, reads or has claimed */}
+        {/* each agent's curves: from its computer to the files it edits or reads; a claim's only while its file, or its
+            holder's desk, is hovered, or its holder picked (T230) */}
         {model.links.map((l) => {
+          if (l.kind === "claim" && hover?.block?.key !== l.file && hoverDesk !== l.by && selected !== l.by) return null;
           const s = spots.get(l.by), to = blockPeak(l.file), a = byKey.get(l.by);
           if (!s?.at || !to || !a) return null;
           return <Curve key={`${l.by}\n${l.file}`} l={l} from={{ x: s.at.x + beamFrom.x, y: s.at.y + beamFrom.y }} to={to} color={a.color} dim={!!selected && selected !== l.by} u={u} />;
@@ -874,7 +879,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         <div className="flex flex-wrap justify-end gap-x-2">
           <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.edit }} />editing</span>
           <span><i className="mr-1 inline-block size-2 rounded-sm" style={{ background: KIND_COLORS.read }} />reading</span>
-          <span><svg className="mr-1 inline-block align-middle" width={14} height={4} aria-hidden><line x1={0} y1={2} x2={14} y2={2} stroke={KIND_COLORS.claim} strokeWidth={2} strokeDasharray="4 2" /></svg>claimed</span>
+          <span><svg className="mr-1 inline-block align-middle" width={14} height={4} aria-hidden><line x1={0} y1={2} x2={14} y2={2} stroke={KIND_COLORS.claim} strokeWidth={2} strokeDasharray="4 2" /></svg>claimed (hover a red file)</span>
           <span><i className="mr-1 inline-block size-2 rounded-sm border border-white" style={{ background: KIND_COLORS.claim }} />claimed twice</span>
         </div>
         <div className="flex flex-wrap justify-end gap-x-2">
