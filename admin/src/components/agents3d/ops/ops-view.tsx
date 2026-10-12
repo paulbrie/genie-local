@@ -713,7 +713,9 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       <div className="contents" onPointerDown={stop} onPointerUp={stop} onClick={stop} onDoubleClick={stop} onContextMenu={stop} onMouseMove={stop}>
         <FileMenu at={menu} onClose={() => setMenu(null)} />
       </div>
-      {/* the map's layers: moved together by CSS during a gesture (T200) */}
+      {/* the map's layers: moved together by CSS during a gesture (T200). Their order is the drawing order: the bubbles'
+          svg stays this div's last child, over everything on the map (T205e, T205f; ops-layers.test.ts checks it); a new
+          layer goes before it */}
       <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
       {/* the commits' belts, one along each city's far side, under them (T204): the cities' ground hides what is behind it */}
       <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
@@ -821,7 +823,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       {/* the agents' bubbles, their last thoughts, over everything on the map (T205, T205e): their own layer, kept the
           map layer's last, so nothing drawn on the map covers them; the zoom buttons, the legend and the hover cards are
           over them (z-10), the code windows over all */}
-      <svg className="absolute inset-0 size-full" width={size.w} height={size.h}>
+      <svg className="absolute inset-0 size-full" width={size.w} height={size.h} data-paused={!visible || undefined}>
         <Bubbles boxes={bubbles} color={(k) => byKey.get(k)?.color ?? "#94a3b8"} />
       </svg>
       </div>

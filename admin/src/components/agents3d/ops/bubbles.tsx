@@ -118,19 +118,42 @@ export function bubbleAt(boxes: BubbleBox[], p: P2): BubbleBox | null {
 /** near-black on the pale bubble: about 17:1, and older thoughts kept at 0.75 or more of it (still well past AA) */
 const INK = "#111827", PAPER = "#f8fafc";
 
+/** a thought's three puffs from the head up to its cloud: where along the way (0 the head, 1 the cloud) and how big */
+export const PUFFS = [
+  { t: 0.15, r: 1.4 },
+  { t: 0.45, r: 1.9 },
+  { t: 0.78, r: 2.5 },
+] as const;
+
+/**
+ * The puffs pulse in turn, head to cloud, as a typing indicator does (T205f): CSS only; paused while the tab is hidden
+ * (`data-paused` on the bubbles' layer), still under Low power and reduced motion.
+ */
+function PuffStyles() {
+  return (
+    <style>{`
+      @keyframes ops-puff { 0%, 60%, 100% { opacity: .45; transform: scale(1) } 30% { opacity: 1; transform: scale(1.3) } }
+      .ops-puff { transform-box: fill-box; transform-origin: center; animation: ops-puff 1.2s ease-in-out infinite; }
+      [data-paused] .ops-puff { animation-play-state: paused; }
+      [data-low-power] .ops-puff { animation: none; }
+      @media (prefers-reduced-motion: reduce) { .ops-puff { animation: none } }
+    `}</style>
+  );
+}
+
 export function Bubbles({ boxes, color }: { boxes: BubbleBox[]; color: (key: string) => string }) {
   return (
     <g className="pointer-events-none" aria-label="What the agents are thinking">
+      <PuffStyles />
       {boxes.map((b) => {
         const c = color(b.key), bottom = b.y + b.h, cx = Math.min(Math.max(b.head.x, b.x + 12), b.x + b.w - 12);
         return (
           <g key={b.key}>
             {/* (the tail: puffs for a thought, a point for speech) */}
             {b.thinking ? (
-              <>
-                <circle cx={(cx + b.head.x) / 2} cy={(bottom + b.head.y) / 2 + 1} r={3.5} fill={PAPER} stroke={c} strokeWidth={1.2} />
-                <circle cx={b.head.x} cy={b.head.y - 2} r={2} fill={PAPER} stroke={c} strokeWidth={1.2} />
-              </>
+              PUFFS.map((q, i) => (
+                <circle key={i} className="ops-puff" style={{ animationDelay: `${i * 0.2}s` }} cx={b.head.x + (cx - b.head.x) * q.t} cy={b.head.y - 2 + (bottom - b.head.y + 2) * q.t} r={q.r} fill={PAPER} stroke={c} strokeWidth={1.1} />
+              ))
             ) : (
               <path d={`M${cx - 6},${bottom - 1} L${b.head.x},${b.head.y - 2} L${cx + 6},${bottom - 1} Z`} fill={PAPER} stroke={c} strokeWidth={1.2} strokeLinejoin="round" />
             )}
