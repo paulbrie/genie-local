@@ -8,6 +8,8 @@ import { TASK_COLORS } from "@/lib/agents3d-timeline";
 import type { CityLayout } from "@/lib/city-layout";
 import { TAG_COLORS } from "@/lib/comms-colors";
 import { Belts } from "./belt-sprites";
+import { beltObstacles, capLifts, liftBlock, liftedBlockAt, liftsKey, liftsOf } from "./lift";
+import { LiftedBlocks } from "./lift-sprites";
 import { placeGateway, rackOf, serverExtent, serverObstacles } from "./server";
 import { ServerRack } from "./server-sprites";
 import { bubbleAt, Bubbles, estimate, HEAD_TOP, layoutBubbles, type Measure } from "./bubbles";
@@ -560,10 +562,22 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   // (a bubble under the pointer: its thoughts whole, T205d)
   const [thought, setThought] = useState<{ x: number; y: number; name: string; lines: string[] } | null>(null);
   const beamFrom = deskParts(u).beam;
+  // (files being worked on, lifted into the air, T216: by what decides them, so not new every tick)
+  // (each capped so it never rises among a belt's packages: T216)
+  const liftKey = liftsKey(liftsOf(model.links));
+  const lifts = useMemo(
+    () => capLifts(map, layout.index, liftsOf(model.links), beltObstacles(line.belts, line.wu, kEst), kEst),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liftKey, map, layout.index, line, kEst],
+  );
   const blockPeak = (file: string) => {
     const i = layout.index.get(file), m = i !== undefined ? map.order.get(i) : undefined;
-    return m !== undefined ? px(fit, map.blocks[m].peak) : null;
+    if (m === undefined) return null;
+    const b = map.blocks[m], l = lifts.get(file);
+    return px(fit, l ? liftBlock(b, l.h).peak : b.peak);
   };
+  /** the block under a point: a lifted one first (T216), else the city's */
+  const blockUnder = (p: P2) => liftedBlockAt(map, layout.index, lifts, p) ?? blockAt(map, p);
 
   // the neighbourhoods' (folders') names: the biggest first, where they fit, never overlapping (T192); once per layout and size
   const cityBoxes = useMemo(() => map.cities.map((c) => { const p = px(fit, c.at); return { x: p.x, y: p.y - 10, w: c.name.length * 8 + 8, h: 14 }; }), [map, fit]);
@@ -633,7 +647,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   const dragged = useRef(false);
   const onPointerDown = (e: React.PointerEvent) => {
     if ((e.target as Element).closest("button")) return;
-    if (e.button === 2 && blockAt(map, toMap(e).p)) return;
+    if (e.button === 2 && blockUnder(toMap(e).p)) return;
     if (e.button > 2) return;
     drag.current = { x: e.clientX, y: e.clientY, from: live.current ?? view, button: e.button, moved: false };
     dragged.current = false;
@@ -680,7 +694,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         setThought((t) => (!bub ? null : t?.name === bub.key && Math.abs(t.x - sx) < 40 ? t : { x: sx, y: sy, name: byKey.get(bub.key)?.name ?? bub.key, lines: bub.full }));
         if (bub) { setHover(null); return; }
         // (over a block: its file; over the ground: its neighbourhood, the deepest folder there)
-        const b = blockAt(map, p), folder = districtAt(map, p);
+        const b = blockUnder(p), folder = districtAt(map, p);
         const path = b ? layout.buildings[b.i].path : folder ? `${folder.dir}/` : null;
         setHover((h) => (path === null ? null : h?.path === path && h.folder === folder && Math.abs(h.x - sx) < 40 && Math.abs(h.y - sy) < 40 ? h : { x: sx, y: sy, path, folder, block: b }));
       }}
@@ -690,14 +704,14 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         // (a bubble: its agent picked, its card shown)
         const { sx, sy } = toMap(e), bub = bubbleAt(bubbles, { x: sx, y: sy });
         if (bub) { onAgentClick(bub.key); return; }
-        const b = blockAt(map, toMap(e).p);
+        const b = blockUnder(toMap(e).p);
         if (b) onFile?.(b.key);
       }}
       onContextMenu={(e) => {
         // (the end of a right-drag: no menu)
         if (dragged.current) { e.preventDefault(); dragged.current = false; return; }
         // (a file's column: its menu, at the pointer; elsewhere the browser's own menu)
-        const b = blockAt(map, toMap(e).p);
+        const b = blockUnder(toMap(e).p);
         if (!b) return;
         e.preventDefault();
         const f = layout.buildings[b.i], city = map.cities.find((c) => c.repo === f.repo)?.name;
@@ -756,6 +770,8 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
         ))}
         {/* on the map's ground, so they zoom and pan with it (T201), back to front (T202): the desks, the names, then the
             curves and the messages over all (the belt is under the cities: above) */}
+        {/* the files being worked on, lifted over their cities (T216), under the desks, curves and bubbles */}
+        <LiftedBlocks map={map} index={layout.index} lifts={lifts} fit={fit} />
         <DeskStyles />
         {/* (in the map's own units, so a zoom doesn't set off the glide a move to another city makes, T204c) */}
         <g transform={`matrix(${fit.k} 0 0 ${fit.k} ${fit.ox} ${fit.oy})`}>
