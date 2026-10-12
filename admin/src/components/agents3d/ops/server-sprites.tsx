@@ -7,7 +7,9 @@ import type { NetStats, PublicPort } from "@/lib/net-stats";
 
 import { coreBarsFor, coreBarsKey, dialKey, dialsFor, EASE_MS, easedAt, LEVEL_COLORS, retarget, type CoreBar, type Dial, type Eased, type StatsReading } from "../desk/gauge-levels";
 import { iso, type P2 } from "./iso";
-import { blades, cablePoints, coreColor, formatRate, gates, HOST, meters, plateSizes, portLabel, pulseSeconds, readoutPx, type Gateway, type Rack } from "./server";
+import { TechMark } from "./tech-icons";
+import { techOf } from "./tech";
+import { blades, cablePoints, coreColor, formatRate, GATE, gates, HOST, meters, plateSizes, portLabel, pulseSeconds, readoutPx, type Gateway, type Rack } from "./server";
 
 type Fit = { k: number; ox: number; oy: number };
 const px = (f: Fit, p: P2): P2 => ({ x: f.ox + p.x * f.k, y: f.oy + p.y * f.k });
@@ -164,13 +166,22 @@ function GatewayView({ g, rack, fit, net, ports, fs }: { g: Gateway; rack: Rack;
       <polygon points={pts(side)} fill="#141a26" stroke={INK} strokeWidth={0.8} />
       <polygon points={pts(front)} fill="#1a2130" stroke={INK} strokeWidth={0.8} />
       {shown.map((s, i) => {
-        const p = list[i], lit = p.proto === "udp" ? "#a78bfa" : IN;
-        const gate = [P(s.x0, g.z1, s.h1), P(s.x1, g.z1, s.h1), P(s.x1, g.z1, s.h0), P(s.x0, g.z1, s.h0)];
+        const p = list[i], lit = p.proto === "udp" ? "#a78bfa" : IN, tech = techOf(p);
         const service = p.service.length > 11 ? `${p.service.slice(0, 10)}…` : p.service;
+        // (its box in front of the wall, T217: the gate's width, lit edges in the protocol's colour, the tech's mark on its front)
+        const z0 = g.z1, z1 = g.z1 + GATE.boxD * g.wu, bh = GATE.boxH * g.wu, x0 = s.x0, x1 = s.x1;
+        const front = [P(x0, z1, bh), P(x1, z1, bh), P(x1, z1, 0), P(x0, z1, 0)], side = [P(x1, z0, bh), P(x1, z1, bh), P(x1, z1, 0), P(x1, z0, 0)];
+        const top = [P(x0, z0, bh), P(x1, z0, bh), P(x1, z1, bh), P(x0, z1, bh)];
+        const mark = Math.min(x1 - x0, bh) * 0.72, markPx = mark * fit.k;
+        const onFront = (x: number, h: number, size: number) => { const q = P(x, z1, h); return `matrix(${(C * k * size / 24).toFixed(4)} ${(0.5 * k * size / 24).toFixed(4)} 0 ${(k * size / 24).toFixed(4)} ${q.x.toFixed(1)} ${q.y.toFixed(1)})`; };
         return (
           <g key={`${p.port}/${p.proto}`}>
-            <title>{`${portLabel(p)} · ${p.proto.toUpperCase()} · on ${p.addrs.join(", ")}${p.process ? ` · ${p.process}` : ""}`}</title>
-            <polygon points={pts(gate)} fill={lit} fillOpacity={0.22} stroke={lit} strokeWidth={1.2} />
+            <title>{`${portLabel(p)}${tech ? ` · ${tech.name}` : ""}${p.tech?.detail ? ` (${p.tech.detail})` : ""} · ${p.proto.toUpperCase()} · on ${p.addrs.join(", ")}${p.process ? ` · ${p.process}` : ""}`}</title>
+            <polygon points={pts(top)} fill="#334155" stroke={lit} strokeWidth={1} />
+            <polygon points={pts(side)} fill="#1e293b" stroke={lit} strokeWidth={1} />
+            <polygon points={pts(front)} fill="#273244" stroke={lit} strokeWidth={1.2} />
+            {/* (the mark from 10 px up; a box with no known tech stays plain: its number is on the plate over it) */}
+            {tech && markPx >= 10 && <g transform={onFront(x0 + (x1 - x0 - mark) / 2, bh - (bh - mark) / 2, mark)}><TechMark icon={tech.icon} color={tech.color} /></g>}
             {/* (the plate over the gate: the number, and the service under it) */}
             <g transform={onFace(s.x0, g.h - 0.2 * g.wu)}>
               <rect x={0} y={0} width={s.x1 - s.x0} height={plate.h} rx={0.2 * g.wu} fill={INK} fillOpacity={0.85} />

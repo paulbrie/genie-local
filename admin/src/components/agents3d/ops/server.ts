@@ -71,7 +71,7 @@ export const readoutPx = (wu: number, k: number) => Math.max(8, Math.min(12, wu 
  * The gateway (T214): a low wall with a gate a public port (up to GATES), set apart from the rack, its port numbers
  * and services on plates on its face; the bandwidth over its left end; a cable from it to the rack. Desk units.
  */
-export const GATE = { w: 4.4, h: 6, d: 0.8, max: 12 };
+export const GATE = { w: 4.4, h: 6, d: 0.8, max: 12, /** a port's box in front of the wall (T217): its depth and height */ boxD: 2.4, boxH: 3.4 };
 export type Gateway = { x0: number; x1: number; z0: number; z1: number; h: number; wu: number; /** gates it has */ n: number; /** the bandwidth's box over it, px */ bw: { w: number; h: number } };
 
 /** a gateway for `n` ports (a gate each, up to GATE.max; one at least), its left end at x0 and its face at z1 (world units) */
@@ -85,7 +85,8 @@ export function gates(g: Gateway, n: number): { x0: number; x1: number; h0: numb
 }
 /** what the gateway covers on screen at scale `k`: its wall, and the bandwidth over its left end (iso units) */
 export function gatewayBox(g: Gateway, k: number): Box {
-  const wall = boxOf(corners(g.x0, g.x1, g.z0, g.z1, g.h)), top = iso(g.x0, g.z1, g.h);
+  // (the wall, and the ports' boxes in front of it)
+  const wall = boxOf([...corners(g.x0, g.x1, g.z0, g.z1, g.h), ...corners(g.x0, g.x1, g.z1, g.z1 + GATE.boxD * g.wu, GATE.boxH * g.wu)]), top = iso(g.x0, g.z1, g.h);
   return { x0: Math.min(wall.x0, top.x - 10 / k), y0: Math.min(wall.y0, top.y - (g.bw.h + 12) / k), x1: Math.max(wall.x1, top.x + (g.bw.w - 10) / k), y1: wall.y1 };
 }
 
