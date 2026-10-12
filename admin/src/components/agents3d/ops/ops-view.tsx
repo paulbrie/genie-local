@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Copy, FileCode } from "lucide-react";
 import dynamic from "next/dynamic";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -16,6 +16,7 @@ import { CafeTable, Curve, Desk, DeskName, DeskStyles, Figure, KIND_COLORS, link
 import { deskLine, deskParts, deskSpots, L } from "./desks";
 import { blockAt, districtAt, districtLabels, inPoly, iso, isoMap, litDrawList, type IsoBlock, type IsoDistrict, type IsoMap, type P2 } from "./iso";
 import type { CodeWin } from "./code-window";
+import { FileMenu, type FileMenuAt } from "./file-menu";
 import { cssBetween, FIT_VIEW, keepCentre, maxS, panBy, viewFit, viewFromStore, viewOfBox, viewToStore, zoomAt, type View } from "./map-view";
 import { LANE_MS, litKey, SPARK_MS, SPARK_N, type LitKind, type OpsAgent, type OpsModel } from "./model";
 
@@ -294,6 +295,9 @@ function Messages({ model, onMessage }: { model: OpsModel; onMessage?: (id: stri
     </div>
   );
 }
+/** an event kept from the map's own handlers */
+const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
 /** the gap between chips (gap-1) */
 const GAP = 4;
 
@@ -585,12 +589,21 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
   };
   const byKey = new Map(model.agents.map((a) => [a.key, a]));
 
+  // a file's menu (T215): opened by a right-click on its column; closed as the map zooms or the page scrolls
+  const [menu, setMenu] = useState<FileMenuAt | null>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("scroll", close, true);
+    return () => window.removeEventListener("scroll", close, true);
+  }, [menu]);
   // zoom: the wheel or a trackpad pinch (ctrl + wheel), about the pointer; the view set 180 ms after the last step
   useEffect(() => {
     const el = box.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      setMenu(null);
       const r = el.getBoundingClientRect(), f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015) * (e.deltaMode === 1 ? 16 : 1));
       setHover(null);
       preview(zoomAt(live.current ?? viewRef.current, f, { x: e.clientX - r.left, y: e.clientY - r.top }, top), 180);
@@ -609,6 +622,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       else if (e.key === "-" || e.key === "_") setView(zoomAt(viewRef.current, 1 / 1.5, mid, top));
       else if (e.key === "0") setView(FIT_VIEW);
       else return;
+      setMenu(null);
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
@@ -645,6 +659,7 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
     const p = toMap(e).p;
     const c = map.cities.find((x) => inPoly(p, x.ground));
     if (!c) return;
+    setMenu(null);
     const pts = c.ground.map((q) => px(fit0, q));
     setView(viewOfBox({ x0: Math.min(...pts.map((q) => q.x)), y0: Math.min(...pts.map((q) => q.y)) - 30, x1: Math.max(...pts.map((q) => q.x)), y1: Math.max(...pts.map((q) => q.y)) }, size.w, size.h - NAMES_H, top));
   };
@@ -681,14 +696,23 @@ function IsoCity({ model, layout, selected, visible, onDraw, onAgentClick, onFil
       onContextMenu={(e) => {
         // (the end of a right-drag: no menu)
         if (dragged.current) { e.preventDefault(); dragged.current = false; return; }
-        // (a file's column: read it in a code window; elsewhere the browser's own menu)
+        // (a file's column: its menu, at the pointer; elsewhere the browser's own menu)
         const b = blockAt(map, toMap(e).p);
-        if (!b || !onOpenFile) return;
+        if (!b) return;
         e.preventDefault();
-        const f = layout.buildings[b.i];
-        onOpenFile(f.repo, f.path);
+        const f = layout.buildings[b.i], city = map.cities.find((c) => c.repo === f.repo)?.name;
+        const items = [
+          ...(onOpenFile ? [{ label: "Open file", icon: FileCode, onSelect: () => onOpenFile(f.repo, f.path) }] : []),
+          { label: "Copy path", icon: Copy, onSelect: () => void navigator.clipboard?.writeText(`${f.repo}/${f.path}`).catch(() => {}) },
+        ];
+        setHover(null);
+        setMenu({ x: e.clientX, y: e.clientY, title: city ? `${city} · ${f.path}` : f.path, items });
       }}
     >
+      {/* (in a portal, but its events would still bubble to the map's handlers here: stopped) */}
+      <div className="contents" onPointerDown={stop} onPointerUp={stop} onClick={stop} onDoubleClick={stop} onContextMenu={stop} onMouseMove={stop}>
+        <FileMenu at={menu} onClose={() => setMenu(null)} />
+      </div>
       {/* the map's layers: moved together by CSS during a gesture (T200) */}
       <div ref={layer} className="pointer-events-none absolute inset-0 origin-top-left will-change-transform">
       {/* the commits' belts, one along each city's far side, under them (T204): the cities' ground hides what is behind it */}
