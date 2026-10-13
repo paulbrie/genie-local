@@ -57,7 +57,13 @@ import {
   deployStatus,
   startDeploy,
 } from "@/lib/deploy";
-import { applyNginx, type NginxApplyResult } from "@/lib/nginx";
+import {
+  applyNginx,
+  portTakenBy,
+  previewPortChange,
+  type NginxApplyResult,
+  type PortChangePreview,
+} from "@/lib/nginx";
 import {
   restartApp,
   startApp,
@@ -233,7 +239,9 @@ export async function reorderTasksAction(slug: string, orderedIds: number[]) {
 
 /**
  * Update an app's port, then regenerate + reload Nginx so the change takes
- * effect immediately. Returns the Nginx apply result for UI feedback.
+ * effect immediately. Returns the Nginx apply result for UI feedback. Refuses a
+ * port another app already has (T241/T242: two apps on one port means one
+ * server answers for both), before touching the DB.
  */
 export async function setAppPortAction(
   slug: string,
@@ -248,10 +256,33 @@ export async function setAppPortAction(
       ? null
       : z.number().int().min(1).max(65535).parse(port);
 
+  const taken = await portTakenBy(parsedAppId, parsedPort);
+  if (taken) return { ok: false, message: taken };
   await updateAppPort(projectId, parsedAppId, parsedPort);
   const result = await applyNginx();
   revalidatePath(`/projects/${slug}`);
+  revalidatePath("/nginx");
   return result;
+}
+
+/**
+ * What giving an app a port would do, without doing it (T242): the conflicts
+ * (another app's port, a live process's, outside the range, a running app to
+ * restart) and the generated include's diff, for the Nginx page's confirm step.
+ */
+export async function previewAppPortAction(
+  slug: string,
+  appId: number,
+  port: number | null,
+): Promise<PortChangePreview> {
+  await requireAdmin();
+  await requireProjectId(slug);
+  const parsedAppId = z.number().int().positive().parse(appId);
+  const parsedPort =
+    port === null
+      ? null
+      : z.number().int().min(1).max(65535).parse(port);
+  return previewPortChange(parsedAppId, parsedPort);
 }
 
 const appIdSchema = z.number().int().positive();
