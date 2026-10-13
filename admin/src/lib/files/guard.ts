@@ -5,11 +5,36 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-/** The roots the explorer may see: ADMIN_FILES_ROOTS (comma-separated), else /opt/project and /home/genie. */
+const list = (env: string | undefined, fallback: string[]) =>
+  (env ? env.split(",").map((s) => s.trim()).filter(Boolean) : fallback).map((r) => path.resolve(r));
+
+/** The roots the explorer may see: ADMIN_FILES_ROOTS (comma-separated), else the whole filesystem (what genie can read; T243b). */
 export function fileRoots(): string[] {
-  const env = process.env.ADMIN_FILES_ROOTS;
-  const list = env ? env.split(",").map((s) => s.trim()).filter(Boolean) : ["/opt/project", "/home/genie"];
-  return list.map((r) => path.resolve(r));
+  return list(process.env.ADMIN_FILES_ROOTS, ["/"]);
+}
+
+/**
+ * Where the explorer may change things (T243b): ADMIN_FILES_WRITE_ROOTS, else /opt/project, /home/genie and /tmp;
+ * everywhere it can see when ADMIN_FILES_WRITE_EVERYWHERE=1 (off by default: the rest stays read-only).
+ */
+export function writeRoots(): string[] {
+  if (process.env.ADMIN_FILES_WRITE_EVERYWHERE === "1") return fileRoots();
+  return list(process.env.ADMIN_FILES_WRITE_ROOTS, ["/opt/project", "/home/genie", "/tmp"]);
+}
+
+/** kernel pseudo-filesystems: listed, never read (their files are endless or change as read) */
+const PSEUDO = ["/proc", "/sys"];
+export const isPseudo = (abs: string): boolean => PSEUDO.some((p) => isWithin(abs, p));
+
+/**
+ * `abs` (already resolved) may be changed: inside a write root, and not a write root itself (that can't be deleted,
+ * renamed or moved). Throws PathError 403 otherwise.
+ */
+export async function assertWritable(abs: string, opts: { self?: boolean } = {}, roots: string[] = writeRoots()): Promise<void> {
+  const real = await Promise.all(roots.map((r) => fs.realpath(r).catch(() => r)));
+  const root = rootOf(abs, real);
+  if (!root) throw new PathError(`read-only here: changes only under ${roots.join(", ")}`, 403);
+  if (opts.self && abs === root) throw new PathError(`${root} itself can't be changed`, 403);
 }
 
 /** true when `p` is `root` or inside it (both already resolved) */

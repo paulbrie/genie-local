@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
-  Link2, Loader2, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
+  Eye, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,14 +17,19 @@ import { filesOfDrop, uploadFile } from "./upload-client";
 const MonacoViewer = dynamic(() => import("./monaco-viewer"), { ssr: false, loading: () => <p className="p-3 text-xs text-muted-foreground">Loading the viewer…</p> });
 
 type Entry = { name: string; path: string; type: "dir" | "file" | "symlink" | "other"; size: number; modified: string; secret: boolean };
-type Listing = { path: string; root: string; parent: string | null; entries: Entry[] };
+type Listing = { path: string; root: string; parent: string | null; entries: Entry[]; noPermission?: boolean };
+type Preview = { path: string; text?: string; binary?: boolean; truncated?: boolean; error?: string; secret?: boolean; revealing?: boolean };
 type TrashItem = { id: string; name: string; originalPath: string; deletedAt: string; bytes: number; type: string };
 type DeletePlan = { path: string; type: string; bytes: number; files: number; truncated: boolean; running: { slug: string; pid: number }[] };
 type Upload = { key: string; name: string; dir: string; size: number; sent: number; status: "uploading" | "done" | "error" | "cancelled"; error?: string; abort: AbortController };
 type SortKey = "name" | "size" | "modified" | "type";
 
 const API = `${BASE_PATH}/api/files`;
+// (no SVG: it would run on the admin's origin; it previews as text)
 const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico)$/i, PDF = /\.pdf$/i;
+const within = (p: string, root: string) => root === "/" || p === root || p.startsWith(`${root}/`);
+/** kernel pseudo-files (/proc, /sys): listed, never read */
+const pseudo = (p: string) => within(p, "/proc") || within(p, "/sys");
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { cache: "no-store", ...init });
@@ -87,7 +92,8 @@ export function FileExplorer() {
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "name", desc: false });
   const [selected, setSelected] = useState<Entry | null>(null);
-  const [preview, setPreview] = useState<{ path: string; text?: string; binary?: boolean; truncated?: boolean; error?: string } | null>(null);
+  const [writeRoots, setWriteRoots] = useState<string[]>([]);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<
@@ -116,13 +122,20 @@ export function FileExplorer() {
   const refreshTrash = useCallback(() => { api<{ items: TrashItem[] }>(`${API}?op=trash`).then((t) => setTrashCount(t.items.length), () => {}); }, []);
 
   useEffect(() => {
-    api<{ roots: string[] }>(`${API}?op=roots`).then((r) => { setRoots(r.roots); if (r.roots[0]) void load(r.roots[0]); }, (err) => setError((err as Error).message));
+    api<{ roots: string[]; writeRoots: string[] }>(`${API}?op=roots`).then((r) => {
+      setRoots(r.roots);
+      setWriteRoots(r.writeRoots);
+      // (opens where the work is: the first write root that can be seen, else the first root)
+      const start = r.writeRoots.find((w) => r.roots.some((root) => within(w, root))) ?? r.roots[0];
+      if (start) void load(start);
+    }, (err) => setError((err as Error).message));
     refreshTrash();
   }, [load, refreshTrash]);
 
-  // (a file chosen: its preview; never a credential file's contents)
+  // (a file chosen: its preview; a credential file's contents only after "Show contents", for that file)
   useEffect(() => {
-    if (!selected || selected.type !== "file" || selected.secret || IMAGE.test(selected.name) || PDF.test(selected.name)) { setPreview(null); return; }
+    if (!selected || selected.type !== "file" || pseudo(selected.path) || (!selected.secret && (IMAGE.test(selected.name) || PDF.test(selected.name)))) { setPreview(null); return; }
+    if (selected.secret) { setPreview({ path: selected.path, secret: true }); return; }
     let live = true;
     setPreview({ path: selected.path });
     api<{ text?: string; binary?: boolean; truncated?: boolean }>(`${API}?op=read&path=${encodeURIComponent(selected.path)}`)
@@ -208,6 +221,15 @@ export function FileExplorer() {
       </button>
     </th>
   );
+  const reveal = (e: Entry) => {
+    setPreview({ path: e.path, secret: true, revealing: true });
+    api<{ text?: string; binary?: boolean; truncated?: boolean }>(`${API}?op=read&reveal=1&path=${encodeURIComponent(e.path)}`)
+      .then((r) => setPreview((p) => (p?.path === e.path ? { path: e.path, ...r } : p)), (err) => setPreview((p) => (p?.path === e.path ? { path: e.path, secret: true, error: (err as Error).message } : p)));
+  };
+  /** changes are allowed here (the server checks again) */
+  const writable = writeRoots.some((w) => within(cwd, w));
+  const changeable = (p: string) => writeRoots.some((w) => within(p, w) && p !== w);
+  const readOnlyWhy = `Read-only here: changes only under ${writeRoots.join(", ")}`;
   const active = uploads.filter((u) => u.status === "uploading").length;
 
   return (
@@ -225,9 +247,10 @@ export function FileExplorer() {
           <Search className="absolute top-2 left-2 size-4 text-muted-foreground" />
           <Input aria-label="Search this folder" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search this folder" className="h-8 w-48 pl-7" />
         </div>
-        <Button size="sm" variant="outline" onClick={() => { setDraft(""); setDialog({ kind: "mkdir" }); }}><FolderPlus className="size-4" /> New folder</Button>
-        <Button size="sm" variant="outline" onClick={() => filePick.current?.click()}><Upload className="size-4" /> Upload files</Button>
-        <Button size="sm" variant="outline" onClick={() => folderPick.current?.click()}><FolderUp className="size-4" /> Upload a folder</Button>
+        {!writable && cwd && <span className="flex items-center gap-1 text-xs text-muted-foreground" title={readOnlyWhy}><Lock className="size-3.5" /> Read-only</span>}
+        <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => { setDraft(""); setDialog({ kind: "mkdir" }); }}><FolderPlus className="size-4" /> New folder</Button>
+        <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => filePick.current?.click()}><Upload className="size-4" /> Upload files</Button>
+        <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => folderPick.current?.click()}><FolderUp className="size-4" /> Upload a folder</Button>
         <Button size="sm" variant="outline" onClick={openTrash}><Trash2 className="size-4" /> Trash{trashCount ? ` (${trashCount})` : ""}</Button>
         <Button size="sm" variant="ghost" aria-label="Refresh" onClick={() => load(cwd)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button>
         <input ref={filePick} type="file" multiple hidden onChange={(e) => { const fs = [...(e.target.files ?? [])].map((file) => ({ file, rel: file.name })); e.target.value = ""; void startUploads(fs, cwd); }} />
@@ -242,7 +265,7 @@ export function FileExplorer() {
 
         <section
           className={cn("relative min-h-0 overflow-auto rounded-lg border", dragging && "ring-2 ring-primary")}
-          onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
+          onDragOver={(e) => { if (writable && e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
           onDrop={async (e) => { e.preventDefault(); setDragging(false); void startUploads(await filesOfDrop(e.dataTransfer.items), cwd); }}
           aria-label="Files"
@@ -272,15 +295,24 @@ export function FileExplorer() {
                   <td className="px-2 py-1 text-muted-foreground">{e.secret ? "credential" : extOf(e)}</td>
                   <td className="px-1 py-1">
                     <span className="flex justify-end gap-0.5 opacity-60 group-hover:opacity-100">
-                      {e.type === "file" && <button type="button" title="Download" aria-label={`Download ${e.name}`} onClick={() => download(e)} className="rounded p-1 hover:bg-background"><Download className="size-3.5" /></button>}
-                      <button type="button" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => { setDraft(e.name); setDialog({ kind: "rename", entry: e }); }} className="rounded p-1 hover:bg-background"><Pencil className="size-3.5" /></button>
-                      <button type="button" title="Move" aria-label={`Move ${e.name}`} onClick={() => { setDraft(cwd); setDialog({ kind: "move", entry: e }); }} className="rounded p-1 hover:bg-background"><MoveRight className="size-3.5" /></button>
-                      <button type="button" title="Delete" aria-label={`Delete ${e.name}`} onClick={() => openDelete(e)} className="rounded p-1 text-destructive hover:bg-background"><Trash2 className="size-3.5" /></button>
+                      {e.type === "file" && !pseudo(e.path) && <button type="button" title="Download" aria-label={`Download ${e.name}`} onClick={() => download(e)} className="rounded p-1 hover:bg-background"><Download className="size-3.5" /></button>}
+                      {changeable(e.path) && (
+                        <>
+                          <button type="button" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => { setDraft(e.name); setDialog({ kind: "rename", entry: e }); }} className="rounded p-1 hover:bg-background"><Pencil className="size-3.5" /></button>
+                          <button type="button" title="Move" aria-label={`Move ${e.name}`} onClick={() => { setDraft(cwd); setDialog({ kind: "move", entry: e }); }} className="rounded p-1 hover:bg-background"><MoveRight className="size-3.5" /></button>
+                          <button type="button" title="Delete" aria-label={`Delete ${e.name}`} onClick={() => openDelete(e)} className="rounded p-1 text-destructive hover:bg-background"><Trash2 className="size-3.5" /></button>
+                        </>
+                      )}
                     </span>
                   </td>
                 </tr>
               ))}
-              {listing && entries.length === 0 && <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground">{filter ? "Nothing here matches." : "An empty folder: drop files here to upload them."}</td></tr>}
+              {listing && entries.length === 0 && (
+                <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground">
+                  {listing.noPermission ? <><Lock className="mx-auto mb-1 size-5" />No permission: the genie user can&apos;t read this folder.</>
+                    : filter ? "Nothing here matches." : writable ? "An empty folder: drop files here to upload them." : "An empty folder."}
+                </td></tr>
+              )}
               {!listing && !error && <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground"><Loader2 className="mx-auto size-5 animate-spin" /></td></tr>}
             </tbody>
           </table>
@@ -293,14 +325,24 @@ export function FileExplorer() {
             <>
               <div className="flex items-center gap-2 border-b px-3 py-2">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium" title={selected.path}>{selected.name}</span>
-                {selected.type === "file" && <Button size="sm" variant="outline" onClick={() => download(selected)}><Download className="size-4" /> Download</Button>}
+                {selected.type === "file" && !pseudo(selected.path) && <Button size="sm" variant="outline" onClick={() => download(selected)}><Download className="size-4" /> Download</Button>}
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
                 {selected.type === "dir" ? <p className="p-4 text-sm text-muted-foreground">A folder. Double-click it to open.</p>
-                  : selected.secret ? <p className="p-4 text-sm"><FileLock className="mb-2 size-5 text-rose-500" />A credential file: it is never shown here. Download it if you need it (you&apos;ll be asked to confirm).</p>
+                  : selected.type !== "file" ? <p className="p-4 text-sm text-muted-foreground">{selected.type === "symlink" ? "A symbolic link." : "Not a regular file (a device, socket or pipe): nothing to preview."}</p>
+                  : pseudo(selected.path) ? <p className="p-4 text-sm text-muted-foreground">A kernel file (/proc, /sys): listed here, not read.</p>
+                  : selected.secret && preview?.path === selected.path && preview.secret ? (
+                    <div className="space-y-3 p-4 text-sm">
+                      <p><FileLock className="mb-2 size-5 text-rose-500" />A credential file: it may hold passwords or keys, so its contents stay hidden until you ask. Viewing is logged (the path only).</p>
+                      {preview.error && <p className="text-destructive">{preview.error}</p>}
+                      <Button size="sm" variant="outline" disabled={preview.revealing} onClick={() => reveal(selected)}>
+                        {preview.revealing ? <Loader2 className="size-4 animate-spin" /> : <Eye className="size-4" />} Show contents
+                      </Button>
+                    </div>
+                  )
                   // eslint-disable-next-line @next/next/no-img-element -- (the admin's own API, behind its session: not for the image optimizer)
-                  : IMAGE.test(selected.name) ? <img src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} alt={selected.name} className="mx-auto max-h-full max-w-full object-contain p-2" />
-                  : PDF.test(selected.name) ? <iframe title={selected.name} src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} className="h-full w-full" />
+                  : !selected.secret && IMAGE.test(selected.name) ? <img src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} alt={selected.name} className="mx-auto max-h-full max-w-full object-contain p-2" />
+                  : !selected.secret && PDF.test(selected.name) ? <iframe title={selected.name} src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} className="h-full w-full" />
                   : !preview || preview.path !== selected.path ? <p className="p-4 text-sm text-muted-foreground">Loading…</p>
                   : preview.error ? <p className="p-4 text-sm text-destructive">{preview.error}</p>
                   : preview.binary ? <p className="p-4 text-sm text-muted-foreground">A binary file ({formatBytes(selected.size)}): download it to open it.</p>

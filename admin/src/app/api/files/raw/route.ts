@@ -6,7 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
 
-import { resolveExisting } from "@/lib/files/guard";
+import { isPseudo, resolveExisting } from "@/lib/files/guard";
 import { isSecretPath } from "@/lib/files/listing";
 import { audit } from "@/lib/files/ops";
 import { errorResponse, whoOf } from "../shared";
@@ -22,8 +22,9 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   try {
     const t = await resolveExisting(q.get("path") ?? "");
+    if (isPseudo(t.abs)) return NextResponse.json({ error: "a kernel file (/proc, /sys): not read from here" }, { status: 403 });
     const st = await fs.stat(t.abs);
-    if (!st.isFile()) return NextResponse.json({ error: "not a file" }, { status: 400 });
+    if (!st.isFile()) return NextResponse.json({ error: "not a regular file" }, { status: 400 });
     const secret = isSecretPath(t.abs), download = q.get("download") === "1";
     if (secret && !(download && q.get("confirm") === "1")) return NextResponse.json({ error: "a credential file: download it, with a confirm" }, { status: 403 });
     const type = TYPES[path.extname(t.abs).toLowerCase()];

@@ -15,7 +15,7 @@ if (typeof self !== "undefined") {
 const LANG: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript", json: "json",
   md: "markdown", css: "css", scss: "scss", html: "html", py: "python", sh: "shell", bash: "shell", yml: "yaml", yaml: "yaml",
-  sql: "sql", go: "go", rs: "rust", java: "java", cs: "csharp", php: "php", rb: "ruby", xml: "xml", toml: "ini", ini: "ini", conf: "ini",
+  sql: "sql", go: "go", rs: "rust", java: "java", cs: "csharp", php: "php", rb: "ruby", xml: "xml", svg: "xml", toml: "ini", ini: "ini", conf: "ini",
   dockerfile: "dockerfile", c: "c", h: "c", cpp: "cpp", kt: "kotlin", swift: "swift", lua: "lua", prisma: "graphql", graphql: "graphql",
 };
 

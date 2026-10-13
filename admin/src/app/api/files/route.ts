@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
-import { fileRoots, resolveExisting, rootOf } from "@/lib/files/guard";
+import { assertWritable, fileRoots, isPseudo, resolveExisting, rootOf, writeRoots } from "@/lib/files/guard";
 import { isSecretPath, listDir } from "@/lib/files/listing";
 import { audit, deletePath, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
 import { emptyTrash, listTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
@@ -19,20 +19,29 @@ const PREVIEW_BYTES = 1024 * 1024;
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams, op = q.get("op") ?? "list";
   try {
-    if (op === "roots") return NextResponse.json({ roots: fileRoots(), trash: trashDir(), chunkBytes: CHUNK_BYTES });
+    if (op === "roots") return NextResponse.json({ roots: fileRoots(), writeRoots: writeRoots(), trash: trashDir(), chunkBytes: CHUNK_BYTES });
     if (op === "trash") return NextResponse.json({ items: await listTrash() });
     const t = await resolveExisting(q.get("path") ?? "");
     if (op === "list") {
       const st = await fs.stat(t.abs);
       if (!st.isDirectory()) return NextResponse.json({ error: "not a folder" }, { status: 400 });
       const parent = t.abs === t.root ? null : path.dirname(t.abs);
-      return NextResponse.json({ path: t.abs, root: t.root, parent, entries: await listDir(t.abs) });
+      // (a folder genie can't read: shown as such, not as an error)
+      const entries = await listDir(t.abs).catch((err: NodeJS.ErrnoException) => {
+        if (err.code === "EACCES" || err.code === "EPERM") return null;
+        throw err;
+      });
+      return NextResponse.json({ path: t.abs, root: t.root, parent, entries: entries ?? [], noPermission: entries === null });
     }
     if (op === "plan-delete") return NextResponse.json(await planDelete(t.abs));
     if (op === "read") {
-      if (isSecretPath(t.abs)) return NextResponse.json({ error: "a credential file: no preview (download it instead)" }, { status: 403 });
+      if (isPseudo(t.abs)) return NextResponse.json({ error: "a kernel file (/proc, /sys): not read from here" }, { status: 403 });
+      // (a credential file: only when asked for, per file; the audit line names the path, never the contents)
+      const secret = isSecretPath(t.abs);
+      if (secret && q.get("reveal") !== "1") return NextResponse.json({ secret: true, error: "a credential file: its contents are shown on request" }, { status: 403 });
       const st = await fs.stat(t.abs);
-      if (!st.isFile()) return NextResponse.json({ error: "not a file" }, { status: 400 });
+      if (!st.isFile()) return NextResponse.json({ error: "not a regular file" }, { status: 400 });
+      if (secret) audit("secret-viewed", { path: t.abs }, whoOf(req));
       const fh = await fs.open(t.abs, "r");
       try {
         const buf = Buffer.alloc(Math.min(st.size, PREVIEW_BYTES));
@@ -81,6 +90,7 @@ export async function POST(req: NextRequest) {
         const entry = (await listTrash()).find((i) => i.id === s("id"));
         if (!entry) return NextResponse.json({ error: "not in the trash" }, { status: 404 });
         if (!rootOf(path.resolve(entry.originalPath), fileRoots())) return NextResponse.json({ error: "outside the roots" }, { status: 403 });
+        await assertWritable(path.dirname(path.resolve(entry.originalPath)));
         const item = await restoreFromTrash(entry.id);
         audit("restore", { path: item.originalPath, bytes: item.bytes }, who);
         return NextResponse.json({ item });

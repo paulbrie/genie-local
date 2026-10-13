@@ -147,3 +147,52 @@ describe("new folder, rename, move, delete to the trash and restore (T243)", () 
     assert.ok(names.indexOf("dir:docs") < names.indexOf("symlink:escape"));
   });
 });
+
+describe("the whole filesystem to read, a few places to change (T243b)", () => {
+  const env = (k: string, v?: string) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  it("reads everywhere by default; changes only under /opt/project, /home/genie and /tmp unless writes everywhere is on", async () => {
+    const { fileRoots, writeRoots } = await import("./guard");
+    const saved = [process.env.ADMIN_FILES_ROOTS, process.env.ADMIN_FILES_WRITE_ROOTS, process.env.ADMIN_FILES_WRITE_EVERYWHERE];
+    try {
+      env("ADMIN_FILES_ROOTS"); env("ADMIN_FILES_WRITE_ROOTS"); env("ADMIN_FILES_WRITE_EVERYWHERE");
+      assert.deepEqual(fileRoots(), ["/"]);
+      assert.deepEqual(writeRoots(), ["/opt/project", "/home/genie", "/tmp"]);
+      env("ADMIN_FILES_WRITE_EVERYWHERE", "1");
+      assert.deepEqual(writeRoots(), ["/"]);
+      env("ADMIN_FILES_WRITE_EVERYWHERE"); env("ADMIN_FILES_ROOTS", `${root}, ${outside}`);
+      assert.deepEqual(fileRoots(), [root, outside]);
+    } finally {
+      env("ADMIN_FILES_ROOTS", saved[0]); env("ADMIN_FILES_WRITE_ROOTS", saved[1]); env("ADMIN_FILES_WRITE_EVERYWHERE", saved[2]);
+    }
+  });
+
+  it("refuses changes outside the write roots, and to a write root itself; reading there still works", async () => {
+    const { assertWritable } = await import("./guard");
+    const wide = [root, outside], writes = [path.join(root, "proj")];
+    await fs.writeFile(path.join(outside, "ro.txt"), "read me");
+    await assertWritable(path.join(root, "proj", "x"), {}, writes);
+    await assert.rejects(assertWritable(path.join(root, "docs"), {}, writes), /read-only here/);
+    await assert.rejects(assertWritable(path.join(root, "proj"), { self: true }, writes), /itself can't be changed/);
+    await assert.rejects(assertWritable("/etc/passwd", {}, ["/opt/project", "/home/genie", "/tmp"]), /read-only here/);
+
+    await assert.rejects(makeFolder(outside, "new", wide, writes), /read-only here/);
+    await assert.rejects(renamePath(path.join(outside, "ro.txt"), "rw.txt", wide, writes), /read-only here/);
+    await assert.rejects(movePath(path.join(outside, "ro.txt"), path.join(root, "proj"), wide, writes), /read-only here/);
+    await assert.rejects(movePath(path.join(root, "proj", ".git"), outside, wide, writes), /read-only here/);
+    await assert.rejects(planDelete(path.join(outside, "ro.txt"), wide, runDir, writes), /read-only here/);
+    await assert.rejects(deletePath(path.join(outside, "ro.txt"), true, wide, runDir, writes), /read-only here/);
+    await assert.rejects(deletePath(path.join(root, "proj"), true, wide, runDir, writes), /itself can't be changed/);
+    assert.equal(await fs.readFile(path.join(outside, "ro.txt"), "utf8"), "read me");
+    assert.equal((await resolveExisting(path.join(outside, "ro.txt"), wide)).abs, path.join(outside, "ro.txt"));
+
+    const made = await makeFolder(path.join(root, "proj"), "ok", wide, writes);
+    assert.equal(made, path.join(root, "proj", "ok"));
+    await fs.rmdir(made);
+  });
+
+  it("knows the kernel's pseudo-filesystems", async () => {
+    const { isPseudo } = await import("./guard");
+    for (const p of ["/proc", "/proc/1/environ", "/sys/kernel"]) assert.ok(isPseudo(p), p);
+    for (const p of ["/", "/process", "/system", "/opt/project/proc"]) assert.ok(!isPseudo(p), p);
+  });
+});
