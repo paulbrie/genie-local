@@ -1,0 +1,436 @@
+"use client";
+
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
+  Link2, Loader2, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { BASE_PATH } from "@/lib/config";
+import { cn } from "@/lib/utils";
+import { filesOfDrop, uploadFile } from "./upload-client";
+
+const MonacoViewer = dynamic(() => import("./monaco-viewer"), { ssr: false, loading: () => <p className="p-3 text-xs text-muted-foreground">Loading the viewer…</p> });
+
+type Entry = { name: string; path: string; type: "dir" | "file" | "symlink" | "other"; size: number; modified: string; secret: boolean };
+type Listing = { path: string; root: string; parent: string | null; entries: Entry[] };
+type TrashItem = { id: string; name: string; originalPath: string; deletedAt: string; bytes: number; type: string };
+type DeletePlan = { path: string; type: string; bytes: number; files: number; truncated: boolean; running: { slug: string; pid: number }[] };
+type Upload = { key: string; name: string; dir: string; size: number; sent: number; status: "uploading" | "done" | "error" | "cancelled"; error?: string; abort: AbortController };
+type SortKey = "name" | "size" | "modified" | "type";
+
+const API = `${BASE_PATH}/api/files`;
+const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico)$/i, PDF = /\.pdf$/i;
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { cache: "no-store", ...init });
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
+const post = <T,>(body: object) => api<T>(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024, i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+const extOf = (e: Entry) => (e.type === "dir" ? "folder" : e.name.includes(".") ? e.name.split(".").pop()!.toLowerCase() : "file");
+
+/** one folder in the tree, its subfolders loaded when opened */
+function TreeNode({ path, name, depth, current, onOpen }: { path: string; name: string; depth: number; current: string; onOpen: (p: string) => void }) {
+  const [open, setOpen] = useState(current === path || current.startsWith(`${path}/`));
+  const [children, setChildren] = useState<Entry[] | null>(null);
+  useEffect(() => {
+    if (!open || children) return;
+    api<Listing>(`${API}?op=list&path=${encodeURIComponent(path)}`).then((l) => setChildren(l.entries.filter((e) => e.type === "dir")), () => setChildren([]));
+  }, [open, children, path]);
+  useEffect(() => {
+    if (current.startsWith(`${path}/`)) setOpen(true); // eslint-disable-line react-hooks/set-state-in-effect
+  }, [current, path]);
+  return (
+    <li>
+      <div className={cn("flex items-center gap-1 rounded px-1 py-0.5 text-sm hover:bg-muted", current === path && "bg-muted font-medium")} style={{ paddingLeft: depth * 12 + 4 }}>
+        <button type="button" aria-label={open ? "Close" : "Open"} onClick={() => setOpen(!open)} className="text-muted-foreground">
+          {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+        </button>
+        <button type="button" onClick={() => onOpen(path)} className="flex min-w-0 items-center gap-1.5 truncate text-left">
+          {open ? <FolderOpen className="size-4 shrink-0 text-amber-500" /> : <Folder className="size-4 shrink-0 text-amber-500" />}
+          <span className="truncate">{name}</span>
+        </button>
+      </div>
+      {open && children && children.length > 0 && (
+        <ul>{children.map((c) => <TreeNode key={c.path} path={c.path} name={c.name} depth={depth + 1} current={current} onOpen={onOpen} />)}</ul>
+      )}
+    </li>
+  );
+}
+
+/**
+ * The admin's file explorer (T243): the roots' folders as a tree, a folder's files (sort, search, breadcrumbs), a preview
+ * (text in a read-only Monaco, images, PDFs; never a credential file's contents), download, uploads of any size (chunked,
+ * resumable, by picking or dropping files and folders), new folder, rename, move, and delete to a trash that restores.
+ */
+export function FileExplorer() {
+  const [roots, setRoots] = useState<string[]>([]);
+  const [cwd, setCwd] = useState("");
+  const [listing, setListing] = useState<Listing | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "name", desc: false });
+  const [selected, setSelected] = useState<Entry | null>(null);
+  const [preview, setPreview] = useState<{ path: string; text?: string; binary?: boolean; truncated?: boolean; error?: string } | null>(null);
+  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const [dialog, setDialog] = useState<
+    | { kind: "mkdir" } | { kind: "rename"; entry: Entry } | { kind: "move"; entry: Entry } | { kind: "delete"; entry: Entry; plan?: DeletePlan; error?: string; force: boolean }
+    | { kind: "secret"; entry: Entry } | { kind: "trash"; items?: TrashItem[]; error?: string } | null
+  >(null);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [trashCount, setTrashCount] = useState(0);
+  const filePick = useRef<HTMLInputElement>(null), folderPick = useRef<HTMLInputElement>(null);
+
+  const load = useCallback(async (p: string) => {
+    setLoading(true);
+    try {
+      const l = await api<Listing>(`${API}?op=list&path=${encodeURIComponent(p)}`);
+      setListing(l);
+      setCwd(l.path);
+      setError(null);
+      setSelected((s) => (s && l.entries.some((e) => e.path === s.path) ? s : null));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  const refreshTrash = useCallback(() => { api<{ items: TrashItem[] }>(`${API}?op=trash`).then((t) => setTrashCount(t.items.length), () => {}); }, []);
+
+  useEffect(() => {
+    api<{ roots: string[] }>(`${API}?op=roots`).then((r) => { setRoots(r.roots); if (r.roots[0]) void load(r.roots[0]); }, (err) => setError((err as Error).message));
+    refreshTrash();
+  }, [load, refreshTrash]);
+
+  // (a file chosen: its preview; never a credential file's contents)
+  useEffect(() => {
+    if (!selected || selected.type !== "file" || selected.secret || IMAGE.test(selected.name) || PDF.test(selected.name)) { setPreview(null); return; }
+    let live = true;
+    setPreview({ path: selected.path });
+    api<{ text?: string; binary?: boolean; truncated?: boolean }>(`${API}?op=read&path=${encodeURIComponent(selected.path)}`)
+      .then((r) => live && setPreview({ path: selected.path, ...r }), (err) => live && setPreview({ path: selected.path, error: (err as Error).message }));
+    return () => { live = false; };
+  }, [selected]);
+
+  const entries = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const list = (listing?.entries ?? []).filter((e) => !q || e.name.toLowerCase().includes(q));
+    const v = (e: Entry) => (sort.key === "name" ? e.name.toLowerCase() : sort.key === "size" ? e.size : sort.key === "modified" ? e.modified : extOf(e));
+    return list.sort((a, b) => {
+      if (sort.key === "name" && (a.type === "dir") !== (b.type === "dir")) return a.type === "dir" ? -1 : 1;
+      const x = v(a), y = v(b), c = x < y ? -1 : x > y ? 1 : 0;
+      return sort.desc ? -c : c;
+    });
+  }, [listing, filter, sort]);
+
+  const crumbs = useMemo(() => {
+    if (!listing) return [];
+    const rel = listing.path.slice(listing.root.length).split("/").filter(Boolean);
+    return [{ name: listing.root, path: listing.root }, ...rel.map((seg, i) => ({ name: seg, path: `${listing.root}/${rel.slice(0, i + 1).join("/")}` }))];
+  }, [listing]);
+
+  const startUploads = useCallback(async (files: { file: File; rel: string }[], dir: string) => {
+    // (a dropped folder's subfolders first: made as needed, "already exists" is fine)
+    const folders = [...new Set(files.map((f) => f.rel.split("/").slice(0, -1).join("/")).filter(Boolean))].sort((a, b) => a.split("/").length - b.split("/").length);
+    for (const f of folders) {
+      const parts = f.split("/");
+      await post({ op: "mkdir", dir: [dir, ...parts.slice(0, -1)].join("/"), name: parts[parts.length - 1] }).catch(() => {});
+    }
+    for (const { file, rel } of files) {
+      const parts = rel.split("/"), name = parts.pop()!, into = [dir, ...parts].join("/");
+      const key = `${into}/${name}#${Date.now()}`, abort = new AbortController();
+      setUploads((u) => [...u, { key, name: rel, dir: into, size: file.size, sent: 0, status: "uploading", abort }]);
+      const update = (patch: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...patch } : x)));
+      try {
+        await uploadFile(file, into, name, { signal: abort.signal, onProgress: (p) => update({ sent: p.sent }) });
+        update({ status: "done", sent: file.size });
+      } catch (err) {
+        update(abort.signal.aborted ? { status: "cancelled" } : { status: "error", error: (err as Error).message });
+      }
+    }
+    void load(dir);
+  }, [load]);
+
+  const act = async (fn: () => Promise<unknown>, after?: () => void) => {
+    setBusy(true);
+    try {
+      await fn();
+      setDialog(null);
+      after?.();
+      void load(cwd);
+      refreshTrash();
+    } catch (err) {
+      setDialog((d) => (d ? { ...d, error: (err as Error).message } as typeof d : d));
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openDelete = (entry: Entry) => {
+    setDialog({ kind: "delete", entry, force: false });
+    api<DeletePlan>(`${API}?op=plan-delete&path=${encodeURIComponent(entry.path)}`).then(
+      (plan) => setDialog((d) => (d?.kind === "delete" && d.entry.path === entry.path ? { ...d, plan } : d)),
+      (err) => setDialog((d) => (d?.kind === "delete" ? { ...d, error: (err as Error).message } : d)),
+    );
+  };
+  const openTrash = () => {
+    setDialog({ kind: "trash" });
+    api<{ items: TrashItem[] }>(`${API}?op=trash`).then((t) => setDialog((d) => (d?.kind === "trash" ? { ...d, items: t.items } : d)), () => {});
+  };
+  const download = (e: Entry, confirmed = false) => {
+    if (e.secret && !confirmed) { setDialog({ kind: "secret", entry: e }); return; }
+    const a = document.createElement("a");
+    a.href = `${API}/raw?path=${encodeURIComponent(e.path)}&download=1${e.secret ? "&confirm=1" : ""}`;
+    a.click();
+  };
+  const th = (key: SortKey, label: string, cls = "") => (
+    <th scope="col" className={cn("px-2 py-1.5 font-medium", cls)} aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}>
+      <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => setSort((s) => ({ key, desc: s.key === key ? !s.desc : key !== "name" && key !== "type" }))}>
+        {label}{sort.key === key && (sort.desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+      </button>
+    </th>
+  );
+  const active = uploads.filter((u) => u.status === "uploading").length;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <nav aria-label="Folder" className="flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
+          {crumbs.map((c, i) => (
+            <span key={c.path} className="flex items-center gap-1">
+              {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}
+              <button type="button" onClick={() => load(c.path)} className={cn("rounded px-1 hover:bg-muted", i === crumbs.length - 1 && "font-semibold")}>{c.name}</button>
+            </span>
+          ))}
+        </nav>
+        <div className="relative">
+          <Search className="absolute top-2 left-2 size-4 text-muted-foreground" />
+          <Input aria-label="Search this folder" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Search this folder" className="h-8 w-48 pl-7" />
+        </div>
+        <Button size="sm" variant="outline" onClick={() => { setDraft(""); setDialog({ kind: "mkdir" }); }}><FolderPlus className="size-4" /> New folder</Button>
+        <Button size="sm" variant="outline" onClick={() => filePick.current?.click()}><Upload className="size-4" /> Upload files</Button>
+        <Button size="sm" variant="outline" onClick={() => folderPick.current?.click()}><FolderUp className="size-4" /> Upload a folder</Button>
+        <Button size="sm" variant="outline" onClick={openTrash}><Trash2 className="size-4" /> Trash{trashCount ? ` (${trashCount})` : ""}</Button>
+        <Button size="sm" variant="ghost" aria-label="Refresh" onClick={() => load(cwd)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button>
+        <input ref={filePick} type="file" multiple hidden onChange={(e) => { const fs = [...(e.target.files ?? [])].map((file) => ({ file, rel: file.name })); e.target.value = ""; void startUploads(fs, cwd); }} />
+        <input ref={folderPick} type="file" multiple hidden {...{ webkitdirectory: "" }} onChange={(e) => { const fs = [...(e.target.files ?? [])].map((file) => ({ file, rel: file.webkitRelativePath || file.name })); e.target.value = ""; void startUploads(fs, cwd); }} />
+      </div>
+      {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[240px_1fr_380px]">
+        <aside className="min-h-0 overflow-auto rounded-lg border p-1" aria-label="Folders">
+          <ul>{roots.map((r) => <TreeNode key={r} path={r} name={r} depth={0} current={cwd} onOpen={load} />)}</ul>
+        </aside>
+
+        <section
+          className={cn("relative min-h-0 overflow-auto rounded-lg border", dragging && "ring-2 ring-primary")}
+          onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragging(true); } }}
+          onDragLeave={(e) => { if (e.currentTarget === e.target) setDragging(false); }}
+          onDrop={async (e) => { e.preventDefault(); setDragging(false); void startUploads(await filesOfDrop(e.dataTransfer.items), cwd); }}
+          aria-label="Files"
+        >
+          {dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/10 text-sm font-medium">Drop to upload into {cwd}</div>}
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-background text-left text-xs text-muted-foreground">
+              <tr>{th("name", "Name", "w-full")}{th("size", "Size", "text-right whitespace-nowrap")}{th("modified", "Modified", "whitespace-nowrap")}{th("type", "Type")}<th className="w-24" /></tr>
+            </thead>
+            <tbody>
+              {listing?.parent && (
+                <tr className="cursor-pointer hover:bg-muted/60" onDoubleClick={() => load(listing.parent!)}>
+                  <td className="px-2 py-1" colSpan={5}><button type="button" onClick={() => load(listing.parent!)} className="flex items-center gap-1.5 text-muted-foreground"><Folder className="size-4" /> ..</button></td>
+                </tr>
+              )}
+              {entries.map((e) => (
+                <tr key={e.path} aria-selected={selected?.path === e.path} onClick={() => setSelected(e)} onDoubleClick={() => (e.type === "dir" ? load(e.path) : setSelected(e))}
+                  className={cn("group cursor-default border-t hover:bg-muted/60", selected?.path === e.path && "bg-muted")}>
+                  <td className="max-w-0 px-2 py-1">
+                    <span className="flex items-center gap-1.5 truncate">
+                      {e.type === "dir" ? <Folder className="size-4 shrink-0 text-amber-500" /> : e.secret ? <FileLock className="size-4 shrink-0 text-rose-500" /> : e.type === "symlink" ? <Link2 className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
+                      {e.type === "dir" ? <button type="button" className="truncate hover:underline" onClick={() => load(e.path)}>{e.name}</button> : <span className="truncate">{e.name}</span>}
+                    </span>
+                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{e.type === "file" ? formatBytes(e.size) : ""}</td>
+                  <td className="px-2 py-1 whitespace-nowrap text-muted-foreground">{when(e.modified)}</td>
+                  <td className="px-2 py-1 text-muted-foreground">{e.secret ? "credential" : extOf(e)}</td>
+                  <td className="px-1 py-1">
+                    <span className="flex justify-end gap-0.5 opacity-60 group-hover:opacity-100">
+                      {e.type === "file" && <button type="button" title="Download" aria-label={`Download ${e.name}`} onClick={() => download(e)} className="rounded p-1 hover:bg-background"><Download className="size-3.5" /></button>}
+                      <button type="button" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => { setDraft(e.name); setDialog({ kind: "rename", entry: e }); }} className="rounded p-1 hover:bg-background"><Pencil className="size-3.5" /></button>
+                      <button type="button" title="Move" aria-label={`Move ${e.name}`} onClick={() => { setDraft(cwd); setDialog({ kind: "move", entry: e }); }} className="rounded p-1 hover:bg-background"><MoveRight className="size-3.5" /></button>
+                      <button type="button" title="Delete" aria-label={`Delete ${e.name}`} onClick={() => openDelete(e)} className="rounded p-1 text-destructive hover:bg-background"><Trash2 className="size-3.5" /></button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {listing && entries.length === 0 && <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground">{filter ? "Nothing here matches." : "An empty folder: drop files here to upload them."}</td></tr>}
+              {!listing && !error && <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground"><Loader2 className="mx-auto size-5 animate-spin" /></td></tr>}
+            </tbody>
+          </table>
+        </section>
+
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border" aria-label="Preview">
+          {!selected ? (
+            <p className="p-4 text-sm text-muted-foreground">Select a file to preview it.</p>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 border-b px-3 py-2">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium" title={selected.path}>{selected.name}</span>
+                {selected.type === "file" && <Button size="sm" variant="outline" onClick={() => download(selected)}><Download className="size-4" /> Download</Button>}
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {selected.type === "dir" ? <p className="p-4 text-sm text-muted-foreground">A folder. Double-click it to open.</p>
+                  : selected.secret ? <p className="p-4 text-sm"><FileLock className="mb-2 size-5 text-rose-500" />A credential file: it is never shown here. Download it if you need it (you&apos;ll be asked to confirm).</p>
+                  // eslint-disable-next-line @next/next/no-img-element -- (the admin's own API, behind its session: not for the image optimizer)
+                  : IMAGE.test(selected.name) ? <img src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} alt={selected.name} className="mx-auto max-h-full max-w-full object-contain p-2" />
+                  : PDF.test(selected.name) ? <iframe title={selected.name} src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} className="h-full w-full" />
+                  : !preview || preview.path !== selected.path ? <p className="p-4 text-sm text-muted-foreground">Loading…</p>
+                  : preview.error ? <p className="p-4 text-sm text-destructive">{preview.error}</p>
+                  : preview.binary ? <p className="p-4 text-sm text-muted-foreground">A binary file ({formatBytes(selected.size)}): download it to open it.</p>
+                  : (
+                    <div className="flex h-full flex-col">
+                      {preview.truncated && <p className="border-b px-3 py-1 text-xs text-muted-foreground">The first 1 MB of {formatBytes(selected.size)}.</p>}
+                      <div className="min-h-[300px] flex-1"><MonacoViewer name={selected.name} text={preview.text ?? ""} /></div>
+                    </div>
+                  )}
+              </div>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 border-t px-3 py-2 text-xs text-muted-foreground">
+                <dt>Path</dt><dd className="truncate font-mono" title={selected.path}>{selected.path}</dd>
+                <dt>Size</dt><dd>{selected.type === "file" ? `${formatBytes(selected.size)} (${selected.size.toLocaleString()} bytes)` : "—"}</dd>
+                <dt>Modified</dt><dd>{when(selected.modified)}</dd>
+              </dl>
+            </>
+          )}
+        </aside>
+      </div>
+
+      {uploads.length > 0 && (
+        <section aria-label="Uploads" className="rounded-lg border p-2">
+          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+            <span>Uploads{active ? ` · ${active} in progress` : ""}</span>
+            <button type="button" className="hover:text-foreground" onClick={() => setUploads((u) => u.filter((x) => x.status === "uploading"))}>Clear finished</button>
+          </div>
+          <ul className="max-h-40 space-y-1 overflow-auto">
+            {uploads.map((u) => {
+              const pct = u.size ? Math.round((u.sent / u.size) * 100) : 100;
+              return (
+                <li key={u.key} className="flex items-center gap-2 text-xs">
+                  <span className="w-56 truncate" title={`${u.dir}/${u.name}`}>{u.name}</span>
+                  <span className="h-2 flex-1 overflow-hidden rounded bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Upload of ${u.name}`}>
+                    <span className={cn("block h-full", u.status === "error" ? "bg-destructive" : u.status === "done" ? "bg-emerald-500" : "bg-primary")} style={{ width: `${pct}%` }} />
+                  </span>
+                  <span className="w-40 text-right tabular-nums text-muted-foreground">
+                    {u.status === "uploading" ? `${formatBytes(u.sent)} / ${formatBytes(u.size)}` : u.status === "done" ? "done" : u.status === "cancelled" ? "cancelled" : <span className="text-destructive" title={u.error}>failed: {u.error}</span>}
+                  </span>
+                  {u.status === "uploading" && <button type="button" aria-label={`Cancel ${u.name}`} onClick={() => u.abort.abort()} className="rounded p-0.5 hover:bg-muted"><X className="size-3.5" /></button>}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      <Dialog open={!!dialog} onOpenChange={(o) => { if (!o && !busy) setDialog(null); }}>
+        <DialogContent className="sm:max-w-lg">
+          {dialog?.kind === "mkdir" && (
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "mkdir", dir: cwd, name: draft })); }}>
+              <DialogHeader><DialogTitle>New folder</DialogTitle><DialogDescription>In {cwd}</DialogDescription></DialogHeader>
+              <Input autoFocus aria-label="Folder name" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3" />
+              <DialogFooter><Button type="submit" disabled={!draft.trim() || busy}>Create</Button></DialogFooter>
+            </form>
+          )}
+          {dialog?.kind === "rename" && (
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "rename", path: dialog.entry.path, name: draft }), () => setSelected(null)); }}>
+              <DialogHeader><DialogTitle>Rename</DialogTitle><DialogDescription>{dialog.entry.path}</DialogDescription></DialogHeader>
+              <Input autoFocus aria-label="New name" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3" />
+              <DialogFooter><Button type="submit" disabled={!draft.trim() || draft === dialog.entry.name || busy}>Rename</Button></DialogFooter>
+            </form>
+          )}
+          {dialog?.kind === "move" && (
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "move", path: dialog.entry.path, to: draft }), () => setSelected(null)); }}>
+              <DialogHeader><DialogTitle>Move {dialog.entry.name}</DialogTitle><DialogDescription>To the folder (a full path inside {roots.join(" or ")}):</DialogDescription></DialogHeader>
+              <Input autoFocus aria-label="Destination folder" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3 font-mono" />
+              <DialogFooter><Button type="submit" disabled={!draft.trim() || busy}>Move</Button></DialogFooter>
+            </form>
+          )}
+          {dialog?.kind === "delete" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Delete {dialog.entry.type === "dir" ? "this folder" : "this file"}?</DialogTitle>
+                <DialogDescription className="font-mono break-all">{dialog.entry.path}</DialogDescription>
+              </DialogHeader>
+              {dialog.error ? <p className="text-sm text-destructive">{dialog.error}</p>
+                : !dialog.plan ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline size-4 animate-spin" />Measuring…</p>
+                : (
+                  <div className="space-y-2 text-sm">
+                    <p>{dialog.plan.type === "dir" ? `${dialog.plan.truncated ? "At least " : ""}${dialog.plan.files.toLocaleString()} file${dialog.plan.files === 1 ? "" : "s"}, ${formatBytes(dialog.plan.bytes)}.` : formatBytes(dialog.plan.bytes)} It goes to the trash, from where it can be restored.</p>
+                    {dialog.plan.running.length > 0 && (
+                      <label className="flex items-start gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2">
+                        <input type="checkbox" checked={dialog.force} onChange={(e) => setDialog({ ...dialog, force: e.target.checked })} className="mt-1" />
+                        <span>Running inside it: {dialog.plan.running.map((r) => r.slug).join(", ")}. Delete anyway?</span>
+                      </label>
+                    )}
+                  </div>
+                )}
+              <DialogFooter>
+                <Button variant="destructive" disabled={busy || !dialog.plan || !!dialog.error || (dialog.plan.running.length > 0 && !dialog.force)}
+                  onClick={() => act(() => post({ op: "delete", path: dialog.entry.path, force: dialog.force }), () => setSelected(null))}>
+                  <Trash2 className="size-4" /> Move to the trash
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+          {dialog?.kind === "secret" && (
+            <>
+              <DialogHeader><DialogTitle>Download a credential file?</DialogTitle><DialogDescription className="font-mono break-all">{dialog.entry.path}</DialogDescription></DialogHeader>
+              <p className="text-sm">It may hold passwords or keys. It downloads to this computer; the download is logged.</p>
+              <DialogFooter><Button onClick={() => { download(dialog.entry, true); setDialog(null); }}><Download className="size-4" /> Download</Button></DialogFooter>
+            </>
+          )}
+          {dialog?.kind === "trash" && (
+            <>
+              <DialogHeader><DialogTitle>Trash</DialogTitle><DialogDescription>Deleted files and folders, newest first. Restore puts one back where it was.</DialogDescription></DialogHeader>
+              {dialog.error && <p className="text-sm text-destructive">{dialog.error}</p>}
+              {!dialog.items ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline size-4 animate-spin" />Loading…</p>
+                : dialog.items.length === 0 ? <p className="text-sm text-muted-foreground">The trash is empty.</p>
+                : (
+                  <ul className="max-h-80 space-y-1 overflow-auto text-sm">
+                    {dialog.items.map((i) => (
+                      <li key={i.id} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-muted">
+                        {i.type === "dir" ? <Folder className="size-4 shrink-0 text-amber-500" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
+                        <span className="min-w-0 flex-1"><span className="block truncate font-mono text-xs" title={i.originalPath}>{i.originalPath}</span><span className="text-xs text-muted-foreground">{formatBytes(i.bytes)} · deleted {when(i.deletedAt)}</span></span>
+                        <Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => post({ op: "restore", id: i.id }), openTrash)}><RotateCcw className="size-3.5" /> Restore</Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              <DialogFooter>
+                <Button variant="destructive" disabled={busy || !dialog.items?.length}
+                  onClick={() => { if (window.confirm(`Delete ${dialog.items?.length} item(s) in the trash for good (${formatBytes(dialog.items?.reduce((n, i) => n + i.bytes, 0) ?? 0)})? This can't be undone.`)) void act(() => post({ op: "empty-trash" })); }}>
+                  Empty the trash
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

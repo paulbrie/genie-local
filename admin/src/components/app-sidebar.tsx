@@ -21,6 +21,7 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  FolderOpen,
   ScrollText,
   Server,
   Share2,
@@ -66,6 +67,7 @@ const NAV: NavItem[] = [
   { href: "/railway", label: "Railway", icon: TrainFront },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
+  { href: "/files", label: "Files", icon: FolderOpen },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/claude", label: "Claude", icon: Sparkles },
   {
