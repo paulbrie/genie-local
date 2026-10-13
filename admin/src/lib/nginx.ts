@@ -10,13 +10,13 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { apps, projects } from "@/db/schema";
 import {
-  DEFAULT_PORT_POLICY, applyWithRollback, diffLines, expandIncludes, extractRoutes, findProblems, parseNginx, parseSsListeners,
+  DEFAULT_PORT_POLICY, applyWithRollback, diffLines, expandIncludes, extractRoutes, findProblems, parseNginx,
   portChangeConflicts, renderProjectsConfText, type AppRow, type ConfRow, type Conflict, type DiffLine, type ListenerInfo,
   type PortPolicy, type Problem, type Route, type ServerInfo,
 } from "@/lib/nginx-routes";
+import { readListeners } from "@/lib/listeners";
 import { isAppServerRunning } from "@/lib/run-slug";
 import { listRunningSlugs } from "@/lib/runner";
-import { PROJECTS_ROOT } from "@/lib/signals";
 
 const execFileAsync = promisify(execFile);
 
@@ -130,29 +130,6 @@ async function resolveInclude(pattern: string): Promise<{ file: string; text: st
   return out;
 }
 
-/** The working directory of a pid we own (others' are unreadable): null otherwise. */
-async function cwdOf(pid: number | null): Promise<string | null> {
-  if (!pid) return null;
-  return fs.readlink(`/proc/${pid}/cwd`).catch(() => null);
-}
-
-async function listeners(): Promise<ListenerInfo[]> {
-  let stdout = "";
-  try {
-    ({ stdout } = await execFileAsync("ss", ["-ltnH", "-p"], { timeout: 3000 }));
-  } catch {
-    return [];
-  }
-  const root = PROJECTS_ROOT.endsWith("/") ? PROJECTS_ROOT : `${PROJECTS_ROOT}/`;
-  return Promise.all(
-    parseSsListeners(stdout).map(async (l) => {
-      const cwd = await cwdOf(l.pid);
-      const project = cwd?.startsWith(root) ? cwd.slice(root.length).split("/")[0] || null : null;
-      return { ...l, cwd, project };
-    }),
-  );
-}
-
 export type RouteSnapshot = {
   servers: ServerInfo[];
   routes: Route[];
@@ -178,7 +155,7 @@ export async function loadRouteSnapshot(): Promise<RouteSnapshot> {
   const generatedPath = path.resolve(PROJECTS_CONF_PATH);
   const [mainText, ls, appList, onDisk, rendered] = await Promise.all([
     fs.readFile(path.join(NGINX_ROOT, "nginx.conf"), "utf8").catch(() => null),
-    listeners(),
+    readListeners(),
     appRows(),
     fs.readFile(PROJECTS_CONF_PATH, "utf8").catch(() => null),
     renderProjectsConf(),
@@ -196,7 +173,7 @@ export type PortChangePreview = { conflicts: Conflict[]; diff: DiffLine[]; chang
 
 /** What giving `appId` the port `port` would do: the conflicts, and the generated include's diff. */
 export async function previewPortChange(appId: number, port: number | null): Promise<PortChangePreview> {
-  const [rows, ls, appList] = await Promise.all([appConfRows(), listeners(), appRows()]);
+  const [rows, ls, appList] = await Promise.all([appConfRows(), readListeners(), appRows()]);
   const conflicts = portChangeConflicts(appId, port, appList, ls);
   const before = renderProjectsConfText(rows);
   const after = renderProjectsConfText(rows.map((r) => (r.appId === appId ? { ...r, port } : r)));

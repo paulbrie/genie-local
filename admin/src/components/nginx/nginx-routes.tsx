@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import type { RouteSnapshot } from "@/lib/nginx";
 import type { AppRow, Problem } from "@/lib/nginx-routes";
 import { PortDialog } from "./port-dialog";
-import { hostsOf, isLocal, listenOf, listenerName, rowsOf, upstreamText, type RouteRow } from "./route-rows";
+import { hostsOf, isLocal, listenOf, listenerDetail, listenerName, rowsOf, upstreamText, type RouteRow } from "./route-rows";
 import { RoutesDiagram } from "./routes-diagram";
 import { SubdomainNotice } from "./subdomain-notice";
 
@@ -58,9 +58,7 @@ function ListenerCell({ row }: { row: RouteRow }) {
   return (
     <span className="flex flex-col">
       <span className="font-medium">{listenerName(l)}</span>
-      <span className="text-xs text-muted-foreground">
-        {l.process ?? "not ours"}{l.pid ? ` · pid ${l.pid}` : ""}
-      </span>
+      <span className="text-xs text-muted-foreground">{listenerDetail(l)}</span>
     </span>
   );
 }

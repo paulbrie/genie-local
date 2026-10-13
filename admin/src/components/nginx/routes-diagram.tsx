@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import { cn } from "@/lib/utils";
-import { hostsOf, listenOf, listenerName, localPortOf, upstreamText, type RouteRow } from "./route-rows";
+import { hostsOf, listenOf, listenerDetail, listenerName, localPortOf, upstreamText, type RouteRow } from "./route-rows";
 
 const ROW = 30, GAP = 8, STEP = ROW + GAP, PAD = 12;
 // the columns: x and width (in the SVG's own units; it scales to the box)
@@ -93,7 +93,7 @@ export function RoutesDiagram({ rows }: { rows: RouteRow[] }) {
       const r = rows[upIdx.get(n.key)![0]];
       const l = r.listener;
       return l
-        ? { key: n.key, y: n.y, label: clip(listenerName(l), 26), sub: l.pid ? `${clip(l.process ?? "", 18)} · pid ${l.pid}` : "not ours", tone: "ok" as const }
+        ? { key: n.key, y: n.y, label: clip(listenerName(l), 26), sub: clip(listenerDetail(l), 34), tone: "ok" as const }
         : { key: n.key, y: n.y, label: "nothing listening", sub: r.app ? `${r.app.project} ${r.app.running ? "running" : "stopped"}` : undefined, tone: "warn" as const };
     });
 

@@ -252,8 +252,49 @@ export function parseSsListeners(stdout: string): Listener[] {
 
 /** An admin app, as the routes see it: its port, its mount path, whether its server runs. */
 export type AppRow = { appId: number; project: string; app: string; port: number | null; mount: string; running: boolean };
-/** A listener, told: its process's project (from its working directory), when it is one. */
-export type ListenerInfo = Listener & { cwd: string | null; project: string | null };
+/**
+ * A listener, told (for our own processes; others' are unreadable): its project (from its working directory), the
+ * systemd unit it runs in (from its cgroup), and its command (argv[0..1]).
+ */
+export type ListenerInfo = Listener & { cwd: string | null; project: string | null; service?: string | null; command?: string | null };
+
+/** The systemd unit a /proc/<pid>/cgroup names (`0::/system.slice/admin-dev.service` → "admin-dev"), or null. */
+export function serviceOfCgroup(text: string): string | null {
+  for (const line of text.split("\n")) {
+    const m = /\/([^/]+)\.service$/.exec(line.slice(line.lastIndexOf(":") + 1).trim());
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** The line under a listener's name: its systemd unit, else its command (short), else `ss`'s process name, never a thread's; and its pid. */
+export function listenerDetail(l: ListenerInfo): string {
+  const base = (p: string | undefined) => p?.split("/").filter(Boolean).pop();
+  const [argv0, argv1] = l.command?.split(" ") ?? [];
+  const what = l.service
+    ? `${l.service}.service`
+    : argv0
+      ? [base(argv0), base(argv1)].filter(Boolean).join(" ")
+      : l.process && l.process !== "MainThread" ? l.process : null;
+  return [what ?? (l.pid ? null : "not ours"), l.pid ? `pid ${l.pid}` : null].filter(Boolean).join(" · ");
+}
+
+const INTERPRETERS = new Set(["node", "nodejs", "bun", "deno", "python", "python3", "ruby", "perl", "java", "sh", "bash"]);
+
+/**
+ * What listens, named, never by a thread's name ("MainThread" is what `ss` shows for node): its project; else its
+ * systemd unit (admin, admin-dev, code-server; set only for the unit's own server, see readListeners, so a project's
+ * server or a tool started from the admin's terminals isn't called "admin"); else its command (the script, past an
+ * interpreter); else its working directory's name; else the process name `ss` gave.
+ */
+export function listenerName(l: ListenerInfo): string {
+  if (l.project) return l.project;
+  if (l.service) return l.service;
+  const base = (p: string | null | undefined) => p?.split("/").filter(Boolean).pop() ?? null;
+  const [argv0, argv1] = l.command?.split(" ") ?? [];
+  const cmd = INTERPRETERS.has(base(argv0) ?? "") ? base(argv1) : base(argv0);
+  return cmd ?? base(l.cwd) ?? l.process ?? "a process";
+}
 
 export type Problem = {
   kind: "duplicate-port" | "dead-route" | "unrouted" | "port-range" | "duplicate-path";

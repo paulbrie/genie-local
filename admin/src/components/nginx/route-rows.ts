@@ -50,7 +50,4 @@ export function upstreamText(r: Route): string {
 }
 
 
-/** what listens, named: its project, else its working directory's name (the admin, VS Code…), else its process */
-export function listenerName(l: ListenerInfo): string {
-  return l.project ?? (l.cwd ? l.cwd.split("/").filter(Boolean).pop() ?? null : null) ?? l.process ?? "a process";
-}
+export { listenerDetail, listenerName } from "@/lib/nginx-routes";

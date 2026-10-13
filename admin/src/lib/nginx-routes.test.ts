@@ -7,8 +7,8 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 
 import {
-  applyWithRollback, diffLines, expandIncludes, extractRoutes, findProblems, parseNginx, parseProxyPass, parseSsListeners,
-  portAllowed, portChangeConflicts, renderProjectsConfText, type AppRow, type ListenerInfo,
+  applyWithRollback, diffLines, expandIncludes, extractRoutes, findProblems, listenerDetail, listenerName, parseNginx, parseProxyPass, parseSsListeners,
+  portAllowed, portChangeConflicts, renderProjectsConfText, serviceOfCgroup, type AppRow, type ListenerInfo,
 } from "./nginx-routes";
 
 const NGINX_CONF = `
@@ -119,6 +119,26 @@ describe("the nginx routes (T242)", () => {
     assert.deepEqual(l.map((x) => x.port), [3000, 3002, 4001, 7301]);
     assert.deepEqual(l.find((x) => x.port === 4001), { addr: "*", port: 4001, pid: 1852670, process: "next-server (v1" });
     assert.equal(l.find((x) => x.port === 3000)!.pid, null);
+  });
+
+  it("names what listens by its project, its systemd unit, its directory or command: never a thread's name", () => {
+    const l = (x: Partial<ListenerInfo>): ListenerInfo => ({ addr: "*", port: 1, pid: 1, process: "MainThread", cwd: null, project: null, ...x });
+    assert.equal(serviceOfCgroup("0::/system.slice/admin-dev.service\n"), "admin-dev");
+    assert.equal(serviceOfCgroup("0::/user.slice/user-1000.slice/session-3.scope"), null);
+    // a project's dev server runs in admin's unit (the runner spawned it): the project first
+    assert.equal(listenerName(l({ cwd: "/opt/project/projects/acccess", project: "acccess", service: "admin" })), "acccess");
+    assert.equal(listenerName(l({ cwd: "/opt/project/admin", service: "admin" })), "admin");
+    assert.equal(listenerName(l({ cwd: "/opt/project/admin", service: "admin-dev" })), "admin-dev");
+    assert.equal(listenerName(l({ cwd: "/opt/project", service: "code-server" })), "code-server");
+    assert.equal(listenerName(l({ cwd: "/srv/tool" })), "tool");
+    assert.equal(listenerName(l({ command: "/usr/bin/redis-server *:6379" })), "redis-server");
+    // a tool started from the admin's terminal (its unit not set: not the unit's own server), run by node
+    assert.equal(listenerName(l({ cwd: "/opt/project/admin", command: "/usr/bin/node /opt/tools/agent-browser.js" })), "agent-browser.js");
+    assert.equal(listenerName(l({ pid: null, process: null })), "a process");
+    assert.equal(listenerDetail(l({ service: "admin-dev", pid: 42 })), "admin-dev.service · pid 42");
+    assert.equal(listenerDetail(l({ command: "/usr/bin/node /opt/project/admin/server.mjs", pid: 42 })), "node server.mjs · pid 42");
+    assert.equal(listenerDetail(l({ pid: 42 })), "pid 42");
+    assert.equal(listenerDetail(l({ pid: null, process: null })), "not ours");
   });
 
   it("flags the drones/Access 4001 case, dead routes, unrouted servers, duplicate paths and ports out of range", async () => {
