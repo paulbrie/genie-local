@@ -231,10 +231,10 @@ export function AppSidebar() {
       )}
       <aside
         className={`fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r bg-background/95 transition-transform duration-200 md:static md:z-auto md:transition-[width] ${
-          rail ? "md:w-16" : "md:w-60"
+          rail ? "md:w-14" : "md:w-56"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
       >
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
           {!rail && (
             <Link
               href="/"
@@ -267,7 +267,7 @@ export function AppSidebar() {
           </button>
         </div>
 
-      <nav className="flex flex-1 flex-col gap-1 overflow-y-auto p-2">
+      <nav className="flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
         {NAV.map((item) => {
           if (item.children)
             return (
@@ -311,7 +311,7 @@ export function AppSidebar() {
                     ? `${item.label}${badge ? ` (${badge})` : ""}`
                     : undefined
                 }
-                className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+                className={`relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
                   rail ? "justify-center" : ""
                 } ${
                   active
@@ -319,11 +319,11 @@ export function AppSidebar() {
                     : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                 }`}
               >
-                <Icon className="size-4 shrink-0" />
+                <Icon className="size-[15px] shrink-0" />
                 {!rail && <span className="truncate">{item.label}</span>}
                 {badge != null &&
                   (rail ? (
-                    <span className="absolute -top-0.5 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
+                    <span className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
                       {badge}
                     </span>
                   ) : (
@@ -336,7 +336,7 @@ export function AppSidebar() {
               {/* Live agent/pipeline runs, as sub-items under Agents. Clicking
                   opens (or un-minimizes) the run's window in the global dock. */}
               {item.href === "/agents" && !rail && liveRuns.length > 0 && (
-                <div className="mt-0.5 flex flex-col gap-0.5">
+                <div className="mt-px flex flex-col gap-px">
                   {liveRuns.map((r) => {
                     const KindIcon = r.kind === "pipeline" ? Workflow : Bot;
                     return (
@@ -352,7 +352,7 @@ export function AppSidebar() {
                             ? ` — ${r.stepsDone}/${r.stepsTotal}`
                             : ""
                         }`}
-                        className="flex items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
                         <StatusDot color="bg-emerald-500" pulse size="sm" />
                         <KindIcon className="size-3 shrink-0 opacity-70" />
@@ -373,7 +373,7 @@ export function AppSidebar() {
               {item.href === "/terminals" &&
                 !rail &&
                 workingTerms.length > 0 && (
-                  <div className="mt-0.5 flex flex-col gap-0.5">
+                  <div className="mt-px flex flex-col gap-px">
                     {workingTerms.map((t) => (
                       <button
                         key={t.name}
@@ -387,7 +387,7 @@ export function AppSidebar() {
                             ? `Open ${t.name} — ${termLabel(t.status)} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
                             : `Open ${t.name} — ${termLabel(t.status)}`
                         }
-                        className="flex items-center gap-2 rounded-md py-1 pr-2 pl-8 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
                         <TermDot status={t.status} />
                         <span className="truncate">{t.name}</span>
@@ -413,11 +413,11 @@ export function AppSidebar() {
           rel="noreferrer"
           onClick={closeMobile}
           title={rail ? "VS Code" : undefined}
-          className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
+          className={`relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
             rail ? "justify-center" : ""
           } text-muted-foreground hover:bg-accent/50 hover:text-foreground`}
         >
-          <Code2 className="size-4 shrink-0" />
+          <Code2 className="size-[15px] shrink-0" />
           {!rail && (
             <>
               <span className="truncate">VS Code</span>
@@ -428,7 +428,7 @@ export function AppSidebar() {
       </nav>
 
         <div
-          className={`flex shrink-0 items-center gap-1 border-t p-2 ${
+          className={`flex shrink-0 items-center gap-1 border-t p-1.5 ${
             rail ? "flex-col" : ""
           }`}
         >
@@ -436,11 +436,11 @@ export function AppSidebar() {
           <button
             onClick={logout}
             title="Logout"
-            className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground ${
+            className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground ${
               rail ? "justify-center" : "flex-1"
             }`}
           >
-            <LogOut className="size-4 shrink-0" />
+            <LogOut className="size-[15px] shrink-0" />
             {!rail && <span>Logout</span>}
           </button>
         </div>
@@ -540,22 +540,22 @@ function NavGroup({
         onClick={onNavigate}
         aria-current={on ? "page" : undefined}
         title={rail ? it.label : undefined}
-        className={`flex items-center gap-3 rounded-md py-2 text-sm transition-colors ${
-          rail ? "justify-center px-3" : sub ? "pr-3 pl-8" : "px-3"
+        className={`flex items-center gap-2.5 rounded-md text-[13px] leading-5 transition-colors ${
+          rail ? "justify-center px-2.5 py-1.5" : sub ? "py-1 pr-2.5 pl-7" : "px-2.5 py-1.5"
         } ${
           on
             ? "bg-accent font-medium text-accent-foreground"
             : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
         }`}
       >
-        <ItIcon className={`shrink-0 ${sub && !rail ? "size-3.5" : "size-4"}`} />
+        <ItIcon className={`shrink-0 ${sub && !rail ? "size-3.5" : "size-[15px]"}`} />
         {!rail && <span className="truncate">{it.label}</span>}
       </Link>
     );
   };
   if (rail)
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-px">
         {row(item, false)}
         {item.children!.map((c) => row(c, true))}
       </div>
@@ -571,9 +571,9 @@ function NavGroup({
           href={item.href}
           onClick={onNavigate}
           aria-current={active ? "page" : undefined}
-          className={`flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-sm ${active ? "font-medium" : ""}`}
+          className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
         >
-          <Icon className="size-4 shrink-0" />
+          <Icon className="size-[15px] shrink-0" />
           <span className="truncate">{item.label}</span>
         </Link>
         <button
@@ -582,12 +582,12 @@ function NavGroup({
           aria-expanded={open}
           aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
           title={open ? "Fold" : "Unfold"}
-          className="mr-1 rounded p-1 opacity-70 hover:bg-accent hover:opacity-100"
+          className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
         >
           <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
         </button>
       </div>
-      {open && <div className="mt-0.5 flex flex-col gap-0.5">{item.children!.map((c) => row(c, true))}</div>}
+      {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
     </div>
   );
 }
