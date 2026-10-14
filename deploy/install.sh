@@ -29,7 +29,8 @@
 #   GENIE_API_URL       Base URL of a Genie manager, e.g. https://genie.example.com
 #                       (default: unset → no genie-* MCP servers in .mcp.json)
 #   GENIE_VPS_TOKEN     Bearer token for the genie-* MCP servers  (default: placeholder)
-#   INSTALL_CODE_SERVER=1   Also install code-server              (default: 1)
+#   INSTALL_CODE_SERVER=1   Also install, start and route code-server at /vscode/ (default: 1)
+#   CODE_SERVER_PORT        code-server's localhost port          (default: 13337)
 #   START_SERVICES=1        Enable + start systemd units          (default: 1)
 #   RUN_MIGRATIONS=1        Run drizzle migrations                (default: 1)
 #
@@ -53,6 +54,8 @@ SETUP_PORT="${SETUP_PORT:-3001}"
 # Where install.sh publishes live progress the setup UI streams to the browser.
 SETUP_DIR="${SETUP_DIR:-/tmp/genie-setup}"
 SETUP_PROGRESS="$SETUP_DIR/progress"
+# The one-time setup code is also saved here (root-only) for easy lookup.
+SETUP_CODE_FILE="$INSTALL_DIR/setup-code.txt"
 SETUP_UI=0          # set to 1 when the interactive setup UI is running
 WIZ_PID=""          # setup-server pid (when SETUP_UI=1)
 
@@ -72,6 +75,7 @@ GENIE_VPS_TOKEN="${GENIE_VPS_TOKEN:-REPLACE_WITH_GENIE_VPS_TOKEN}"
 
 PG_MAJOR="${PG_MAJOR:-17}"   # from the PGDG apt repo
 INSTALL_CODE_SERVER="${INSTALL_CODE_SERVER:-1}"
+CODE_SERVER_PORT="${CODE_SERVER_PORT:-13337}"   # localhost-only; nginx serves it at /vscode/
 START_SERVICES="${START_SERVICES:-1}"
 RUN_MIGRATIONS="${RUN_MIGRATIONS:-1}"
 
@@ -189,8 +193,12 @@ if [[ -z "$PUBLIC_HOST" ]]; then
   SETUP_UI=1
   log "Bringing up the setup UI (nginx :$SETUP_PORT_PUBLIC → setup server :$SETUP_PORT)"
   rm -rf "$SETUP_DIR"; mkdir -p "$SETUP_DIR"
-  # One-time code gating the public setup form (see setup-server.mjs).
+  # One-time code gating the public setup form (see setup-server.mjs). Also
+  # written to a root-only file so the operator can find it without scrolling
+  # the installer's console; removed once the setup UI is retired.
   SETUP_TOKEN="$(openssl rand -hex 12)"
+  mkdir -p "$INSTALL_DIR"
+  ( umask 077; printf '%s\n' "$SETUP_TOKEN" > "$SETUP_CODE_FILE" )
 
   # Temporary nginx: the whole domain root proxies to the setup server. Swapped
   # for the real admin vhost at the end (see the handoff after services start).
@@ -217,7 +225,7 @@ EOF
     || die "temporary setup nginx config failed to validate."
 
   # Start the setup server (stays up for the whole install; retired at the end).
-  SETUP_TOKEN="$SETUP_TOKEN" SETUP_HOST_FILE="$HOST_FILE" SETUP_PROGRESS_FILE="$SETUP_PROGRESS" SETUP_PORT="$SETUP_PORT" \
+  SETUP_TOKEN="$SETUP_TOKEN" SETUP_CODE_FILE="$SETUP_CODE_FILE" SETUP_HOST_FILE="$HOST_FILE" SETUP_PROGRESS_FILE="$SETUP_PROGRESS" SETUP_PORT="$SETUP_PORT" \
     SETUP_USER_FILE="$ADMIN_USER_FILE" SETUP_PASS_FILE="$ADMIN_PASS_FILE" SETUP_DEV_FILE="$DEV_FILE" \
     node "$SCRIPT_DIR/setup-server.mjs" &
   WIZ_PID=$!
@@ -228,6 +236,7 @@ EOF
   warn "ACTION REQUIRED: open this box's public URL in a browser and confirm the host."
   warn "  e.g. https://<your-domain>/?token=$SETUP_TOKEN  — then leave the page open to watch progress."
   warn "  Setup code (required by the form): $SETUP_TOKEN"
+  warn "  (also saved in $SETUP_CODE_FILE)"
   echo
   # Wait (up to 1h) for the operator to confirm; the setup server writes the host.
   for _ in $(seq 1 3600); do
@@ -575,6 +584,11 @@ if [[ "$INSTALL_CODE_SERVER" == "1" ]]; then
       || warn "code-server install failed; skipping its service."
   fi
   if command -v code-server >/dev/null; then
+    # The bind is pinned on the command line (it overrides the genie user's
+    # ~/.config/code-server/config.yaml) so it always matches nginx's /vscode/
+    # location (section 12): localhost-only on $CODE_SERVER_PORT. code-server
+    # keeps its own password auth (password in that config.yaml), behind nginx's
+    # admin-session gate.
     cat > /etc/systemd/system/code-server.service <<EOF
 [Unit]
 Description=code-server — VS Code in the browser (Genie)
@@ -584,7 +598,7 @@ After=network.target
 Type=simple
 User=$GENIE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$(command -v code-server) $INSTALL_DIR
+ExecStart=$(command -v code-server) --bind-addr 127.0.0.1:$CODE_SERVER_PORT $INSTALL_DIR
 Restart=on-failure
 RestartSec=5
 KillMode=mixed
@@ -612,6 +626,35 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 EOF
+
+# code-server at /vscode/ (only when its unit was installed above). Gated by the
+# SAME admin session cookie as /admin: auth_request calls the admin app's
+# /api/authcheck (200 with a valid admin_session cookie, 401 otherwise), and a
+# 401 bounces to the admin login. code-server 4.x emits relative URLs, so
+# stripping the /vscode/ prefix (trailing slash on proxy_pass) serves it under
+# a subpath.
+VSCODE_LOCATIONS=""
+if [[ -f /etc/systemd/system/code-server.service ]]; then
+  VSCODE_LOCATIONS="
+    # code-server (VS Code in the browser) on 127.0.0.1:$CODE_SERVER_PORT, gated by
+    # the admin session cookie (auth_request → /admin/api/authcheck).
+    location = /vscode { return 301 /vscode/; }
+    location /vscode/ {
+        auth_request /vscode-authcheck;
+        error_page 401 = @vscode_login;
+        proxy_pass http://127.0.0.1:$CODE_SERVER_PORT/;
+    }
+    location = /vscode-authcheck {
+        internal;
+        proxy_pass http://127.0.0.1:3002/admin/api/authcheck;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length \"\";
+    }
+    location @vscode_login {
+        return 302 /admin/login;
+    }
+"
+fi
 
 cat > /etc/nginx/sites-available/ft-admin <<EOF
 # Public entrypoint (port 3000 is exposed as https://$PUBLIC_HOST).
@@ -644,7 +687,7 @@ server {
     }
 
     location = / { return 302 /admin; }
-
+$VSCODE_LOCATIONS
     # Per-app live routes, GENERATED from the admin DB (apps.port).
     # Regenerated + reloaded whenever a port is edited in the admin UI.
     include $INSTALL_DIR/admin/nginx/projects.conf;
@@ -741,6 +784,17 @@ if [[ "$START_SERVICES" == "1" ]]; then
   if [[ "$admin_ready" == 1 ]]; then ok "admin is serving on :3002"; end_stage start
   else warn "admin.service did not become ready on :3002 (see journalctl -u admin.service)"; stage start failed; fi
 
+  # code-server is a nice-to-have: report, but don't fail the install over it.
+  if [[ -f /etc/systemd/system/code-server.service ]]; then
+    vscode_ready=0
+    for _ in $(seq 1 30); do
+      curl -s -o /dev/null "http://127.0.0.1:$CODE_SERVER_PORT/healthz" 2>/dev/null && { vscode_ready=1; break; }
+      sleep 1
+    done
+    if [[ "$vscode_ready" == 1 ]]; then ok "code-server is serving on 127.0.0.1:$CODE_SERVER_PORT (/vscode/)"
+    else warn "code-server did not come up on :$CODE_SERVER_PORT (see /var/log/code-server.log)"; fi
+  fi
+
   # Handoff: flip nginx from the setup UI to the admin vhost, then retire the
   # setup server. The setup page detects the swap (its status endpoint goes away)
   # and redirects the operator to /admin. Non-UI installs just (re)load nginx.
@@ -762,7 +816,7 @@ if [[ "$START_SERVICES" == "1" ]]; then
       nginx -t || true; warn "final nginx config failed to validate; leaving setup UI up."
     fi
     [[ -n "$WIZ_PID" ]] && kill "$WIZ_PID" >/dev/null 2>&1 || true
-    rm -f /etc/nginx/sites-available/genie-setup
+    rm -f /etc/nginx/sites-available/genie-setup "$SETUP_CODE_FILE"   # code is dead now
     trap - ERR   # install succeeded; drop the setup-failure handler
   else
     systemctl reload nginx 2>/dev/null || systemctl restart nginx || true
@@ -787,6 +841,7 @@ cat <<EOF
 
   Admin URLs  : /admin      → PROD (next start, :3002, .next-prod)
                 /admin-dev  → DEV  (next dev,  :3003) — $([[ "$START_DEV" == "1" ]] && echo 'daemonised (on boot)' || echo 'on-demand via the UI/admin-ctl')
+$([[ -f /etc/systemd/system/code-server.service ]] && echo "                /vscode/    → code-server (:$CODE_SERVER_PORT) — admin login, then the password in ~$GENIE_USER/.config/code-server/config.yaml")
 
   Verify:
     systemctl is-active admin.service genie-stats.service postgresql nginx

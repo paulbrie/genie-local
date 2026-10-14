@@ -26,10 +26,13 @@ const PROGRESS_FILE = process.env.SETUP_PROGRESS_FILE || "/tmp/genie-setup/progr
 const USER_FILE = process.env.SETUP_USER_FILE || "/tmp/genie-setup/admin-user";
 const PASS_FILE = process.env.SETUP_PASS_FILE || "/tmp/genie-setup/admin-pass";
 const DEV_FILE = process.env.SETUP_DEV_FILE || "/tmp/genie-setup/start-dev";
-// One-time setup code printed by install.sh on the operator's console. The
+// One-time setup code printed by install.sh on the operator's console (and
+// saved to SETUP_CODE_FILE until setup finishes). The
 // wizard is on the public port, so without it whoever opens the page first
 // would pick the admin credentials.
 const SETUP_TOKEN = process.env.SETUP_TOKEN || "";
+const SETUP_CODE_FILE = process.env.SETUP_CODE_FILE || "";
+const CODE_WHERE = SETUP_CODE_FILE ? `the installer's console, or ${SETUP_CODE_FILE}` : "the installer's console";
 
 function tokenOk(given) {
   if (!SETUP_TOKEN) return true;
@@ -125,6 +128,10 @@ const STYLE = `
   input:focus { outline: none; border-color: #3b82f6; }
   button { margin-top: 22px; width: 100%; padding: 12px; font-size: 15px; font-weight: 600; border: 0; border-radius: 9px; background: #3b82f6; color: #fff; cursor: pointer; }
   button:hover { background: #2f6fe0; }
+  .row { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+  .row label { margin-bottom: 6px; }
+  button.small { width: auto; margin: 0 0 6px; padding: 4px 10px; font-size: 12px; font-weight: 500; background: #262a35; color: #cbd5e1; }
+  button.small:hover { background: #333846; }
   ul.info { color: #9aa4b2; font-size: 13px; padding-left: 18px; margin: 20px 0 0; }
   ul.info li { margin: 3px 0; }
   .err { background: #3b1d1d; border: 1px solid #5b2626; color: #fca5a5; padding: 10px 12px; border-radius: 9px; margin-bottom: 16px; font-size: 14px; }
@@ -160,13 +167,20 @@ function wizardPage({ host, username, startdev, error, token }) {
     ${error ? `<div class="err">${esc(error)}</div>` : ""}
     <div>Detected public host:</div>
     <div class="host">${detected ? esc(host) : "could not detect — enter it below"}</div>
-    ${SETUP_TOKEN ? `<label for="token">Setup code (printed in the installer's console)</label>
+    ${SETUP_TOKEN ? `<label for="token">Setup code (in ${esc(CODE_WHERE)})</label>
     <input id="token" name="token" value="${esc(token || "")}" autocomplete="off" spellcheck="false" required />` : ""}
     <label for="host">Public hostname (no scheme, no path)</label>
     <input id="host" name="host" value="${detected ? esc(host) : ""}" placeholder="app.example.com" autocomplete="off" spellcheck="false" required />
     <label for="username">Admin username</label>
     <input id="username" name="username" value="${esc(user)}" autocomplete="off" spellcheck="false" required />
-    <label for="password">Admin password</label>
+    <div class="row">
+      <label for="password">Admin password</label>
+      <span>
+        <button type="button" class="small" id="pw-gen" title="A random 20-character password, shown so you can save it">Generate</button>
+        <button type="button" class="small" id="pw-show">Show</button>
+        <button type="button" class="small" id="pw-copy" hidden>Copy</button>
+      </span>
+    </div>
     <input id="password" name="password" type="password" minlength="8" maxlength="64" autocomplete="new-password" required />
     <label for="password2">Confirm admin password</label>
     <input id="password2" name="password2" type="password" minlength="8" maxlength="64" autocomplete="new-password" required />
@@ -182,6 +196,33 @@ function wizardPage({ host, username, startdev, error, token }) {
       <li>You'll sign in with these credentials once setup finishes</li>
     </ul>
   </form>
+  <script>
+    // Generate: a random password from the allowed set (crypto RNG, no modulo bias), put in both fields and shown
+    // so it can be copied before submitting.
+    (function () {
+      var ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789" + ${JSON.stringify(PASS_ALLOWED)};
+      var pw = document.getElementById("password"), pw2 = document.getElementById("password2");
+      var show = document.getElementById("pw-show"), copy = document.getElementById("pw-copy");
+      function reveal(on) { pw.type = pw2.type = on ? "text" : "password"; show.textContent = on ? "Hide" : "Show"; }
+      function generate(n) {
+        var out = "", limit = 256 - (256 % ALPHABET.length), buf = new Uint8Array(1);
+        while (out.length < n) { crypto.getRandomValues(buf); if (buf[0] < limit) out += ALPHABET[buf[0] % ALPHABET.length]; }
+        return out;
+      }
+      document.getElementById("pw-gen").onclick = function () {
+        pw.value = pw2.value = generate(20);
+        reveal(true);
+        copy.hidden = false;
+      };
+      show.onclick = function () { reveal(pw.type === "password"); };
+      copy.onclick = function () {
+        var done = function () { copy.textContent = "Copied"; setTimeout(function () { copy.textContent = "Copy"; }, 1500); };
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(pw.value).then(done);
+        else { pw.type = "text"; pw.select(); document.execCommand("copy"); done(); }
+      };
+      pw.oninput = function () { copy.hidden = !pw.value; };
+    })();
+  </script>
 </body></html>`;
 }
 
@@ -268,7 +309,7 @@ const server = http.createServer((req, res) => {
       const token = p.get("token") || "";
       const fail = (msg) => send(res, 400, wizardPage({ host, username, startdev, error: msg, token }));
 
-      if (!tokenOk(token)) return fail("Invalid setup code — copy it from the installer's console output.");
+      if (!tokenOk(token)) return fail(`Invalid setup code — copy it from ${CODE_WHERE}.`);
 
       if (!HOST_RE.test(host)) return fail(`"${esc(host)}" is not a valid hostname.`);
       if (!USER_RE.test(username)) return fail("Username: 1–32 chars (letters, digits, . _ -).");

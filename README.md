@@ -110,10 +110,11 @@ for the hot-reload instance) and requires a login.
 ### VS Code
 - The sidebar has a **VS Code** link to `/vscode/` (outside the base path), and
   `GET /api/authcheck` exists as an nginx `auth_request` probe, so code-server
-  can sit behind the same session cookie. `deploy/install.sh` can install
-  code-server and a `code-server.service` (`INSTALL_CODE_SERVER=1`, the default).
-  However, **no `/vscode` nginx location is shipped in this repo**, so you have
-  to add the reverse-proxy block yourself.
+  can sit behind the same session cookie. `deploy/install.sh` installs and
+  starts code-server (`code-server.service`, bound to `127.0.0.1:13337`) and adds
+  the `/vscode/` nginx location, gated by `auth_request` against
+  `/admin/api/authcheck` (`INSTALL_CODE_SERVER=1`, the default). code-server
+  keeps its own password too (in `~genie/.config/code-server/config.yaml`).
 
 ### Processes (`/processes`) and system stats
 - A process table built from the `genie-stats` daemon feed
@@ -465,8 +466,8 @@ What it does, in order (section numbers match the script):
 | 8 | Write `admin/.env.local` (chmod 600) **only if it does not exist** |
 | 9 | Write `.mcp.json` **only if it does not exist** |
 | 10 | `npm run db:migrate` (failure is a warning) |
-| 11 | systemd units: `genie-stats`, `admin`, `admin-dev` (`[Install]` only if `START_DEV=1`). `admin-ctl` → `/usr/local/bin` + `/etc/sudoers.d/admin-supervisor` (validated with `visudo`). Per-minute stats cron for `genie`. Optional code-server |
-| 12 | nginx: `conf.d/upgrade-map.conf` (`$connection_upgrade` map), site `ft-admin`, empty `projects.conf` if missing |
+| 11 | systemd units: `genie-stats`, `admin`, `admin-dev` (`[Install]` only if `START_DEV=1`). `admin-ctl` → `/usr/local/bin` + `/etc/sudoers.d/admin-supervisor` (validated with `visudo`). Per-minute stats cron for `genie`. Optional code-server (`127.0.0.1:$CODE_SERVER_PORT`) |
+| 12 | nginx: `conf.d/upgrade-map.conf` (`$connection_upgrade` map), site `ft-admin` (with the `/vscode/` location when code-server is installed), empty `projects.conf` if missing |
 | 12b | Production build into `.next-prod` (one retry). Log: `/var/log/genie-admin-build.log` |
 | 13 | Enable/restart units, wait for `:3002/admin/login`, switch nginx from the wizard to the admin site |
 | 14 | Print a summary and verify commands |
@@ -697,8 +698,8 @@ journalctl -u admin.service -f
 
 **13. Optional extras**
 - **code-server**: `curl -fsSL https://code-server.dev/install.sh | sh`. Add a
-  unit (see §11 of `install.sh`) and an nginx `location /vscode/` that uses
-  `auth_request` against `/admin/api/authcheck` if you want it behind the
+  unit (see §11 of `install.sh`) and the nginx `/vscode/` locations from §12,
+  which use `auth_request` against `/admin/api/authcheck` to put it behind the
   dashboard login.
 - **Docker**: install Docker and add `genie` to the `docker` group for the
   Docker page.
@@ -811,7 +812,8 @@ CLI flags: `--interval <seconds>` (default 5), `--output <file>`.
 | `GENIE_VPS_TOKEN` | `REPLACE_WITH_GENIE_VPS_TOKEN` | Bearer token for the `genie-*` servers in `.mcp.json`. |
 | `START_DEV` | `0` | `1` makes `admin-dev.service` start at boot. |
 | `PG_MAJOR` | `17` | PostgreSQL major version from PGDG. |
-| `INSTALL_CODE_SERVER` | `1` | Install code-server and `code-server.service`. |
+| `INSTALL_CODE_SERVER` | `1` | Install and start code-server (`code-server.service`) and route it at `/vscode/`. |
+| `CODE_SERVER_PORT` | `13337` | code-server's localhost port. |
 | `START_SERVICES` | `1` | Enable and start the units. |
 | `RUN_MIGRATIONS` | `1` | Run Drizzle migrations. |
 | `SETUP_PORT_PUBLIC` | `3000` | Port of the temporary wizard nginx site. |
@@ -823,8 +825,10 @@ CLI flags: `--interval <seconds>` (default 5), `--output <file>`.
 `SETUP_PORT` (default `3001`), `SETUP_HOST_FILE`, `SETUP_PROGRESS_FILE`,
 `SETUP_USER_FILE`, `SETUP_PASS_FILE`, `SETUP_DEV_FILE` (all default to files
 under `/tmp/genie-setup/`), and `SETUP_TOKEN`, the one-time setup code the form
-requires. The installer generates it with `openssl rand -hex 12` and prints it to
-its console. If unset (running the wizard by hand), no code is required.
+requires. The installer generates it with `openssl rand -hex 12`, prints it to
+its console and saves it to `SETUP_CODE_FILE` (`$INSTALL_DIR/setup-code.txt`,
+root-only, deleted when the setup UI is retired). If unset (running the wizard
+by hand), no code is required.
 
 ### Docker test harness (`deploy/test-docker.sh`)
 
@@ -1182,7 +1186,8 @@ multiple users.
   `APP_PUBLIC_HOSTS`.
 - **The setup wizard** (`deploy/setup-server.mjs`) is public during an
   interactive install. It requires a one-time setup code that `install.sh`
-  generates and prints only to the installer's console (`SETUP_TOKEN`). It
+  prints to the installer's console and saves to `/opt/project/setup-code.txt`
+  (chmod 600, deleted once setup finishes) (`SETUP_TOKEN`). It
   refuses further submissions once the host is confirmed.
 - nginx itself does no auth.
 
@@ -1257,8 +1262,8 @@ and stop systemd units.
    (VPN, IP allowlist or SSO proxy).
 4. Keep `DIAGRAMS_API_KEY` unset unless an agent needs it.
 5. Scope `genie`'s sudo deliberately (see Privilege boundaries).
-6. If you add a `/vscode/` location for code-server, protect it with
-   `auth_request /admin/api/authcheck` and keep code-server on 127.0.0.1.
+6. Keep code-server on 127.0.0.1 behind the installer's `/vscode/` location
+   (`auth_request /admin/api/authcheck`).
 
 ---
 
@@ -1285,7 +1290,7 @@ operators don't get surprised.
   `next build --webpack` because of a Turbopack prerender failure.
 - **Not provisioned by any script here:** the Kokoro TTS container (contrary to
   a note in `admin/AGENTS.md`), Docker, the global `@playwright/test` used for
-  Chrome screenshots, and the `/vscode/` nginx location.
+  Chrome screenshots.
 - **Re-running `install.sh`** generates a new DB password and `ALTER ROLE`s it,
   but keeps the existing `.env.local`. This desyncs Postgres auth. Upgrade with
   the in-place procedure above instead.
