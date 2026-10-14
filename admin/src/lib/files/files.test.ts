@@ -8,6 +8,7 @@ import { after, before, describe, it } from "node:test";
 import { checkName, isWithin, resolveExisting, resolveNew } from "./guard";
 import { isSecretPath, listDir, runningInside } from "./listing";
 import { deletePath, makeFolder, movePath, planDelete, renamePath } from "./ops";
+import { HEX_PAGE, TEXT_PAGE, hexDump, readPage, utf8Boundary } from "./preview";
 import { emptyTrash, listTrash, restoreFromTrash } from "./trash";
 import { cancelUpload, CHUNK_BYTES, clearStale, completeUpload, getSession, startUpload, writeChunk } from "./uploads";
 
@@ -194,5 +195,52 @@ describe("the whole filesystem to read, a few places to change (T243b)", () => {
     const { isPseudo } = await import("./guard");
     for (const p of ["/proc", "/proc/1/environ", "/sys/kernel"]) assert.ok(isPseudo(p), p);
     for (const p of ["/", "/process", "/system", "/opt/project/proc"]) assert.ok(!isPseudo(p), p);
+  });
+});
+
+
+describe("preview pages (T243c)", () => {
+  it("utf8Boundary: a page never ends inside a character", () => {
+    const e = Buffer.from("aé€😀"); // 1 + 2 + 3 + 4 bytes
+    assert.equal(utf8Boundary(e), e.length);
+    for (let cut = 1; cut < e.length; cut++) {
+      const keep = utf8Boundary(e.subarray(0, cut));
+      assert.ok([1, 3, 6, 10].includes(keep) || keep === cut, `cut ${cut} → ${keep}`);
+      assert.doesNotMatch(e.subarray(0, keep).toString("utf8"), /�/);
+    }
+  });
+
+  it("hexDump: offset, hex and printable bytes", () => {
+    assert.equal(hexDump(Buffer.from("AB\0"), 0x20), `00000020  ${"41 42 00".padEnd(23)}  ${"".padEnd(23)}  |AB.|`);
+    // (a short last row lines its ASCII column up with full rows)
+    const [full, short] = hexDump(Buffer.alloc(20, 0x41), 0).split("\n");
+    assert.equal(full.indexOf("|"), short.indexOf("|"));
+  });
+
+  it("readPage: text past 1 MB in pages that join up, binary as hex", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preview-"));
+    try {
+      const text = "é".repeat(TEXT_PAGE); // 2 MB: page 1 must not split an "é"
+      await fs.writeFile(path.join(dir, "big.txt"), text);
+      let out = "", offset = 0, pages = 0;
+      for (;;) {
+        const p = await readPage(path.join(dir, "big.txt"), offset);
+        assert.equal(p.mode, "text");
+        out += p.text; offset = p.next; pages++;
+        if (p.next >= p.size) break;
+      }
+      assert.equal(out, text);
+      assert.equal(pages, 2);
+      const bin = Buffer.alloc(HEX_PAGE + 10, 0);
+      await fs.writeFile(path.join(dir, "a.bin"), bin);
+      const h1 = await readPage(path.join(dir, "a.bin"), 0);
+      assert.equal(h1.mode, "hex");
+      assert.equal(h1.next, HEX_PAGE);
+      const h2 = await readPage(path.join(dir, "a.bin"), h1.next, "hex");
+      assert.equal(h2.next, h2.size);
+      assert.match(h2.text, /^00010000  00 00/);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });

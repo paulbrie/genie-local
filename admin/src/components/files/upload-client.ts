@@ -9,6 +9,8 @@ import { BASE_PATH } from "@/lib/config";
 export interface UploadProgress {
   sent: number;
   size: number;
+  /** bytes per second over the last few seconds; null until there is enough to measure */
+  bytesPerSec: number | null;
 }
 
 const KEY = "admin.files.uploads";
@@ -41,6 +43,49 @@ const sleep = (ms: number, signal: AbortSignal) =>
   });
 
 /**
+ * A chunk's PUT through XMLHttpRequest, which (unlike fetch) reports the bytes sent as they go: `onSent` gets the
+ * chunk's bytes so far. Resolves with the status and JSON body; rejects on a network error or `signal` abort.
+ */
+function putChunk(url: string, chunk: Blob, signal: AbortSignal, onSent: (loaded: number) => void) {
+  return new Promise<{ status: number; body: { received?: number; error?: string } }>((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("cancelled", "AbortError"));
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    xhr.onloadend = () => signal.removeEventListener("abort", abort);
+    xhr.upload.onprogress = (e) => onSent(e.loaded);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText || "{}"); } catch { /* not JSON: the status says enough */ }
+      resolve({ status: xhr.status, body });
+    };
+    xhr.onerror = () => reject(new TypeError("network error"));
+    xhr.onabort = () => reject(new DOMException("cancelled", "AbortError"));
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.send(chunk);
+  });
+}
+
+/**
+ * Progress as it happens, at most every 250 ms (`force` for the start and each chunk's end), with the speed over the
+ * last 3 s. A retry can send bytes again, so the window restarts when `sent` goes back.
+ */
+function progressMeter(size: number, onProgress: (p: UploadProgress) => void) {
+  let samples: { t: number; sent: number }[] = [], lastEmit = 0;
+  return (sent: number, force = false) => {
+    const t = performance.now();
+    if (samples.length && sent < samples[samples.length - 1].sent) samples = [];
+    samples.push({ t, sent });
+    while (samples.length > 2 && t - samples[1].t >= 3000) samples.shift();
+    if (!force && t - lastEmit < 250) return;
+    lastEmit = t;
+    const first = samples[0], span = (t - first.t) / 1000;
+    onProgress({ sent, size, bytesPerSec: span >= 0.5 ? (sent - first.sent) / span : null });
+  };
+}
+
+/**
  * Uploads `file` as `name` into folder `dir`. Resumes a session this browser started for the same file; retries a chunk
  * up to 6 times (1, 2, 4… s apart), asking the server what it has after a failure; on `signal` abort, the server drops
  * the upload. Resolves with the file's path once it is in place.
@@ -69,18 +114,21 @@ export async function uploadFile(
   }
   const cancel = () => { void fetch(`${api}/${id}`, { method: "DELETE" }); remember(key, null); };
   opts.signal.addEventListener("abort", cancel, { once: true });
+  const report = progressMeter(file.size, opts.onProgress);
   try {
-    opts.onProgress({ sent: offset, size: file.size });
+    report(offset, true);
     while (offset < file.size) {
       const chunk = file.slice(offset, Math.min(file.size, offset + chunkBytes));
       for (let attempt = 0; ; attempt++) {
         try {
-          const res = await fetch(`${api}/${id}?offset=${offset}`, { method: "PUT", body: chunk, signal: opts.signal, headers: { "Content-Type": "application/octet-stream" } });
+          const from = offset;
+          const res = await putChunk(`${api}/${id}?offset=${offset}`, chunk, opts.signal, (n) => report(from + n));
           if (res.status === 409) {
-            offset = ((await res.json()) as { received: number }).received;
+            offset = res.body.received ?? offset;
             break;
           }
-          offset = (await json<{ received: number }>(res)).received;
+          if (res.status < 200 || res.status >= 300) throw Object.assign(new Error(res.body.error ?? `HTTP ${res.status}`), { status: res.status, body: res.body });
+          offset = res.body.received ?? offset + chunk.size;
           break;
         } catch (err) {
           if (opts.signal.aborted || (err as { status?: number }).status === 404 || attempt >= 5) throw err;
@@ -90,7 +138,7 @@ export async function uploadFile(
           if (s) { offset = s.received; break; }
         }
       }
-      opts.onProgress({ sent: offset, size: file.size });
+      report(offset, true);
     }
     const done = await json<{ path: string }>(await fetch(`${api}/${id}`, { method: "POST", signal: opts.signal }));
     remember(key, null);

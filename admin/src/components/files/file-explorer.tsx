@@ -18,10 +18,17 @@ const MonacoViewer = dynamic(() => import("./monaco-viewer"), { ssr: false, load
 
 type Entry = { name: string; path: string; type: "dir" | "file" | "symlink" | "other"; size: number; modified: string; secret: boolean };
 type Listing = { path: string; root: string; parent: string | null; entries: Entry[]; noPermission?: boolean };
-type Preview = { path: string; text?: string; binary?: boolean; truncated?: boolean; error?: string; secret?: boolean; revealing?: boolean };
+/** a page of a file's preview, as the API sends it (lib/files/preview) */
+type Page = { mode: "text" | "hex"; text: string; size: number; offset: number; next: number };
+/** what the preview holds: the pages so far (`next` = bytes shown), for a credential file only once revealed */
+type Preview = { path: string; text?: string; mode?: "text" | "hex"; size?: number; next?: number; reveal?: boolean; more?: boolean; moreError?: string; error?: string; secret?: boolean; revealing?: boolean };
+/** "Load all" asks first when more than this is left: it all goes into the browser */
+const LOAD_ALL_ASK = 100 * 1024 * 1024;
+const readUrl = (p: string, offset: number, mode?: string, reveal?: boolean) =>
+  `${API}?op=read&path=${encodeURIComponent(p)}&offset=${offset}${mode ? `&mode=${mode}` : ""}${reveal ? "&reveal=1" : ""}`;
 type TrashItem = { id: string; name: string; originalPath: string; deletedAt: string; bytes: number; type: string };
 type DeletePlan = { path: string; type: string; bytes: number; files: number; truncated: boolean; running: { slug: string; pid: number }[] };
-type Upload = { key: string; name: string; dir: string; size: number; sent: number; status: "uploading" | "done" | "error" | "cancelled"; error?: string; abort: AbortController };
+type Upload = { key: string; name: string; dir: string; size: number; sent: number; bytesPerSec: number | null; status: "uploading" | "done" | "error" | "cancelled"; error?: string; abort: AbortController };
 type SortKey = "name" | "size" | "modified" | "type";
 
 const API = `${BASE_PATH}/api/files`;
@@ -80,7 +87,8 @@ function TreeNode({ path, name, depth, current, onOpen }: { path: string; name: 
 
 /**
  * The admin's file explorer (T243): the roots' folders as a tree, a folder's files (sort, search, breadcrumbs), a preview
- * (text in a read-only Monaco, images, PDFs; never a credential file's contents), download, uploads of any size (chunked,
+ * (any file, any size, a page at a time: text in a read-only Monaco, binary as hex, images, PDFs; a credential file's
+ * contents on request), download, uploads of any size (chunked,
  * resumable, by picking or dropping files and folders), new folder, rename, move, and delete to a trash that restores.
  */
 export function FileExplorer() {
@@ -138,7 +146,7 @@ export function FileExplorer() {
     if (selected.secret) { setPreview({ path: selected.path, secret: true }); return; }
     let live = true;
     setPreview({ path: selected.path });
-    api<{ text?: string; binary?: boolean; truncated?: boolean }>(`${API}?op=read&path=${encodeURIComponent(selected.path)}`)
+    api<Page>(readUrl(selected.path, 0))
       .then((r) => live && setPreview({ path: selected.path, ...r }), (err) => live && setPreview({ path: selected.path, error: (err as Error).message }));
     return () => { live = false; };
   }, [selected]);
@@ -170,10 +178,10 @@ export function FileExplorer() {
     for (const { file, rel } of files) {
       const parts = rel.split("/"), name = parts.pop()!, into = [dir, ...parts].join("/");
       const key = `${into}/${name}#${Date.now()}`, abort = new AbortController();
-      setUploads((u) => [...u, { key, name: rel, dir: into, size: file.size, sent: 0, status: "uploading", abort }]);
+      setUploads((u) => [...u, { key, name: rel, dir: into, size: file.size, sent: 0, bytesPerSec: null, status: "uploading", abort }]);
       const update = (patch: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...patch } : x)));
       try {
-        await uploadFile(file, into, name, { signal: abort.signal, onProgress: (p) => update({ sent: p.sent }) });
+        await uploadFile(file, into, name, { signal: abort.signal, onProgress: (p) => update({ sent: p.sent, bytesPerSec: p.bytesPerSec }) });
         update({ status: "done", sent: file.size });
       } catch (err) {
         update(abort.signal.aborted ? { status: "cancelled" } : { status: "error", error: (err as Error).message });
@@ -223,8 +231,33 @@ export function FileExplorer() {
   );
   const reveal = (e: Entry) => {
     setPreview({ path: e.path, secret: true, revealing: true });
-    api<{ text?: string; binary?: boolean; truncated?: boolean }>(`${API}?op=read&reveal=1&path=${encodeURIComponent(e.path)}`)
-      .then((r) => setPreview((p) => (p?.path === e.path ? { path: e.path, ...r } : p)), (err) => setPreview((p) => (p?.path === e.path ? { path: e.path, secret: true, error: (err as Error).message } : p)));
+    api<Page>(readUrl(e.path, 0, undefined, true))
+      .then((r) => setPreview((p) => (p?.path === e.path ? { path: e.path, ...r, reveal: true } : p)), (err) => setPreview((p) => (p?.path === e.path ? { path: e.path, secret: true, error: (err as Error).message } : p)));
+  };
+  /** the preview's next page, or (`all`) every page left until the end or "Stop"; appended, the viewer keeps its place */
+  const stopLoading = useRef(false), previewPath = useRef<string | null>(null);
+  useEffect(() => { previewPath.current = preview?.path ?? null; }, [preview?.path]);
+  const loadMore = async (all: boolean) => {
+    const p0 = preview;
+    if (!p0 || p0.next == null || p0.size == null || p0.more) return;
+    const left = p0.size - p0.next;
+    if (all && left > LOAD_ALL_ASK && !window.confirm(`Load the remaining ${formatBytes(left)} into the browser? A file this big can make this tab slow, or crash it.`)) return;
+    stopLoading.current = false;
+    setPreview((p) => (p?.path === p0.path ? { ...p, more: true, moreError: undefined } : p));
+    let next = p0.next, size = p0.size;
+    try {
+      do {
+        const r = await api<Page>(readUrl(p0.path, next, p0.mode, p0.reveal));
+        if (r.next <= next) break; // (nothing new: the file shrank)
+        next = r.next;
+        size = r.size;
+        setPreview((p) => (p?.path === p0.path ? { ...p, text: (p.text ?? "") + (p.mode === "hex" ? "\n" : "") + r.text, next: r.next, size: r.size } : p));
+      } while (all && next < size && !stopLoading.current && previewPath.current === p0.path);
+    } catch (err) {
+      setPreview((p) => (p?.path === p0.path ? { ...p, moreError: (err as Error).message } : p));
+    } finally {
+      setPreview((p) => (p?.path === p0.path ? { ...p, more: false } : p));
+    }
   };
   /** changes are allowed here (the server checks again) */
   const writable = writeRoots.some((w) => within(cwd, w));
@@ -290,7 +323,7 @@ export function FileExplorer() {
                       {e.type === "dir" ? <button type="button" className="truncate hover:underline" onClick={() => load(e.path)}>{e.name}</button> : <span className="truncate">{e.name}</span>}
                     </span>
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{e.type === "file" ? formatBytes(e.size) : ""}</td>
+                  <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">{e.type === "file" ? formatBytes(e.size) : ""}</td>
                   <td className="px-2 py-1 whitespace-nowrap text-muted-foreground">{when(e.modified)}</td>
                   <td className="px-2 py-1 text-muted-foreground">{e.secret ? "credential" : extOf(e)}</td>
                   <td className="px-1 py-1">
@@ -345,11 +378,29 @@ export function FileExplorer() {
                   : !selected.secret && PDF.test(selected.name) ? <iframe title={selected.name} src={`${API}/raw?path=${encodeURIComponent(selected.path)}`} className="h-full w-full" />
                   : !preview || preview.path !== selected.path ? <p className="p-4 text-sm text-muted-foreground">Loading…</p>
                   : preview.error ? <p className="p-4 text-sm text-destructive">{preview.error}</p>
-                  : preview.binary ? <p className="p-4 text-sm text-muted-foreground">A binary file ({formatBytes(selected.size)}): download it to open it.</p>
                   : (
                     <div className="flex h-full flex-col">
-                      {preview.truncated && <p className="border-b px-3 py-1 text-xs text-muted-foreground">The first 1 MB of {formatBytes(selected.size)}.</p>}
-                      <div className="min-h-[300px] flex-1"><MonacoViewer name={selected.name} text={preview.text ?? ""} /></div>
+                      {(preview.mode === "hex" || (preview.next ?? 0) < (preview.size ?? 0)) && (
+                        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1 text-xs text-muted-foreground">
+                          <span className="mr-auto">
+                            {preview.mode === "hex" && "A binary file, as hex. "}
+                            {(preview.next ?? 0) < (preview.size ?? 0) ? `The first ${formatBytes(preview.next ?? 0)} of ${formatBytes(preview.size ?? 0)}.` : `All ${formatBytes(preview.size ?? 0)}.`}
+                          </span>
+                          {preview.moreError && <span className="text-destructive">{preview.moreError}</span>}
+                          {preview.more ? (
+                            <>
+                              <Loader2 className="size-3.5 animate-spin" />
+                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => { stopLoading.current = true; }}>Stop</button>
+                            </>
+                          ) : (preview.next ?? 0) < (preview.size ?? 0) && (
+                            <>
+                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => void loadMore(false)}>Load more</button>
+                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => void loadMore(true)}>Load all</button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <div className="min-h-[300px] flex-1"><MonacoViewer name={preview.mode === "hex" ? `${selected.name}.hexdump` : selected.name} text={preview.text ?? ""} /></div>
                     </div>
                   )}
               </div>
@@ -371,15 +422,15 @@ export function FileExplorer() {
           </div>
           <ul className="max-h-40 space-y-1 overflow-auto">
             {uploads.map((u) => {
-              const pct = u.size ? Math.round((u.sent / u.size) * 100) : 100;
+              const pct = u.size ? Math.floor((u.sent / u.size) * 100) : 100;
               return (
                 <li key={u.key} className="flex items-center gap-2 text-xs">
                   <span className="w-56 truncate" title={`${u.dir}/${u.name}`}>{u.name}</span>
                   <span className="h-2 flex-1 overflow-hidden rounded bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Upload of ${u.name}`}>
                     <span className={cn("block h-full", u.status === "error" ? "bg-destructive" : u.status === "done" ? "bg-emerald-500" : "bg-primary")} style={{ width: `${pct}%` }} />
                   </span>
-                  <span className="w-40 text-right tabular-nums text-muted-foreground">
-                    {u.status === "uploading" ? `${formatBytes(u.sent)} / ${formatBytes(u.size)}` : u.status === "done" ? "done" : u.status === "cancelled" ? "cancelled" : <span className="text-destructive" title={u.error}>failed: {u.error}</span>}
+                  <span className="w-72 whitespace-nowrap text-right tabular-nums text-muted-foreground">
+                    {u.status === "uploading" ? `${pct}% · ${formatBytes(u.sent)} / ${formatBytes(u.size)}${u.bytesPerSec != null ? ` · ${formatBytes(u.bytesPerSec)}/s` : ""}` : u.status === "done" ? "done" : u.status === "cancelled" ? "cancelled" : <span className="text-destructive" title={u.error}>failed: {u.error}</span>}
                   </span>
                   {u.status === "uploading" && <button type="button" aria-label={`Cancel ${u.name}`} onClick={() => u.abort.abort()} className="rounded p-0.5 hover:bg-muted"><X className="size-3.5" /></button>}
                 </li>

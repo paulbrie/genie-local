@@ -7,14 +7,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { assertWritable, fileRoots, isPseudo, resolveExisting, rootOf, writeRoots } from "@/lib/files/guard";
 import { isSecretPath, listDir } from "@/lib/files/listing";
 import { audit, deletePath, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
+import { readPage } from "@/lib/files/preview";
 import { emptyTrash, listTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
 import { CHUNK_BYTES } from "@/lib/files/uploads";
 import { errorResponse, whoOf } from "./shared";
 
 export const dynamic = "force-dynamic";
-
-/** a text preview: up to this much, and only if it looks like text */
-const PREVIEW_BYTES = 1024 * 1024;
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams, op = q.get("op") ?? "list";
@@ -41,17 +39,9 @@ export async function GET(req: NextRequest) {
       if (secret && q.get("reveal") !== "1") return NextResponse.json({ secret: true, error: "a credential file: its contents are shown on request" }, { status: 403 });
       const st = await fs.stat(t.abs);
       if (!st.isFile()) return NextResponse.json({ error: "not a regular file" }, { status: 400 });
-      if (secret) audit("secret-viewed", { path: t.abs }, whoOf(req));
-      const fh = await fs.open(t.abs, "r");
-      try {
-        const buf = Buffer.alloc(Math.min(st.size, PREVIEW_BYTES));
-        await fh.read(buf, 0, buf.length, 0);
-        // (a NUL in the first 8 KB: binary, no text preview)
-        if (buf.subarray(0, 8192).includes(0)) return NextResponse.json({ binary: true, size: st.size });
-        return NextResponse.json({ text: buf.toString("utf8"), size: st.size, truncated: st.size > PREVIEW_BYTES });
-      } finally {
-        await fh.close();
-      }
+      const offset = Math.max(0, Number(q.get("offset")) || 0), m = q.get("mode");
+      if (secret && offset === 0) audit("secret-viewed", { path: t.abs }, whoOf(req));
+      return NextResponse.json(await readPage(t.abs, offset, m === "text" || m === "hex" ? m : undefined));
     }
     return NextResponse.json({ error: "unknown op" }, { status: 400 });
   } catch (err) {

@@ -1,4 +1,4 @@
-// What the file explorer shows of a folder (T243), what counts as a secret (shown, never previewed), how big a
+// What the file explorer shows of a folder (T243), what counts as a secret (listed, previewed on request), how big a
 // folder is (for the delete confirm), and which running processes work inside a folder.
 
 import { promises as fs } from "node:fs";
@@ -12,7 +12,7 @@ export interface FileEntry {
   type: "dir" | "file" | "symlink" | "other";
   size: number;
   modified: string;
-  /** a credential or key: listed, downloadable behind a confirm, never previewed */
+  /** a credential or key: listed, previewed on request, downloadable behind a confirm */
   secret: boolean;
 }
 
