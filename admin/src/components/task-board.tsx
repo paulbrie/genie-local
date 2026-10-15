@@ -8,7 +8,7 @@ import { toast } from "sonner";
 
 import { addTaskAction, deleteTaskAction, moveTaskAction } from "@/app/actions";
 import { filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
-import { STATUS_LABEL, TaskDialog } from "@/components/task-dialog";
+import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -321,7 +321,7 @@ export function TaskBoard({
       </div>
 
       {openTask && (
-        <TaskDialog
+        <TaskDrawer
           key={openTask.id}
           slug={slug}
           task={openTask}
