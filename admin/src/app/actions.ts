@@ -65,6 +65,7 @@ import {
   type PortChangePreview,
 } from "@/lib/nginx";
 import {
+  listeningPortPids,
   restartApp,
   startApp,
   statusForWithPort,
@@ -370,18 +371,29 @@ export async function restartAppAction(
   return status;
 }
 
-/** Poll one app+script's live run status (no revalidation). */
-export async function appStatusAction(
+/**
+ * Poll the live run status of all of an app's scripts in one call (no
+ * revalidation). One call per app, not per script: the client runs server
+ * actions one at a time, so per-script polling on an app with dozens of scripts
+ * kept the queue full and starved every other action on the page (Add task…).
+ */
+export async function appStatusesAction(
   slug: string,
   appId: number,
-  script: string,
-): Promise<RunStatus> {
+  scripts: string[],
+): Promise<Record<string, RunStatus>> {
   await requireAdmin();
   const t = await requireAppTarget(slug, appId);
-  const parsedScript = scriptNameSchema.parse(script);
-  // Port fallback (see statusForWithPort) so this dot agrees with the dashboard
+  const parsed = z.array(scriptNameSchema).max(500).parse(scripts);
+  // Port fallback (see statusForWithPort) so these dots agree with the dashboard
   // when the pid file is stale or the server was started outside the runner.
-  return statusForWithPort(t.projectSlug, t.appSlug, parsedScript, t.port);
+  const portPids = await listeningPortPids();
+  const statuses = await Promise.all(
+    parsed.map((s) =>
+      statusForWithPort(t.projectSlug, t.appSlug, s, t.port, portPids),
+    ),
+  );
+  return Object.fromEntries(parsed.map((s, i) => [s, statuses[i]]));
 }
 
 // ---------------------------------------------------------------------------

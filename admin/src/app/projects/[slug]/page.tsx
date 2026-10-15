@@ -8,7 +8,7 @@ import { NotesPanel } from "@/components/notes-panel";
 import { appLabel } from "@/components/project-card";
 import { RescanProjectButton } from "@/components/rescan-project-button";
 import { RestoreProjectButton } from "@/components/restore-project-button";
-import { ScriptRow } from "@/components/script-row";
+import { ScriptList } from "@/components/script-row";
 import { TaskList } from "@/components/task-list";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -242,19 +242,16 @@ async function AppCard({
             <div className="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground">
               Scripts ({scriptEntries.length})
             </div>
-            <div className="divide-y rounded-md border">
-              {scriptEntries.map(([name, cmd], i) => (
-                <ScriptRow
-                  key={name}
-                  projectSlug={projectSlug}
-                  appSlug={app.slug}
-                  appId={app.id}
-                  script={name}
-                  command={cmd}
-                  initial={scriptStatuses[i]}
-                />
-              ))}
-            </div>
+            <ScriptList
+              projectSlug={projectSlug}
+              appSlug={app.slug}
+              appId={app.id}
+              scripts={scriptEntries.map(([name, command]) => ({
+                name,
+                command,
+              }))}
+              initial={scriptStatuses}
+            />
           </div>
         )}
 

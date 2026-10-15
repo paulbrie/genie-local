@@ -5,7 +5,7 @@ import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import {
-  appStatusAction,
+  appStatusesAction,
   restartAppAction,
   startAppAction,
   stopAppAction,
@@ -17,44 +17,93 @@ import type { RunStatus } from "@/lib/runner";
 
 const POLL_MS = 5000;
 
-export function ScriptRow({
+/**
+ * An app's scripts, with ONE status poll for all of them. Server actions run
+ * one at a time on the client, so a poll per row (41 rows on some apps) kept
+ * that queue permanently busy and other actions (Add task…) never got a turn.
+ */
+export function ScriptList({
   projectSlug,
   appSlug,
   appId,
-  script,
-  command,
+  scripts,
   initial,
 }: {
   projectSlug: string;
   appSlug: string;
   appId: number;
-  script: string;
-  command: string;
-  initial: RunStatus;
+  scripts: { name: string; command: string }[];
+  initial: RunStatus[];
 }) {
-  const [status, setStatus] = useState<RunStatus>(initial);
-  const [isPending, startTransition] = useTransition();
+  const [statuses, setStatuses] = useState<Record<string, RunStatus>>(() =>
+    Object.fromEntries(scripts.map((s, i) => [s.name, initial[i]])),
+  );
+  const namesKey = scripts.map((s) => s.name).join("\n");
 
   useEffect(() => {
+    const names = namesKey.split("\n");
     let active = true;
+    let inFlight = false;
     const id = setInterval(async () => {
+      // Skip a tick rather than queue behind a slow poll or a hidden tab.
+      if (inFlight || document.hidden) return;
+      inFlight = true;
       try {
-        const s = await appStatusAction(projectSlug, appId, script);
-        if (active) setStatus(s);
+        const next = await appStatusesAction(projectSlug, appId, names);
+        if (active) setStatuses((prev) => ({ ...prev, ...next }));
       } catch {
         /* keep last known */
+      } finally {
+        inFlight = false;
       }
     }, POLL_MS);
     return () => {
       active = false;
       clearInterval(id);
     };
-  }, [projectSlug, appId, script]);
+  }, [projectSlug, appId, namesKey]);
+
+  return (
+    <div className="divide-y rounded-md border">
+      {scripts.map(({ name, command }, i) => (
+        <ScriptRow
+          key={name}
+          projectSlug={projectSlug}
+          appSlug={appSlug}
+          appId={appId}
+          script={name}
+          command={command}
+          status={statuses[name] ?? initial[i]}
+          onStatus={(s) => setStatuses((prev) => ({ ...prev, [name]: s }))}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ScriptRow({
+  projectSlug,
+  appSlug,
+  appId,
+  script,
+  command,
+  status,
+  onStatus,
+}: {
+  projectSlug: string;
+  appSlug: string;
+  appId: number;
+  script: string;
+  command: string;
+  status: RunStatus;
+  onStatus: (s: RunStatus) => void;
+}) {
+  const [isPending, startTransition] = useTransition();
 
   function run(fn: () => Promise<RunStatus>, okMsg: string) {
     startTransition(async () => {
       try {
-        setStatus(await fn());
+        onStatus(await fn());
         toast.success(`${script}: ${okMsg}`);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));
