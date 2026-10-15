@@ -40,8 +40,10 @@ import {
 import {
   addNote,
   addTask,
+  addTaskComment,
   deleteNote,
   deleteTask,
+  deleteTaskComment,
   getAppRunTarget,
   getProjectIdBySlug,
   reorderNotes,
@@ -227,6 +229,28 @@ export async function deleteTaskAction(slug: string, taskId: number) {
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
   await deleteTask(id, parsedTaskId);
+  revalidatePath(`/projects/${slug}`);
+}
+
+export async function addTaskCommentAction(
+  slug: string,
+  taskId: number,
+  body: string,
+) {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const parsedTaskId = z.number().int().positive().parse(taskId);
+  const parsedBody = z.string().trim().min(1).max(5000).parse(body);
+  if (!(await addTaskComment(id, parsedTaskId, parsedBody))) {
+    throw new Error(`No task ${parsedTaskId} in project ${slug}`);
+  }
+  revalidatePath(`/projects/${slug}`);
+}
+
+export async function deleteTaskCommentAction(slug: string, commentId: number) {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  await deleteTaskComment(id, z.number().int().positive().parse(commentId));
   revalidatePath(`/projects/${slug}`);
 }
 

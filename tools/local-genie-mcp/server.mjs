@@ -87,7 +87,9 @@ server.registerTool(
           ? "and done = true"
           : "";
     const rows = await q(
-      `select id, title, description, done, position, created_at, updated_at
+      `select id, title, description, done, position, created_at, updated_at,
+              (select count(*)::int from task_comments c where c.task_id = tasks.id)
+                as comment_count
          from tasks where project_id = $1 ${where}
         order by position asc, created_at desc`,
       [pid],
@@ -232,6 +234,85 @@ server.registerTool(
       [pid],
     );
     return ok(rows);
+  },
+);
+
+// --- task comments (the thread under a task in the admin's Tasks tab) ------
+/** Throw unless task `id` belongs to `project`; returns the project id. */
+async function requireTask(project, id) {
+  const pid = await projectIdBySlug(project);
+  const rows = await q("select id from tasks where id = $1 and project_id = $2", [
+    id,
+    pid,
+  ]);
+  if (!rows.length) throw new Error(`No task ${id} in project "${project}"`);
+  return pid;
+}
+
+server.registerTool(
+  "list_task_comments",
+  {
+    description:
+      "Read the comment thread on a task (oldest first). author is 'user' (the person in the admin UI) or 'claude'. Without `id`, returns the threads of every task in the project that has comments.",
+    inputSchema: {
+      project: z.string(),
+      id: z.number().int().positive().optional().describe("task id"),
+    },
+  },
+  async ({ project, id }) => {
+    const pid =
+      id === undefined ? await projectIdBySlug(project) : await requireTask(project, id);
+    const rows = await q(
+      `select c.id, c.task_id, t.title as task_title, c.author, c.body, c.created_at
+         from task_comments c join tasks t on t.id = c.task_id
+        where t.project_id = $1 ${id === undefined ? "" : "and c.task_id = $2"}
+        order by c.task_id, c.created_at asc, c.id asc`,
+      id === undefined ? [pid] : [pid, id],
+    );
+    return ok(rows);
+  },
+);
+
+server.registerTool(
+  "add_task_comment",
+  {
+    description:
+      "Comment on a specific task as Claude, e.g. to answer the user, report progress or ask a question about it. Shown in the task's thread in the admin.",
+    inputSchema: {
+      project: z.string(),
+      id: z.number().int().positive().describe("task id"),
+      body: z.string().min(1).max(5000),
+    },
+  },
+  async ({ project, id, body }) => {
+    await requireTask(project, id);
+    const rows = await q(
+      `insert into task_comments (task_id, author, body) values ($1, 'claude', $2)
+       returning id, task_id, author, body, created_at`,
+      [id, body.trim()],
+    );
+    return ok(rows[0]);
+  },
+);
+
+server.registerTool(
+  "delete_task_comment",
+  {
+    description: "Delete a comment from a task's thread.",
+    inputSchema: {
+      project: z.string(),
+      commentId: z.number().int().positive(),
+    },
+  },
+  async ({ project, commentId }) => {
+    const pid = await projectIdBySlug(project);
+    const rows = await q(
+      `delete from task_comments c using tasks t
+        where c.id = $1 and c.task_id = t.id and t.project_id = $2 returning c.id`,
+      [commentId, pid],
+    );
+    if (!rows.length) throw new Error(`No comment ${commentId} in project "${project}"`);
+    return ok({ deleted: commentId });
   },
 );
 

@@ -64,6 +64,13 @@
       "when": 1788889382647,
       "tag": "0008_flawless_exodus",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792071781793,
+      "tag": "0009_fluffy_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

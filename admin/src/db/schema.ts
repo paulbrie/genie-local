@@ -121,6 +121,23 @@ export const tasks = pgTable("tasks", {
     .defaultNow(),
 });
 
+/**
+ * A comment thread on a task, so the user and Claude (via the local-genie MCP
+ * `add_task_comment` tool) can talk about one specific task.
+ */
+export const taskComments = pgTable("task_comments", {
+  id: serial("id").primaryKey(),
+  taskId: integer("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  // 'user' (written in the admin UI) | 'claude' (written through the MCP).
+  author: text("author").notNull().default("user"),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 /** A saved database connection for the DB explorer. Password is encrypted. */
 export const connections = pgTable("connections", {
   id: serial("id").primaryKey(),
@@ -188,3 +205,4 @@ export type App = typeof apps.$inferSelect;
 export type StatusSnapshot = typeof statusSnapshots.$inferSelect;
 export type Note = typeof notes.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
+export type TaskComment = typeof taskComments.$inferSelect;

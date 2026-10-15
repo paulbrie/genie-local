@@ -6,6 +6,7 @@ import { DeleteProjectButton } from "@/components/delete-project-button";
 import { GitGraphView } from "@/components/git-graph";
 import { NotesPanel } from "@/components/notes-panel";
 import { appLabel } from "@/components/project-card";
+import { ProjectTabs } from "@/components/project-tabs";
 import { RescanProjectButton } from "@/components/rescan-project-button";
 import { RestoreProjectButton } from "@/components/restore-project-button";
 import { ScriptList } from "@/components/script-row";
@@ -18,7 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { StatusDot } from "@/components/ui/status-dot";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -28,7 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AppRow, SnapshotRow } from "@/lib/scan";
-import { getNotes, getTasks } from "@/lib/data";
+import { getNotes, getTaskComments, getTasks } from "@/lib/data";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { mountPath } from "@/lib/nginx";
 import { listeningPortPids, statusForWithPort } from "@/lib/runner";
@@ -56,11 +57,18 @@ export default async function ProjectPage({
   if (!detail) notFound();
 
   const { project, apps } = detail;
-  const [notes, tasks] = await Promise.all([
+  const [notes, tasks, taskComments, appScripts] = await Promise.all([
     getNotes(project.id),
     getTasks(project.id),
+    getTaskComments(project.id),
+    Promise.all(apps.map(({ app }) => readScripts(app.path))),
   ]);
   const hasGit = apps.some(({ app }) => app.isGit);
+  const scriptCount = appScripts.reduce(
+    (n, s) => n + Object.keys(s).length,
+    0,
+  );
+  const tabs = ["scripts", "tasks", "notes", ...(hasGit ? ["git"] : [])];
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 space-y-6 p-6">
@@ -95,37 +103,42 @@ export default async function ProjectPage({
         </div>
       )}
 
-      {/* One card per app (sub-project) */}
-      <section className="space-y-4">
-        {apps.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No apps discovered in this project yet.
-          </p>
-        ) : (
-          apps.map(({ app, snapshots }) => (
-            <AppCard
-              key={app.id}
-              projectSlug={project.slug}
-              singleApp={apps.length === 1}
-              app={app}
-              snapshots={snapshots}
-            />
-          ))
-        )}
-      </section>
-
-      {/* Project-level notes, tasks & git history */}
-      <Tabs defaultValue={hasGit && one(query.tab) === "git" ? "git" : "notes"}>
+      {/* Scripts (one card per app) / tasks / notes / git history; the last
+          tab opened is remembered per project. */}
+      <ProjectTabs slug={project.slug} tabs={tabs} forced={one(query.tab)}>
         <TabsList>
-          <TabsTrigger value="notes">Notes ({notes.length})</TabsTrigger>
+          <TabsTrigger value="scripts">Scripts ({scriptCount})</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({tasks.length})</TabsTrigger>
+          <TabsTrigger value="notes">Notes ({notes.length})</TabsTrigger>
           {hasGit && <TabsTrigger value="git">Git</TabsTrigger>}
         </TabsList>
-        <TabsContent value="notes" className="pt-4">
-          <NotesPanel slug={project.slug} notes={notes} />
+        <TabsContent value="scripts" className="space-y-4 pt-4">
+          {apps.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No apps discovered in this project yet.
+            </p>
+          ) : (
+            apps.map(({ app, snapshots }, i) => (
+              <AppCard
+                key={app.id}
+                projectSlug={project.slug}
+                singleApp={apps.length === 1}
+                app={app}
+                snapshots={snapshots}
+                scripts={appScripts[i]}
+              />
+            ))
+          )}
         </TabsContent>
         <TabsContent value="tasks" className="pt-4">
-          <TaskList slug={project.slug} tasks={tasks} />
+          <TaskList
+            slug={project.slug}
+            tasks={tasks}
+            comments={taskComments}
+          />
+        </TabsContent>
+        <TabsContent value="notes" className="pt-4">
+          <NotesPanel slug={project.slug} notes={notes} />
         </TabsContent>
         {hasGit && (
           <TabsContent value="git" className="pt-4">
@@ -136,7 +149,7 @@ export default async function ProjectPage({
             />
           </TabsContent>
         )}
-      </Tabs>
+      </ProjectTabs>
     </main>
   );
 }
@@ -146,18 +159,19 @@ async function AppCard({
   singleApp,
   app,
   snapshots,
+  scripts,
 }: {
   projectSlug: string;
   singleApp: boolean;
   app: AppRow;
   snapshots: SnapshotRow[];
+  scripts: Record<string, string>;
 }) {
   const latest = snapshots[0];
   const raw = latest?.raw as AppSignals | null | undefined;
   const label = raw
     ? appLabel(raw)
     : (app.name ?? (app.slug === "" ? "(root)" : app.slug));
-  const scripts = await readScripts(app.path);
   const scriptEntries = Object.entries(scripts);
   // One `ss` snapshot shared across every script's port fallback (see
   // statusForWithPort) so the dots match the dashboard even on the first paint.

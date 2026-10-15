@@ -1,6 +1,6 @@
 "use client";
 
-import { GripVertical, Pencil, Trash2 } from "lucide-react";
+import { GripVertical, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -17,18 +17,47 @@ import {
   toggleTaskAction,
   updateTaskAction,
 } from "@/app/actions";
+import { TaskComments } from "@/components/task-comments";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { Task } from "@/db/schema";
+import type { Task, TaskComment } from "@/db/schema";
 import { formatRelativeTime } from "@/lib/format";
 
 type Filter = "all" | "open" | "done";
 
-export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
+export function TaskList({
+  slug,
+  tasks,
+  comments,
+}: {
+  slug: string;
+  tasks: Task[];
+  comments: TaskComment[];
+}) {
   const formRef = useRef<HTMLFormElement>(null);
   const [isPending, startTransition] = useTransition();
+
+  const commentsByTask = useMemo(() => {
+    const map = new Map<number, TaskComment[]>();
+    for (const c of comments) {
+      const list = map.get(c.taskId);
+      if (list) list.push(c);
+      else map.set(c.taskId, [c]);
+    }
+    return map;
+  }, [comments]);
+  // Tasks whose comment thread is expanded.
+  const [openThreads, setOpenThreads] = useState<Set<number>>(new Set());
+  function toggleThread(id: number) {
+    setOpenThreads((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   // Optimistic overrides so the UI reacts instantly before revalidation.
   const [doneOverrides, setDoneOverrides] = useState<Record<number, boolean>>(
@@ -337,6 +366,9 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
                   htmlFor={`task-${t.id}`}
                   className="min-w-0 flex-1 cursor-pointer"
                 >
+                  <span className="mr-1.5 font-mono text-xs text-muted-foreground tabular-nums">
+                    #{t.id}
+                  </span>
                   <span
                     className={
                       t.done
@@ -362,6 +394,11 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
                   </span>
                 </label>
                 <div className="flex shrink-0 items-center gap-0.5">
+                  <CommentToggle
+                    comments={commentsByTask.get(t.id)}
+                    open={openThreads.has(t.id)}
+                    onClick={() => toggleThread(t.id)}
+                  />
                   <button
                     type="button"
                     onClick={() => startEdit(t)}
@@ -382,11 +419,51 @@ export function TaskList({ slug, tasks }: { slug: string; tasks: Task[] }) {
                   </button>
                 </div>
                 </div>
+                {openThreads.has(t.id) && (
+                  <TaskComments
+                    slug={slug}
+                    taskId={t.id}
+                    comments={commentsByTask.get(t.id) ?? []}
+                  />
+                )}
               </li>
             ),
           )}
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * Opens a task's thread. Always visible once a thread exists (hover-only
+ * otherwise), and orange when Claude had the last word, i.e. a reply waits.
+ */
+function CommentToggle({
+  comments,
+  open,
+  onClick,
+}: {
+  comments: TaskComment[] | undefined;
+  open: boolean;
+  onClick: () => void;
+}) {
+  const count = comments?.length ?? 0;
+  const claudeLast = comments?.at(-1)?.author === "claude";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={open ? "Hide comments" : "Show comments"}
+      aria-expanded={open}
+      className={`flex items-center gap-0.5 rounded p-1 text-xs transition-opacity hover:text-foreground focus-visible:opacity-100 ${
+        claudeLast
+          ? "text-orange-600 dark:text-orange-400"
+          : "text-muted-foreground"
+      } ${count > 0 || open ? "" : "opacity-0 group-hover:opacity-100"}`}
+    >
+      <MessageSquare className="size-3.5" />
+      {count > 0 && <span className="tabular-nums">{count}</span>}
+    </button>
   );
 }

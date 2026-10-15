@@ -3,7 +3,7 @@ import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { apps, notes, projects, tasks } from "@/db/schema";
+import { apps, notes, projects, taskComments, tasks } from "@/db/schema";
 
 export async function getProjectIdBySlug(slug: string): Promise<number | null> {
   const [row] = await db
@@ -159,6 +159,45 @@ export async function deleteTask(projectId: number, taskId: number) {
   await db
     .delete(tasks)
     .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
+}
+
+/** Every comment on the project's tasks, oldest first (thread order). */
+export async function getTaskComments(projectId: number) {
+  return db
+    .select({ comment: taskComments })
+    .from(taskComments)
+    .innerJoin(tasks, eq(taskComments.taskId, tasks.id))
+    .where(eq(tasks.projectId, projectId))
+    .orderBy(asc(taskComments.createdAt), asc(taskComments.id))
+    .then((rows) => rows.map((r) => r.comment));
+}
+
+/** Comment on a task as the user; false if the task isn't in the project. */
+export async function addTaskComment(
+  projectId: number,
+  taskId: number,
+  body: string,
+): Promise<boolean> {
+  const [task] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
+    .limit(1);
+  if (!task) return false;
+  await db.insert(taskComments).values({ taskId, author: "user", body });
+  return true;
+}
+
+export async function deleteTaskComment(projectId: number, commentId: number) {
+  const owned = db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(eq(tasks.projectId, projectId));
+  await db
+    .delete(taskComments)
+    .where(
+      and(eq(taskComments.id, commentId), inArray(taskComments.taskId, owned)),
+    );
 }
 
 /** Resolve the info needed to start/stop an app: its dir, port, and slugs. */
