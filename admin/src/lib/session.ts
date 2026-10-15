@@ -36,8 +36,10 @@ async function getKey(): Promise<CryptoKey> {
 export const SESSION_COOKIE = COOKIE_NAME;
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-export async function createSessionToken(): Promise<string> {
-  const payload = { sub: "admin", exp: Date.now() + SESSION_TTL_SECONDS * 1000 };
+export async function createSessionToken(
+  ttlSeconds = SESSION_TTL_SECONDS,
+): Promise<string> {
+  const payload = { sub: "admin", exp: Date.now() + ttlSeconds * 1000 };
   const body = toB64url(enc.encode(JSON.stringify(payload)));
   const sig = new Uint8Array(
     await crypto.subtle.sign("HMAC", await getKey(), enc.encode(body)),
