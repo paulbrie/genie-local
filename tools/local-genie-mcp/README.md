@@ -23,15 +23,18 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | Tool | Args | Purpose |
 | --- | --- | --- |
 | `list_projects` | — | slugs + names of tracked projects |
-| `list_tasks` | `project`, `status?` (all/open/done) | list tasks, top→bottom, with `comment_count` |
+| `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `comment_count`, `attachment_count` |
 | `create_task` | `project`, `title`, `description?` | add a task (to the top) |
-| `update_task` | `project`, `id`, `title?`, `description?` | edit title/description |
-| `set_task_status` | `project`, `id`, `done` | mark done / not done |
+| `update_task` | `project`, `id`, `title?`, `description?`, `commit?` | edit title/description/commit sha |
+| `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; `done` still accepted |
 | `delete_task` | `project`, `id` | remove a task |
 | `reorder_tasks` | `project`, `orderedIds` | set manual order (position) |
 | `list_task_comments` | `project`, `id?` | a task's comment thread (author `user`/`claude`); all threads without `id` |
 | `add_task_comment` | `project`, `id`, `body` | reply on a task as Claude (shown in the admin's Tasks tab) |
 | `delete_task_comment` | `project`, `commentId` | remove a comment |
+| `list_task_attachments` | `project`, `id?` | files on a task, with `abs_path` to read them |
+| `add_task_attachment` | `project`, `id`, `file`, `name?` | attach a local file as Claude |
+| `delete_task_attachment` | `project`, `attachmentId` | remove a file |
 | `list_notes` | `project` | list notes (manual order) |
 | `add_note` | `project`, `body` | add a note (to the top) |
 | `update_note` | `project`, `id`, `body` | edit a note |

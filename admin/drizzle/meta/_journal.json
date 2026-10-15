@@ -71,6 +71,13 @@
       "when": 1792071781793,
       "tag": "0009_fluffy_living_tribunal",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792073134366,
+      "tag": "0010_brave_the_leader",
+      "breakpoints": true
     }
   ]
 }

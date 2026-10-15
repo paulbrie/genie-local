@@ -110,13 +110,41 @@ export const tasks = pgTable("tasks", {
     .references(() => projects.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
+  // 'open' | 'in_progress' | 'done' (TASK_STATUSES). The source of truth; a DB
+  // trigger (migration 0010) keeps `done` in step for older writers.
+  status: text("status").notNull().default("open"),
   done: boolean("done").notNull().default(false),
+  // The commit that finished the task (for done tasks).
+  commitSha: text("commit_sha"),
   // Manual sort order within a project (smaller = higher in the list).
   position: integer("position").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const TASK_STATUSES = ["open", "in_progress", "done"] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * A file attached to a task (uploaded or pasted in the admin, or attached by
+ * Claude through the MCP). The bytes live on disk under TASK_ATTACHMENTS_DIR at
+ * `path` (relative), so agents can read them directly.
+ */
+export const taskAttachments = pgTable("task_attachments", {
+  id: serial("id").primaryKey(),
+  taskId: integer("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  mime: text("mime").notNull(),
+  size: bigint("size", { mode: "number" }).notNull(),
+  path: text("path").notNull(),
+  author: text("author").notNull().default("user"),
+  createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
@@ -206,3 +234,4 @@ export type StatusSnapshot = typeof statusSnapshots.$inferSelect;
 export type Note = typeof notes.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type TaskComment = typeof taskComments.$inferSelect;
+export type TaskAttachment = typeof taskAttachments.$inferSelect;

@@ -1,9 +1,17 @@
 import "server-only";
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { apps, notes, projects, taskComments, tasks } from "@/db/schema";
+import {
+  apps,
+  notes,
+  projects,
+  taskAttachments,
+  taskComments,
+  tasks,
+  type TaskStatus,
+} from "@/db/schema";
 
 export async function getProjectIdBySlug(slug: string): Promise<number | null> {
   const [row] = await db
@@ -107,7 +115,21 @@ export async function addTask(
     .from(tasks)
     .where(eq(tasks.projectId, projectId));
   const position = Number(row?.min ?? 0) - 1;
-  await db.insert(tasks).values({ projectId, title, description, position });
+  const [created] = await db
+    .insert(tasks)
+    .values({ projectId, title, description, position })
+    .returning({ id: tasks.id });
+  return created.id;
+}
+
+/** True if the task exists and belongs to the project. */
+export async function taskInProject(projectId: number, taskId: number) {
+  const [task] = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
+    .limit(1);
+  return !!task;
 }
 
 /** Persist a manual ordering: `orderedIds` top→bottom become position 0..n. */
@@ -123,35 +145,56 @@ export async function reorderTasks(projectId: number, orderedIds: number[]) {
     if (!ownedSet.has(id)) continue;
     await db
       .update(tasks)
-      .set({ position, updatedAt: new Date() })
+      // Not an edit of the task: leave updatedAt alone (cards show it).
+      .set({ position })
       .where(and(eq(tasks.id, id), eq(tasks.projectId, projectId)));
     position += 1;
   }
 }
 
-export async function setTaskDone(
+/** Set a task's status (the DB trigger keeps the legacy `done` flag in step). */
+export async function setTaskStatus(
   projectId: number,
   taskId: number,
-  done: boolean,
+  status: TaskStatus,
 ) {
+  // Only a real change counts as an update (a drop in the same column doesn't).
   await db
     .update(tasks)
-    .set({ done, updatedAt: new Date() })
-    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
+    .set({ status, updatedAt: new Date() })
+    .where(
+      and(
+        eq(tasks.id, taskId),
+        eq(tasks.projectId, projectId),
+        ne(tasks.status, status),
+      ),
+    );
+}
+
+/** A board drop: the task's new column plus the project's new order. */
+export async function moveTask(
+  projectId: number,
+  taskId: number,
+  status: TaskStatus,
+  orderedIds: number[],
+) {
+  await setTaskStatus(projectId, taskId, status);
+  await reorderTasks(projectId, orderedIds);
 }
 
 export async function updateTask(
   projectId: number,
   taskId: number,
-  fields: { title: string; description: string | null },
+  fields: {
+    title: string;
+    description: string | null;
+    status: TaskStatus;
+    commitSha: string | null;
+  },
 ) {
   await db
     .update(tasks)
-    .set({
-      title: fields.title,
-      description: fields.description,
-      updatedAt: new Date(),
-    })
+    .set({ ...fields, updatedAt: new Date() })
     .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
 }
 
@@ -178,14 +221,56 @@ export async function addTaskComment(
   taskId: number,
   body: string,
 ): Promise<boolean> {
-  const [task] = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
-    .limit(1);
-  if (!task) return false;
+  if (!(await taskInProject(projectId, taskId))) return false;
   await db.insert(taskComments).values({ taskId, author: "user", body });
   return true;
+}
+
+/** Every attachment on the project's tasks, oldest first. */
+export async function getTaskAttachments(projectId: number) {
+  return db
+    .select({ attachment: taskAttachments })
+    .from(taskAttachments)
+    .innerJoin(tasks, eq(taskAttachments.taskId, tasks.id))
+    .where(eq(tasks.projectId, projectId))
+    .orderBy(asc(taskAttachments.createdAt), asc(taskAttachments.id))
+    .then((rows) => rows.map((r) => r.attachment));
+}
+
+export async function getTaskAttachment(id: number) {
+  const [row] = await db
+    .select()
+    .from(taskAttachments)
+    .where(eq(taskAttachments.id, id))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function insertTaskAttachments(
+  rows: (typeof taskAttachments.$inferInsert)[],
+) {
+  if (rows.length) await db.insert(taskAttachments).values(rows);
+}
+
+/** Delete an attachment row of the project; returns its file path, if any. */
+export async function deleteTaskAttachment(
+  projectId: number,
+  attachmentId: number,
+): Promise<string | null> {
+  const owned = db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(eq(tasks.projectId, projectId));
+  const [row] = await db
+    .delete(taskAttachments)
+    .where(
+      and(
+        eq(taskAttachments.id, attachmentId),
+        inArray(taskAttachments.taskId, owned),
+      ),
+    )
+    .returning({ path: taskAttachments.path });
+  return row?.path ?? null;
 }
 
 export async function deleteTaskComment(projectId: number, commentId: number) {

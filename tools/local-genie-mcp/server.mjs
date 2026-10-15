@@ -3,7 +3,9 @@
 // list of any project tracked by the admin dashboard (the `tasks` table in the
 // `admin_dashboard` Postgres DB). Tasks are always scoped by project slug.
 
-import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { promises as fsp, readFileSync } from "node:fs";
+import path from "node:path";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -43,6 +45,19 @@ async function projectIdBySlug(slug) {
   return rows[0].id;
 }
 
+// Task attachments live on disk (same dir as the admin's TASK_ATTACHMENTS_DIR).
+const ATTACHMENTS_ROOT = path.resolve(
+  process.env.TASK_ATTACHMENTS_DIR ?? "/opt/project/.task-attachments",
+);
+const withAbsPath = (row) => ({ ...row, abs_path: path.join(ATTACHMENTS_ROOT, row.path) });
+const MIME_BY_EXT = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".pdf": "application/pdf", ".txt": "text/plain", ".md": "text/plain",
+  ".log": "text/plain", ".json": "application/json", ".csv": "text/csv", ".html": "text/html",
+  ".svg": "image/svg+xml", ".zip": "application/zip",
+};
+const STATUSES = ["open", "in_progress", "done"];
+
 const ok = (data) => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
 });
@@ -69,30 +84,26 @@ server.registerTool(
   "list_tasks",
   {
     description:
-      "List a project's tasks (ordered top→bottom). Optionally filter by status.",
+      "List a project's tasks (ordered top→bottom) with status (open / in_progress / done), commit_sha, and comment/attachment counts. Optionally filter by status.",
     inputSchema: {
       project: z.string().describe("project slug, e.g. 'my-app'"),
       status: z
-        .enum(["all", "open", "done"])
+        .enum(["all", "open", "in_progress", "done"])
         .default("all")
         .describe("which tasks to return"),
     },
   },
   async ({ project, status }) => {
     const pid = await projectIdBySlug(project);
-    const where =
-      status === "open"
-        ? "and done = false"
-        : status === "done"
-          ? "and done = true"
-          : "";
     const rows = await q(
-      `select id, title, description, done, position, created_at, updated_at,
+      `select id, title, description, status, commit_sha, position, created_at, updated_at,
               (select count(*)::int from task_comments c where c.task_id = tasks.id)
-                as comment_count
-         from tasks where project_id = $1 ${where}
+                as comment_count,
+              (select count(*)::int from task_attachments a where a.task_id = tasks.id)
+                as attachment_count
+         from tasks where project_id = $1 and ($2 = 'all' or status = $2)
         order by position asc, created_at desc`,
-      [pid],
+      [pid, status],
     );
     return ok(rows);
   },
@@ -117,7 +128,7 @@ server.registerTool(
     );
     const rows = await q(
       `insert into tasks (project_id, title, description, position)
-       values ($1, $2, $3, $4) returning id, title, description, done, position`,
+       values ($1, $2, $3, $4) returning id, title, description, status, position`,
       [pid, title.trim(), description?.trim() || null, Number(min) - 1],
     );
     return ok(rows[0]);
@@ -127,15 +138,21 @@ server.registerTool(
 server.registerTool(
   "update_task",
   {
-    description: "Update a task's title and/or description.",
+    description: "Update a task's title, description and/or commit sha (null clears it).",
     inputSchema: {
       project: z.string(),
       id: z.number().int().positive(),
       title: z.string().min(1).max(500).optional(),
       description: z.string().max(5000).nullable().optional(),
+      commit: z
+        .string()
+        .regex(/^[0-9a-f]{4,64}$/i)
+        .nullable()
+        .optional()
+        .describe("commit sha that finished the task"),
     },
   },
-  async ({ project, id, title, description }) => {
+  async ({ project, id, title, description, commit }) => {
     const pid = await projectIdBySlug(project);
     const sets = [];
     const params = [];
@@ -147,12 +164,16 @@ server.registerTool(
       params.push(description === null ? null : description.trim() || null);
       sets.push(`description = $${params.length}`);
     }
-    if (!sets.length) throw new Error("Nothing to update (pass title/description)");
+    if (commit !== undefined) {
+      params.push(commit === null ? null : commit.toLowerCase());
+      sets.push(`commit_sha = $${params.length}`);
+    }
+    if (!sets.length) throw new Error("Nothing to update (pass title/description/commit)");
     params.push(id, pid);
     const rows = await q(
       `update tasks set ${sets.join(", ")}, updated_at = now()
         where id = $${params.length - 1} and project_id = $${params.length}
-      returning id, title, description, done, position`,
+      returning id, title, description, status, commit_sha, position`,
       params,
     );
     if (!rows.length) throw new Error(`No task ${id} in project "${project}"`);
@@ -163,20 +184,29 @@ server.registerTool(
 server.registerTool(
   "set_task_status",
   {
-    description: "Mark a task done or not done.",
+    description:
+      "Move a task to open / in_progress / done (shown as kanban columns in the admin). When finishing, pass `commit` with the sha that did it. Legacy: `done: true/false` instead of `status`.",
     inputSchema: {
       project: z.string(),
       id: z.number().int().positive(),
-      done: z.boolean(),
+      status: z.enum(["open", "in_progress", "done"]).optional(),
+      done: z.boolean().optional().describe("legacy; prefer status"),
+      commit: z
+        .string()
+        .regex(/^[0-9a-f]{4,64}$/i)
+        .optional()
+        .describe("commit sha that finished the task"),
     },
   },
-  async ({ project, id, done }) => {
+  async ({ project, id, status, done, commit }) => {
     const pid = await projectIdBySlug(project);
+    const next = status ?? (done === undefined ? undefined : done ? "done" : "open");
+    if (!next || !STATUSES.includes(next)) throw new Error("Pass status (open / in_progress / done)");
     const rows = await q(
-      `update tasks set done = $1, updated_at = now()
+      `update tasks set status = $1, commit_sha = coalesce($4, commit_sha), updated_at = now()
         where id = $2 and project_id = $3
-      returning id, title, done`,
-      [done, id, pid],
+      returning id, title, status, commit_sha`,
+      [next, id, pid, commit?.toLowerCase() ?? null],
     );
     if (!rows.length) throw new Error(`No task ${id} in project "${project}"`);
     return ok(rows[0]);
@@ -199,6 +229,7 @@ server.registerTool(
       [id, pid],
     );
     if (!rows.length) throw new Error(`No task ${id} in project "${project}"`);
+    await fsp.rm(path.join(ATTACHMENTS_ROOT, String(id)), { recursive: true, force: true });
     return ok({ deleted: id });
   },
 );
@@ -224,7 +255,7 @@ server.registerTool(
     for (const id of orderedIds) {
       if (!owned.has(id)) continue;
       await q(
-        "update tasks set position = $1, updated_at = now() where id = $2 and project_id = $3",
+        "update tasks set position = $1 where id = $2 and project_id = $3",
         [position, id, pid],
       );
       position += 1;
@@ -313,6 +344,84 @@ server.registerTool(
     );
     if (!rows.length) throw new Error(`No comment ${commentId} in project "${project}"`);
     return ok({ deleted: commentId });
+  },
+);
+
+// --- task attachments (files uploaded / pasted into a ticket in the admin) --
+server.registerTool(
+  "list_task_attachments",
+  {
+    description:
+      "List the files attached to a task (or to every task of the project without `id`). `abs_path` is readable directly, e.g. to look at a pasted screenshot.",
+    inputSchema: {
+      project: z.string(),
+      id: z.number().int().positive().optional().describe("task id"),
+    },
+  },
+  async ({ project, id }) => {
+    const pid =
+      id === undefined ? await projectIdBySlug(project) : await requireTask(project, id);
+    const rows = await q(
+      `select a.id, a.task_id, t.title as task_title, a.name, a.mime, a.size, a.path,
+              a.author, a.created_at
+         from task_attachments a join tasks t on t.id = a.task_id
+        where t.project_id = $1 ${id === undefined ? "" : "and a.task_id = $2"}
+        order by a.task_id, a.created_at asc, a.id asc`,
+      id === undefined ? [pid] : [pid, id],
+    );
+    return ok(rows.map(withAbsPath));
+  },
+);
+
+server.registerTool(
+  "add_task_attachment",
+  {
+    description:
+      "Attach a local file (e.g. a screenshot you took) to a task as Claude. The file is copied into the attachments store.",
+    inputSchema: {
+      project: z.string(),
+      id: z.number().int().positive().describe("task id"),
+      file: z.string().describe("absolute path of the file to attach"),
+      name: z.string().max(120).optional().describe("display name (default: the file's name)"),
+    },
+  },
+  async ({ project, id, file, name }) => {
+    await requireTask(project, id);
+    const src = path.resolve(file);
+    const stat = await fsp.stat(src);
+    if (!stat.isFile()) throw new Error(`${src} is not a file`);
+    if (stat.size > 50 * 1024 * 1024) throw new Error(`${src} is over 50 MB`);
+    const safe = path.basename(name ?? src).replace(/[^\w.\- ]+/g, "_").trim().slice(-120) || "file";
+    const rel = path.join(String(id), `${randomBytes(4).toString("hex")}-${safe}`);
+    await fsp.mkdir(path.join(ATTACHMENTS_ROOT, String(id)), { recursive: true });
+    await fsp.copyFile(src, path.join(ATTACHMENTS_ROOT, rel));
+    const mime = MIME_BY_EXT[path.extname(safe).toLowerCase()] ?? "application/octet-stream";
+    const rows = await q(
+      `insert into task_attachments (task_id, name, mime, size, path, author)
+       values ($1, $2, $3, $4, $5, 'claude')
+       returning id, task_id, name, mime, size, path, author, created_at`,
+      [id, safe, mime, stat.size, rel],
+    );
+    return ok(withAbsPath(rows[0]));
+  },
+);
+
+server.registerTool(
+  "delete_task_attachment",
+  {
+    description: "Remove a file from a task.",
+    inputSchema: { project: z.string(), attachmentId: z.number().int().positive() },
+  },
+  async ({ project, attachmentId }) => {
+    const pid = await projectIdBySlug(project);
+    const rows = await q(
+      `delete from task_attachments a using tasks t
+        where a.id = $1 and a.task_id = t.id and t.project_id = $2 returning a.path`,
+      [attachmentId, pid],
+    );
+    if (!rows.length) throw new Error(`No attachment ${attachmentId} in project "${project}"`);
+    await fsp.rm(path.join(ATTACHMENTS_ROOT, rows[0].path), { force: true });
+    return ok({ deleted: attachmentId });
   },
 );
 

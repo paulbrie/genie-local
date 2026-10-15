@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { TASK_STATUSES, type TaskStatus } from "@/db/schema";
 import type {
   PermissionMode,
   RunConfig,
@@ -43,13 +44,14 @@ import {
   addTaskComment,
   deleteNote,
   deleteTask,
+  deleteTaskAttachment,
   deleteTaskComment,
   getAppRunTarget,
   getProjectIdBySlug,
   reorderNotes,
   reorderTasks,
   setProjectArchived,
-  setTaskDone,
+  moveTask,
   updateAppPort,
   updateNote,
   updateTask,
@@ -87,6 +89,10 @@ import {
 import { requireAdmin } from "@/lib/require-admin";
 import { rescanProject, scanAndPersist } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
+import {
+  removeAttachmentFile,
+  removeTaskAttachmentDir,
+} from "@/lib/task-attachments";
 
 const slugSchema = z
   .string()
@@ -185,43 +191,64 @@ export async function addTaskAction(slug: string, formData: FormData) {
     .max(5000)
     .optional()
     .parse(typeof rawDesc === "string" && rawDesc.trim() ? rawDesc : undefined);
-  await addTask(id, title, description ?? null);
+  const taskId = await addTask(id, title, description ?? null);
   revalidatePath(`/projects/${slug}`);
+  // The caller uploads any files picked or pasted in the form to this task next.
+  return taskId;
 }
 
-export async function toggleTaskAction(
+const taskStatusSchema = z.enum(TASK_STATUSES);
+// A git object name, abbreviated (≥ 4) or full (40, or 64 for SHA-256 repos).
+const COMMIT_SHA_RE = /^[0-9a-f]{4,64}$/i;
+
+/** A board drop: the task's new column and the project's new top→bottom order. */
+export async function moveTaskAction(
   slug: string,
   taskId: number,
-  done: boolean,
+  status: TaskStatus,
+  orderedIds: number[],
 ) {
   await requireAdmin();
   const id = await requireProjectId(slug);
-  const parsedTaskId = z.number().int().positive().parse(taskId);
-  await setTaskDone(id, parsedTaskId, z.boolean().parse(done));
+  await moveTask(
+    id,
+    z.number().int().positive().parse(taskId),
+    taskStatusSchema.parse(status),
+    z.array(z.number().int().positive()).max(1000).parse(orderedIds),
+  );
   revalidatePath(`/projects/${slug}`);
 }
 
 export async function updateTaskAction(
   slug: string,
   taskId: number,
-  title: string,
-  description: string | null,
+  fields: {
+    title: string;
+    description: string | null;
+    status: TaskStatus;
+    commitSha: string | null;
+  },
 ) {
   await requireAdmin();
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
-  const parsedTitle = z.string().trim().min(1).max(500).parse(title);
-  const trimmedDesc = typeof description === "string" ? description.trim() : "";
-  const parsedDesc = z
-    .string()
-    .max(5000)
-    .nullable()
-    .parse(trimmedDesc ? trimmedDesc : null);
+  const trimmedDesc = fields.description?.trim() ?? "";
+  const sha = fields.commitSha?.trim() ?? "";
   await updateTask(id, parsedTaskId, {
-    title: parsedTitle,
-    description: parsedDesc,
+    title: z.string().trim().min(1).max(500).parse(fields.title),
+    description: z.string().max(5000).nullable().parse(trimmedDesc || null),
+    status: taskStatusSchema.parse(fields.status),
+    commitSha: sha ? parseCommitSha(sha) : null,
   });
   revalidatePath(`/projects/${slug}`);
+}
+
+// Thrown as a plain message: the dialog shows it as is (a ZodError would print as JSON).
+function parseCommitSha(sha: string): string {
+  if (!COMMIT_SHA_RE.test(sha)) {
+    throw new Error("Commit must be a git sha (4 to 64 hex characters)");
+  }
+  return sha.toLowerCase();
 }
 
 export async function deleteTaskAction(slug: string, taskId: number) {
@@ -229,6 +256,21 @@ export async function deleteTaskAction(slug: string, taskId: number) {
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
   await deleteTask(id, parsedTaskId);
+  await removeTaskAttachmentDir(parsedTaskId);
+  revalidatePath(`/projects/${slug}`);
+}
+
+export async function deleteTaskAttachmentAction(
+  slug: string,
+  attachmentId: number,
+) {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const rel = await deleteTaskAttachment(
+    id,
+    z.number().int().positive().parse(attachmentId),
+  );
+  if (rel) await removeAttachmentFile(rel);
   revalidatePath(`/projects/${slug}`);
 }
 

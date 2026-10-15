@@ -10,7 +10,7 @@ import { ProjectTabs } from "@/components/project-tabs";
 import { RescanProjectButton } from "@/components/rescan-project-button";
 import { RestoreProjectButton } from "@/components/restore-project-button";
 import { ScriptList } from "@/components/script-row";
-import { TaskList } from "@/components/task-list";
+import { TaskBoard } from "@/components/task-board";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -29,7 +29,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AppRow, SnapshotRow } from "@/lib/scan";
-import { getNotes, getTaskComments, getTasks } from "@/lib/data";
+import {
+  getNotes,
+  getTaskAttachments,
+  getTaskComments,
+  getTasks,
+} from "@/lib/data";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { mountPath } from "@/lib/nginx";
 import { listeningPortPids, statusForWithPort } from "@/lib/runner";
@@ -57,10 +62,11 @@ export default async function ProjectPage({
   if (!detail) notFound();
 
   const { project, apps } = detail;
-  const [notes, tasks, taskComments, appScripts] = await Promise.all([
+  const [notes, tasks, taskComments, taskAttachments, appScripts] = await Promise.all([
     getNotes(project.id),
     getTasks(project.id),
     getTaskComments(project.id),
+    getTaskAttachments(project.id),
     Promise.all(apps.map(({ app }) => readScripts(app.path))),
   ]);
   const hasGit = apps.some(({ app }) => app.isGit);
@@ -105,7 +111,14 @@ export default async function ProjectPage({
 
       {/* Scripts (one card per app) / tasks / notes / git history; the last
           tab opened is remembered per project. */}
-      <ProjectTabs slug={project.slug} tabs={tabs} forced={one(query.tab)}>
+      {/* Keyed so a link to ?tab=git&commit=… (e.g. a done task's commit)
+          opens that tab even after another tab was clicked. */}
+      <ProjectTabs
+        key={`${one(query.tab) ?? ""}:${commit ?? ""}`}
+        slug={project.slug}
+        tabs={tabs}
+        forced={one(query.tab)}
+      >
         <TabsList>
           <TabsTrigger value="scripts">Scripts ({scriptCount})</TabsTrigger>
           <TabsTrigger value="tasks">Tasks ({tasks.length})</TabsTrigger>
@@ -131,10 +144,11 @@ export default async function ProjectPage({
           )}
         </TabsContent>
         <TabsContent value="tasks" className="pt-4">
-          <TaskList
+          <TaskBoard
             slug={project.slug}
             tasks={tasks}
             comments={taskComments}
+            attachments={taskAttachments}
           />
         </TabsContent>
         <TabsContent value="notes" className="pt-4">
