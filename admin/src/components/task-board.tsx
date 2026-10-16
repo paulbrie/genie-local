@@ -9,8 +9,10 @@ import { toast } from "sonner";
 import { addTaskAction, deleteTaskAction, moveTaskAction } from "@/app/actions";
 import { filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
 import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
+import { useTaskLive } from "@/components/use-task-live";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusDot } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
 import {
   TASK_STATUSES,
@@ -133,6 +135,8 @@ export function TaskBoard({
   const dragId = useRef<number | null>(null);
   const [draggingId, setDraggingId] = useState<number | null>(null);
   const dropped = useRef(false);
+  // Live updates from elsewhere wait while a card is being dragged.
+  const { live, flush } = useTaskLive(slug, () => dragId.current != null);
 
   const visible = useMemo(() => {
     const live = tasks.filter((t) => !removed.has(t.id));
@@ -161,7 +165,10 @@ export function TaskBoard({
   function onDragEnd() {
     dragId.current = null;
     setDraggingId(null);
-    if (!dropped.current) setDraft(null);
+    if (!dropped.current) {
+      setDraft(null);
+      flush();
+    }
   }
 
   /** Move the dragged card into `status`, before `beforeId` (or to the column's end). */
@@ -202,6 +209,7 @@ export function TaskBoard({
         toast.error(err instanceof Error ? err.message : String(err));
       } finally {
         setDraft(null);
+        flush();
       }
     });
   }
@@ -279,6 +287,20 @@ export function TaskBoard({
           </Button>
         </div>
       </form>
+
+      <div className="-mb-2 flex justify-end">
+        <span
+          className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+          title={live ? "Changes from anywhere show up here as they happen" : "Reconnecting to live updates…"}
+        >
+          <StatusDot
+            color={live ? "bg-emerald-500" : "bg-amber-500"}
+            pulse={live}
+            label={live ? "Live" : "Reconnecting"}
+          />
+          {live ? "Live" : "Reconnecting…"}
+        </span>
+      </div>
 
       <div className="grid gap-3 md:grid-cols-3">
         {TASK_STATUSES.map((status) => (

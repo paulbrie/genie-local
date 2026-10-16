@@ -78,6 +78,13 @@
       "when": 1792073134366,
       "tag": "0010_brave_the_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792165601894,
+      "tag": "0011_task_change_notify",
+      "breakpoints": true
     }
   ]
 }
