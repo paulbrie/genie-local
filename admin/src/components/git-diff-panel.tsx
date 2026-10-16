@@ -3,29 +3,35 @@
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view.css";
 import { useTheme } from "next-themes";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { parsePatch } from "@/lib/parse-patch";
 
 /**
  * Render every file in a commit's patch with @git-diff-view. The raw patch is
  * split per-file (parsePatch) and each file gets its own DiffView. Unified mode
- * on narrow screens, split on wide, matching the surrounding tooling.
+ * when the panel is narrow, split when it has room for two columns of code.
  */
 export function GitDiffPanel({ patch }: { patch: string }) {
   const files = useMemo(() => parsePatch(patch), [patch]);
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme === "dark" ? "dark" : "light";
 
-  // Split view only helps on wide viewports; fall back to unified when narrow.
+  // Split only when the PANEL (not the window) fits two columns of code: next
+  // to the commit list it's ~500px, where split wraps every line.
+  const ref = useRef<HTMLDivElement>(null);
   const [wide, setWide] = useState(false);
+  // The wrapper only exists once there are files to show.
+  const hasFiles = files.length > 0;
   useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const on = () => setWide(mq.matches);
-    on();
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) =>
+      setWide(entry.contentRect.width >= 900),
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasFiles]);
 
   if (files.length === 0)
     return (
@@ -35,7 +41,7 @@ export function GitDiffPanel({ patch }: { patch: string }) {
     );
 
   return (
-    <div className="space-y-4">
+    <div ref={ref} className="space-y-4">
       {files.map((file, i) => {
         const name = file.newName ?? file.oldName ?? "unknown";
         const renamed =
@@ -61,7 +67,13 @@ export function GitDiffPanel({ patch }: { patch: string }) {
                 data={{
                   oldFile: { fileName: file.oldName, fileLang: file.lang },
                   newFile: { fileName: file.newName, fileLang: file.lang },
-                  hunks: file.hunks,
+                  // @git-diff-view renders nothing for bare "@@" hunks: it needs
+                  // the file's ---/+++ header, which parsePatch splits off.
+                  hunks: [
+                    `--- ${file.oldName ? `a/${file.oldName}` : "/dev/null"}\n` +
+                      `+++ ${file.newName ? `b/${file.newName}` : "/dev/null"}\n` +
+                      file.hunks.join("\n"),
+                  ],
                 }}
                 diffViewMode={wide ? DiffModeEnum.Split : DiffModeEnum.Unified}
                 diffViewTheme={theme}
