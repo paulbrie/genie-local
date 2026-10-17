@@ -61,6 +61,7 @@ import {
   setTerminalFontSize,
   writeToPty,
 } from "@/lib/terminal-bridge";
+import { Z_GLOBAL_CONTROLS, Z_GLOBAL_OVERLAY, Z_TERMINAL_WINDOWS } from "@/lib/z-layers";
 
 const API = `${BASE_PATH}/api/terminals`;
 // Status dot / token meter refresh. Metadata only now — the live pane streams
@@ -272,7 +273,8 @@ export function TerminalDock() {
   const [{ open, minimized }] = useSubject(dock);
   const [statuses] = useSubject(termStatus);
   const isMobile = useIsMobile();
-  const zTop = useRef(10);
+  // Windows stack in their own band, above anything a page draws.
+  const zTop = useRef(Z_TERMINAL_WINDOWS);
   const bringToFront = useCallback(() => ++zTop.current, []);
   // Which floating window is frontmost/focused — it gets the glow so it's clear
   // which one keystrokes go to. Set on open and on any interaction.
@@ -371,7 +373,7 @@ export function TerminalDock() {
       ))}
 
       {minimized.length > 0 && (
-        <div className="fixed bottom-3 left-1/2 z-[60] flex max-w-[92vw] -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-full border bg-background/95 px-2 py-1.5 shadow-2xl ring-1 ring-foreground/10 backdrop-blur">
+        <div style={{ zIndex: Z_GLOBAL_CONTROLS }} className="fixed bottom-3 left-1/2 flex max-w-[92vw] -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-full border bg-background/95 px-2 py-1.5 shadow-2xl ring-1 ring-foreground/10 backdrop-blur">
           <span className="px-1 text-xs text-muted-foreground">Minimized</span>
           {minimized.map((name) => (
             <span
@@ -848,8 +850,8 @@ function MobileTerminalSheet({
     <div
       role="dialog"
       aria-label={`Terminal ${name}`}
-      className="fixed inset-x-0 top-0 z-[70] flex flex-col overflow-hidden bg-background md:hidden"
-      style={{ height: vh ? `${vh}px` : "100dvh" }}
+      className="fixed inset-x-0 top-0 flex flex-col overflow-hidden bg-background md:hidden"
+      style={{ zIndex: Z_GLOBAL_OVERLAY, height: vh ? `${vh}px` : "100dvh" }}
     >
       <div className="flex h-11 shrink-0 items-center gap-1 border-b px-2">
         <button onClick={onClose} aria-label="Back to terminals" className={iconBtn}>

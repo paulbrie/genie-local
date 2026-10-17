@@ -7,6 +7,7 @@ import { reactor } from "@/lib/jarvis-audio";
 import { isSpeaking as ttsSpeaking } from "@/lib/tts";
 import { jarvis } from "@/store/jarvis";
 import { hydrateVoice, voice } from "@/store/voice";
+import { Z_GLOBAL_OVERLAY } from "@/lib/z-layers";
 
 /**
  * The Jarvis presence: a rotating 3D cloud of glowing dust that reacts to the
@@ -248,7 +249,8 @@ export function JarvisOrb() {
     <div
       ref={wrapRef}
       aria-hidden
-      className="pointer-events-none fixed left-1/2 top-1/2 z-[80] size-[min(70vw,70vh,560px)] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-300"
+      style={{ zIndex: Z_GLOBAL_OVERLAY }}
+      className="pointer-events-none fixed left-1/2 top-1/2 size-[min(70vw,70vh,560px)] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-300"
     >
       <canvas ref={canvasRef} className="size-full" />
     </div>

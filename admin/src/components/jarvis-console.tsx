@@ -10,6 +10,7 @@ import { say } from "@/lib/tts";
 import { useSpeechInput } from "@/lib/use-speech-input";
 import { setJarvis } from "@/store/jarvis";
 import { voice } from "@/store/voice";
+import { Z_GLOBAL_CONTROLS } from "@/lib/z-layers";
 
 /**
  * Phase 2 of Jarvis: talk back to it. Hold-to-talk button → the spoken question
@@ -101,7 +102,7 @@ export function JarvisConsole() {
         : "Ask Jarvis";
 
   return (
-    <div className="pointer-events-none fixed right-4 bottom-4 z-[62] flex max-w-[70vw] flex-col items-end gap-2">
+    <div style={{ zIndex: Z_GLOBAL_CONTROLS + 2 }} className="pointer-events-none fixed right-4 bottom-4 flex max-w-[70vw] flex-col items-end gap-2">
       {caption && (
         <div className="pointer-events-auto max-w-[22rem] rounded-2xl border bg-background/90 px-3 py-2 text-xs text-foreground shadow-lg ring-1 ring-foreground/10 backdrop-blur">
           {caption}

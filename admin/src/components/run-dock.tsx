@@ -20,6 +20,7 @@ import {
   runDock,
   setActiveRuns,
 } from "@/store/runs";
+import { Z_GLOBAL_CONTROLS } from "@/lib/z-layers";
 
 const POLL_MS = 3000;
 
@@ -102,7 +103,7 @@ export function RunDock() {
       ))}
 
       {minimized.length > 0 && (
-        <div className="fixed bottom-3 left-3 z-[60] flex max-w-[60vw] flex-wrap items-center gap-1.5 rounded-full border bg-background/95 px-2 py-1.5 shadow-2xl ring-1 ring-foreground/10 backdrop-blur">
+        <div style={{ zIndex: Z_GLOBAL_CONTROLS }} className="fixed bottom-3 left-3 flex max-w-[60vw] flex-wrap items-center gap-1.5 rounded-full border bg-background/95 px-2 py-1.5 shadow-2xl ring-1 ring-foreground/10 backdrop-blur">
           <span className="px-1 text-xs text-muted-foreground">Runs</span>
           {minimized.map((runId) => {
             const r = byId.get(runId);
