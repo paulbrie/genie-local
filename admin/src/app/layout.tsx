@@ -22,10 +22,23 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: "Projects Supervisor",
-  description: "Supervise all projects under /opt/project/projects",
-};
+/**
+ * The tab title names the box: "<who> - Genie", where <who> is the first label
+ * of its public host (paul.cloud.teleporthq.ai → "paul - Genie"). APP_TITLE
+ * overrides it.
+ */
+function appTitle(): string {
+  if (process.env.APP_TITLE) return process.env.APP_TITLE;
+  const who = process.env.PUBLIC_HOST?.split(".")[0]?.trim();
+  return who ? `${who} - Genie` : "Genie";
+}
+
+export function generateMetadata(): Metadata {
+  return {
+    title: appTitle(),
+    description: "Supervise all projects under /opt/project/projects",
+  };
+}
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
