@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { BASE_PATH } from "@/lib/config";
+import { Lockup } from "@/components/brand/wisp";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -48,8 +49,10 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Projects Supervisor</CardTitle>
+        <CardHeader className="items-center">
+          {/* The stacked lockup: square spaces such as the login screen. */}
+          <Lockup size={56} layout="stacked" motion="blink" className="mx-auto py-2" />
+          <CardTitle className="sr-only">Spiridus · sign in</CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">

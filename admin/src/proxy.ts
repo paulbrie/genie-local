@@ -39,7 +39,7 @@ export async function proxy(req: NextRequest) {
 
   // Framework assets + HMR: always allowed. Anchored on purpose — a substring
   // match would let /api/foo/_next/... skip auth.
-  if (path.startsWith("/_next/") || path === "/favicon.ico") {
+  if (path.startsWith("/_next/") || path === "/favicon.ico" || path === "/icon.svg") {
     return NextResponse.next();
   }
   // Login page (GET only) + auth endpoints: allowed unauthenticated.

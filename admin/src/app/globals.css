@@ -9,6 +9,8 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* Spiridus wordmark: Fredoka SemiBold, lowercase (src/brand/spiridus.ts) */
+  --font-wordmark: var(--font-fredoka);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -49,6 +51,10 @@
 }
 
 :root {
+  /* Spiridus brand on light grounds: Deep wish wisp, white eyes, Night word */
+  --wisp-body: #8839ef;
+  --wisp-eyes: #ffffff;
+  --wordmark: #1e1e2e;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -84,6 +90,10 @@
 }
 
 .dark {
+  /* on dark grounds: Wish wisp, Night eyes (the eyes follow the body), Paper word */
+  --wisp-body: #cba6f7;
+  --wisp-eyes: #1e1e2e;
+  --wordmark: #eff1f5;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -142,4 +152,38 @@
 }
 @utility animate-status-ping {
   animation: status-ping 1s cubic-bezier(0, 0, 0.2, 1) 3 both;
+}
+
+/*
+ * A scrollbar that stays out of sight until it's useful: transparent at rest
+ * (thumb and track, so no grey gutter shows), a thin muted thumb while the
+ * pointer is over the area or focus is inside it. Standard properties for
+ * Chrome / Firefox (Chrome ignores the ::-webkit ones once scrollbar-color is
+ * set); ::-webkit-scrollbar for Safari.
+ */
+@utility scrollbar-hover {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  &:hover,
+  &:focus-within {
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+  }
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    background: transparent;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: transparent;
+    background-clip: padding-box;
+  }
+  &:hover::-webkit-scrollbar-thumb,
+  &:focus-within::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  }
 }

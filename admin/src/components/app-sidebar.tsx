@@ -7,6 +7,7 @@ import {
   Activity,
   Bot,
   Box,
+  ChefHat,
   ChevronDown,
   Code2,
   Container,
@@ -14,6 +15,7 @@ import {
   ExternalLink,
   Globe,
   KanbanSquare,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   UsersRound,
@@ -34,6 +36,8 @@ import {
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
+import type { WispMotion } from "@/brand/spiridus";
+import { Lockup, Wisp } from "@/components/brand/wisp";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -72,8 +76,10 @@ const NAV: NavItem[] = [
   { href: "/railway", label: "Railway", icon: TrainFront },
   { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
+  { href: "/recipes", label: "Recipes", icon: ChefHat },
   { href: "/files", label: "Files", icon: FolderOpen },
   { href: "/logs", label: "Logs", icon: ScrollText },
+  { href: "/logins", label: "Logins", icon: KeyRound },
   { href: "/claude", label: "Claude", icon: Sparkles },
   {
     href: "/teams",
@@ -123,6 +129,23 @@ export function AppSidebar() {
   const [terms] = useSubject(liveTerminals);
   // "Currently working" = anything not sitting idle at a shell prompt.
   const workingTerms = terms.filter((t) => t.status !== "idle");
+
+  // The wisp's state (brand motion): looking for you while an agent waits on
+  // you, flickering while one works, else idle blinking; a wink on hover.
+  const waitingOn = terms.filter((t) => t.status === "claude-input").length;
+  const working = terms.filter((t) => t.status === "claude-working").length;
+  const [winking, setWinking] = useState(false);
+  const wink = () => {
+    if (winking) return;
+    setWinking(true);
+    setTimeout(() => setWinking(false), 900);
+  };
+  const wispMotion: WispMotion = winking ? "wink" : waitingOn ? "look" : working ? "flicker" : "blink";
+  const wispTitle = waitingOn
+    ? `${waitingOn} agent${waitingOn === 1 ? " is" : "s are"} waiting for you`
+    : working
+      ? `${working} agent${working === 1 ? "" : "s"} working`
+      : "All quiet";
 
   const [closedGroups, setClosedGroups] = useState<string[]>([]);
 
@@ -239,22 +262,38 @@ export function AppSidebar() {
           rail ? "md:w-14" : "md:w-56"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
       >
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-          {!rail && (
+        <div className={`flex h-10 shrink-0 items-center gap-2 border-b ${rail ? "justify-center px-2" : "px-3"}`}>
+          {/* The Spiridus lockup (mark only on the rail, where it expands the
+              sidebar). The wisp shows the agents' state; winks on hover. */}
+          {rail ? (
+            <button
+              type="button"
+              onClick={toggle}
+              onMouseEnter={wink}
+              aria-label="Expand sidebar"
+              title="Spiridus · expand"
+              className="hidden rounded-md p-0.5 md:block"
+            >
+              <Wisp size={22} motion={wispMotion} title="" />
+            </button>
+          ) : (
             <Link
               href="/"
               onClick={closeMobile}
-              className="flex-1 truncate text-sm font-semibold tracking-tight"
+              onMouseEnter={wink}
+              aria-label="Spiridus · Dashboard"
+              title={wispTitle}
+              className="flex min-w-0 flex-1 items-center"
             >
-              Supervisor
+              <Lockup size={20} motion={wispMotion} />
             </Link>
           )}
-          {/* Collapse toggle — desktop only. */}
+          {/* Collapse toggle — desktop only (on the rail the wisp expands). */}
           <button
             onClick={toggle}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand" : "Collapse"}
-            className="ml-auto hidden text-muted-foreground transition-colors hover:text-foreground md:block"
+            className={`ml-auto text-muted-foreground transition-colors hover:text-foreground ${rail ? "hidden" : "hidden md:block"}`}
           >
             {collapsed ? (
               <PanelLeftOpen className="size-4" />
@@ -272,7 +311,8 @@ export function AppSidebar() {
           </button>
         </div>
 
-      <nav className="flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
+      {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). */}
+      <nav className="scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
         {NAV.map((item) => {
           if (item.href === "/projects")
             return (
@@ -630,6 +670,8 @@ function ProjectsGroup({
   onNavigate: () => void;
 }) {
   const [list, setList] = useState<ProjectNavItem[] | null>(null);
+  // Bumped after a script is started / stopped from a project's menu.
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -643,12 +685,15 @@ function ProjectsGroup({
       }
     };
     void load();
+    // After a start / stop: now, and again once the server has bound its port.
+    const soon = reload ? setTimeout(load, 2500) : undefined;
     const id = setInterval(load, 30_000);
     return () => {
       active = false;
       clearInterval(id);
+      clearTimeout(soon);
     };
-  }, [pathname]);
+  }, [pathname, reload]);
 
   const Icon = item.icon;
   const active = isActive(item, pathname);
@@ -700,12 +745,19 @@ function ProjectsGroup({
             const on = pathname === href || pathname.startsWith(`${href}/`);
             return (
               // Right-click: the project's tabs, and its scripts.
-              <ProjectContextMenu key={p.slug} slug={p.slug} hasGit={p.hasGit} ports={p.ports} onNavigate={onNavigate}>
+              <ProjectContextMenu
+                key={p.slug}
+                slug={p.slug}
+                hasGit={p.hasGit}
+                ports={p.ports ?? []}
+                onNavigate={onNavigate}
+                onChanged={() => setReload((n) => n + 1)}
+              >
                 <Link
                   href={href}
                   onClick={onNavigate}
                   aria-current={on ? "page" : undefined}
-                  title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
+                  title={`${p.slug}${p.running ? ` · running${(p.ports ?? []).length ? ` on :${(p.ports ?? []).join(", :")}` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
                   className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
                     on ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                   }`}
@@ -717,13 +769,15 @@ function ProjectsGroup({
                     label={p.running ? "Running" : "Not running"}
                   />
                   <span className="truncate">{p.slug}</span>
-                  {p.ports.length > 0 && (
-                    <span className="shrink-0 font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
-                      :{p.ports.join(" :")}
+                  {(p.ports ?? []).length > 0 && (
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                      :{(p.ports ?? []).join(" :")}
                     </span>
                   )}
                   {p.openTasks > 0 && (
-                    <span className="ml-auto shrink-0 tabular-nums opacity-70">{p.openTasks}</span>
+                    <span className={`shrink-0 tabular-nums opacity-70 ${(p.ports ?? []).length > 0 ? "" : "ml-auto"}`}>
+                      {p.openTasks}
+                    </span>
                   )}
                 </Link>
               </ProjectContextMenu>
