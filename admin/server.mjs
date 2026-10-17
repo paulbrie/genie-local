@@ -27,7 +27,11 @@ import next from "next";
 
 import { WebSocketServer } from "ws";
 
-import { handlePtyConnection, verifySessionToken, getCookie } from "./server/pty.mjs";
+import { handlePtyConnection, verifySessionToken, getCookie, reapOrphanedAttaches } from "./server/pty.mjs";
+
+// Browser terminals of a previous run of this server are still attached to
+// their tmux sessions (see reapOrphanedAttaches): detach them.
+reapOrphanedAttaches();
 
 const require = createRequire(import.meta.url);
 

@@ -20,6 +20,7 @@
  */
 import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 // node-pty & ws are CommonJS with native/typed exports — require() is the
@@ -156,6 +157,42 @@ function makeBatcher(ws) {
       parts = [];
     },
   };
+}
+
+// ── Orphaned attaches ────────────────────────────────────────────────────────
+
+/**
+ * Detach the `tmux attach-session -t admin-…` clients a previous instance of
+ * this server left behind. The services restart with KillMode=process (so the
+ * project dev servers they launched survive), which also orphans every browser
+ * terminal's attach: reparented to PID 1, still attached, forever. Only
+ * parentless ones are touched; a live browser terminal's attach is a child of
+ * the running server, a terminal over SSH a child of its shell. Killing an
+ * attach just detaches that client; the session keeps running. Linux /proc only.
+ */
+export function reapOrphanedAttaches() {
+  let reaped = 0;
+  let pids = [];
+  try {
+    pids = readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch {
+    return 0; // no /proc: not Linux
+  }
+  for (const pid of pids) {
+    try {
+      const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      if (argv[0] !== "tmux" || argv[1] !== "attach-session" || !argv[3]?.startsWith("admin-")) continue;
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+      if (ppid !== 1) continue;
+      process.kill(Number(pid), "SIGTERM");
+      reaped++;
+    } catch {
+      /* gone meanwhile, or not ours */
+    }
+  }
+  if (reaped) console.log(`> pty: detached ${reaped} orphaned tmux attach client(s)`);
+  return reaped;
 }
 
 // ── Connection handler ───────────────────────────────────────────────────────

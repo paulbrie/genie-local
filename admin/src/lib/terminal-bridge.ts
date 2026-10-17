@@ -47,7 +47,8 @@ interface Instance {
   terminal: Terminal;
   fit: FitAddon;
   ws: WebSocket | null;
-  resizeObserver: ResizeObserver;
+  /** Stops the fit watchers (container resize, DPR, fonts, tab return). */
+  resizeObserver: { disconnect(): void };
   name: string;
   onConn?: (s: ConnState) => void;
   disposed: boolean;
@@ -62,25 +63,84 @@ function wsUrl(): string {
 }
 
 /** rAF-coalesced fit → resize (see genie: an unbounded/debounced mismatch makes
- *  a TUI compute cursor math against the wrong size and stack its prompt). */
-function installFitOnResize(container: HTMLElement, inst: Instance): ResizeObserver {
+ *  a TUI compute cursor math against the wrong size and stack its prompt).
+ *
+ *  Re-fits not only when the container changes size but whenever the cell size
+ *  can change under it: a move to a screen with another pixel density, browser
+ *  zoom, a font finishing loading, or coming back to the tab. Otherwise the grid
+ *  keeps its column count at the new, wider cells and the right edge (e.g. the
+ *  end of tmux's status line) runs past the window. Sending an unchanged size
+ *  is harmless: tmux ignores it. */
+function installFitOnResize(container: HTMLElement, inst: Instance): { disconnect(): void } {
   let pending = false;
   const flush = () => {
     pending = false;
     try {
       const hadFocus = !!inst.terminal.element?.contains(document.activeElement);
-      inst.fit.fit();
+      fitChecked(inst);
       sendResize(inst);
       if (hadFocus) inst.terminal.focus();
     } catch { /* tear-down race */ }
   };
-  const observer = new ResizeObserver(() => {
+  const schedule = () => {
     if (pending) return;
     pending = true;
     requestAnimationFrame(flush);
-  });
+  };
+  const observer = new ResizeObserver(schedule);
   observer.observe(container);
-  return observer;
+
+  // Pixel density (screen change, zoom): a media query that only matches the
+  // current ratio fires once it changes; re-armed for the new ratio each time.
+  let dprQuery: MediaQueryList | null = null;
+  const onDpr = () => {
+    dprQuery?.removeEventListener("change", onDpr);
+    dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    dprQuery.addEventListener("change", onDpr);
+    schedule();
+  };
+  dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+  dprQuery.addEventListener("change", onDpr);
+  const onVisible = () => {
+    if (!document.hidden) schedule();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  document.fonts?.addEventListener("loadingdone", schedule);
+  // Once more after things settle (late fonts don't always fire loadingdone).
+  const settle = setTimeout(schedule, 1000);
+
+  return {
+    disconnect() {
+      observer.disconnect();
+      dprQuery?.removeEventListener("change", onDpr);
+      document.removeEventListener("visibilitychange", onVisible);
+      document.fonts?.removeEventListener("loadingdone", schedule);
+      clearTimeout(settle);
+    },
+  };
+}
+
+/**
+ * Fit, then check the grid really fits: the FitAddon sizes columns from the
+ * cell width xterm *measured*, which can be narrower than what the browser
+ * ends up drawing (a font that wasn't available yet, or not under the name we
+ * asked for). Then the last columns, e.g. the end of tmux's status line, run
+ * past the window. If the drawn grid overflows its box, recount the columns
+ * from the drawn cell width.
+ */
+function fitChecked(inst: Instance): void {
+  inst.fit.fit();
+  const el = inst.terminal.element;
+  const screen = el?.querySelector<HTMLElement>(".xterm-screen");
+  const box = el?.parentElement;
+  if (!screen || !box || inst.terminal.cols < 2) return;
+  const cs = getComputedStyle(box);
+  const avail = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const drawn = screen.getBoundingClientRect().width;
+  if (drawn <= avail + 0.5) return;
+  const cell = drawn / inst.terminal.cols;
+  const cols = Math.max(2, Math.floor(avail / cell));
+  if (cols < inst.terminal.cols) inst.terminal.resize(cols, inst.terminal.rows);
 }
 
 function sendResize(inst: Instance) {
@@ -188,7 +248,7 @@ export function createTerminal(
 
   const inst: Instance = {
     terminal, fit, ws: null, name, onConn, disposed: false, reconnectTimer: null,
-    resizeObserver: undefined as unknown as ResizeObserver,
+    resizeObserver: { disconnect() {} },
   };
 
   // keystrokes → server
@@ -199,7 +259,7 @@ export function createTerminal(
   });
 
   requestAnimationFrame(() => {
-    try { fit.fit(); } catch { /* ignore */ }
+    try { fitChecked(inst); } catch { /* ignore */ }
     terminal.focus();
   });
 
@@ -236,14 +296,14 @@ export function focusTerminal(name: string): void {
 export function refitTerminal(name: string): void {
   const inst = instances.get(name);
   if (!inst) return;
-  try { inst.fit.fit(); sendResize(inst); } catch { /* ignore */ }
+  try { fitChecked(inst); sendResize(inst); } catch { /* ignore */ }
 }
 
 export function setTerminalFontSize(name: string, fontSize: number): void {
   const inst = instances.get(name);
   if (!inst || inst.terminal.options.fontSize === fontSize) return;
   inst.terminal.options.fontSize = fontSize;
-  try { inst.fit.fit(); sendResize(inst); } catch { /* ignore */ }
+  try { fitChecked(inst); sendResize(inst); } catch { /* ignore */ }
 }
 
 export function hasTerminal(name: string): boolean {
@@ -258,7 +318,8 @@ export function reattachTerminal(name: string, newContainer: HTMLElement): boole
   const el = inst.terminal.element;
   if (el && el.parentElement !== newContainer) newContainer.appendChild(el);
   inst.resizeObserver = installFitOnResize(newContainer, inst);
-  requestAnimationFrame(() => { try { inst.fit.fit(); inst.terminal.focus(); } catch { /* ignore */ } });
+  // Fit AND tell the PTY: a re-mounted window can have another size.
+  requestAnimationFrame(() => { try { fitChecked(inst); sendResize(inst); inst.terminal.focus(); } catch { /* ignore */ } });
   return true;
 }
 
