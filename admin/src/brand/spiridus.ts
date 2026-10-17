@@ -4,9 +4,10 @@
  * motion, ported from the brand research project (/opt/project/projects/
  * genie-brand, src/brand/*; the guideline at /projects/genie-brand/v2).
  *
- * Colours are Catppuccin: Night / Paper are the grounds; the wisp is Deep wish
- * with white eyes on light grounds and Wish with Night eyes on dark ones (the
- * eyes follow the body). Never peach: that's Claude's colour in the app.
+ * The brand's colours are Catppuccin (Night / Paper grounds; Deep wish / Wish
+ * wisps); the admin shows the logo in black and white instead (globals.css
+ * --wisp-*, --wordmark): the wisp in the ink, its eyes in the ground. Never
+ * peach: that's Claude's colour in the app.
  */
 
 export const NIGHT = "#1e1e2e";
@@ -54,10 +55,13 @@ export const WISP_CSS = `.sp *{transform-box:fill-box;transform-origin:50% 50%}
 @keyframes sp-tilt{0%,100%{transform:rotate(0)}30%,62%{transform:rotate(-9deg)}}
 @media (prefers-reduced-motion:reduce){.sp *{animation:none!important}}`;
 
-/** The favicon: the still wisp, Deep wish on light browser chrome, Wish with Night eyes on dark. */
+/**
+ * The favicon, monochrome like the admin's logo: a black wisp with white eyes
+ * on light browser chrome, white with black eyes on dark.
+ */
 export const WISP_ICON_SVG =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
-  `<style>.b{fill:${DEEP_WISH}}.e{fill:${EYE_WHITE}}@media (prefers-color-scheme:dark){.b{fill:${WISH}}.e{fill:${NIGHT}}}</style>` +
+  `<style>.b{fill:#0a0a0a}.e{fill:#ffffff}@media (prefers-color-scheme:dark){.b{fill:#fafafa}.e{fill:#0a0a0a}}</style>` +
   `<path class="b" d="${WISP_BODY}"/>` +
   WISP_EYES.map((e) => `<ellipse class="e" cx="${e.cx}" cy="${e.cy}" rx="${e.rx}" ry="${e.ry}"/>`).join("") +
   `</svg>`;

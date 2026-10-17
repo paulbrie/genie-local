@@ -51,10 +51,11 @@
 }
 
 :root {
-  /* Spiridus brand on light grounds: Deep wish wisp, white eyes, Night word */
-  --wisp-body: #8839ef;
-  --wisp-eyes: #ffffff;
-  --wordmark: #1e1e2e;
+  /* Spiridus logo, monochrome in the admin: the wisp and word in the ink, the
+     eyes in the ground (black on light, white on dark; the eyes follow the body) */
+  --wisp-body: var(--foreground);
+  --wisp-eyes: var(--background);
+  --wordmark: var(--foreground);
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -90,10 +91,6 @@
 }
 
 .dark {
-  /* on dark grounds: Wish wisp, Night eyes (the eyes follow the body), Paper word */
-  --wisp-body: #cba6f7;
-  --wisp-eyes: #1e1e2e;
-  --wordmark: #eff1f5;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
