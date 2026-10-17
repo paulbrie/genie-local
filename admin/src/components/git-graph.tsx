@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
 
-import { GitDiffPanel } from "@/components/git-diff-panel";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -38,16 +39,6 @@ const PAD_X = 10;
 
 type GitResponse = { repos: GitRepo[]; app: string; graph: GitGraph };
 
-async function fetchPatch(projectSlug: string, app: string, hash: string): Promise<string> {
-  const url = `${BASE_PATH}/api/git/diff?project=${encodeURIComponent(
-    projectSlug,
-  )}&app=${encodeURIComponent(app)}&hash=${hash}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = (await res.json()) as { patch: string };
-  return json.patch;
-}
-
 async function fetchGraph(projectSlug: string, app: string): Promise<GitResponse> {
   const url = `${BASE_PATH}/api/git?project=${encodeURIComponent(
     projectSlug,
@@ -62,54 +53,28 @@ async function fetchGraph(projectSlug: string, app: string): Promise<GitResponse
   return (await res.json()) as GitResponse;
 }
 
+/**
+ * A repo's history as a lane graph. Each commit links to its own page
+ * (/projects/<slug>/git/<hash>), where the diff gets the whole window.
+ */
 export function GitGraphView({
   projectSlug,
   initialApp,
-  initialCommit,
 }: {
   projectSlug: string;
   initialApp?: string;
-  /** Hash (or prefix) to select once the graph loads. */
-  initialCommit?: string;
 }) {
+  const router = useRouter();
   const [app, setApp] = useState(initialApp ?? "");
   const [data, setData] = useState<GitResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [selected, setSelected] = useState<string | null>(null);
-  const [patch, setPatch] = useState<string | null>(null);
-  const [diffLoading, setDiffLoading] = useState(false);
-  // Selected once, on the first load that contains it.
-  const pendingCommit = useRef(initialCommit?.toLowerCase());
-
-  const showGraph = useCallback(
-    (json: GitResponse) => {
-      setData(json);
-      setApp(json.app);
-      setSelected(null);
-      setPatch(null);
-      setLoading(false);
-      const want = pendingCommit.current;
-      const row = want
-        ? json.graph.rows.find((r) => r.commit.hash.startsWith(want))
-        : undefined;
-      if (row) {
-        pendingCommit.current = undefined;
-        const hash = row.commit.hash;
-        setSelected(hash);
-        setDiffLoading(true);
-        setTimeout(
-          () => document.getElementById(`commit-${hash}`)?.scrollIntoView({ block: "center" }),
-          0,
-        );
-        fetchPatch(projectSlug, json.app, hash)
-          .then(setPatch, () => setPatch(null))
-          .finally(() => setDiffLoading(false));
-      }
-    },
-    [projectSlug],
-  );
+  const showGraph = useCallback((json: GitResponse) => {
+    setData(json);
+    setApp(json.app);
+    setLoading(false);
+  }, []);
 
   const graphFailed = useCallback((e: unknown) => {
     setError(e instanceof Error ? e.message : String(e));
@@ -121,6 +86,11 @@ export function GitGraphView({
   const load = (appSlug: string) => {
     setLoading(true);
     setError(null);
+    // Keep the repo in the URL so the page (and its commit links) can be shared.
+    router.replace(
+      `/projects/${encodeURIComponent(projectSlug)}/git${appSlug ? `?app=${encodeURIComponent(appSlug)}` : ""}`,
+      { scroll: false },
+    );
     fetchGraph(projectSlug, appSlug).then(showGraph, graphFailed);
   };
 
@@ -135,22 +105,6 @@ export function GitGraphView({
       active = false;
     };
   }, [projectSlug, initialApp, showGraph, graphFailed]);
-
-  const selectCommit = useCallback(
-    async (hash: string) => {
-      setSelected(hash);
-      setPatch(null);
-      setDiffLoading(true);
-      try {
-        setPatch(await fetchPatch(projectSlug, app, hash));
-      } catch {
-        setPatch(null);
-      } finally {
-        setDiffLoading(false);
-      }
-    },
-    [projectSlug, app],
-  );
 
   if (loading)
     return <p className="text-sm text-muted-foreground">Loading history…</p>;
@@ -197,99 +151,70 @@ export function GitGraphView({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,460px)_1fr]">
-        {/* Graph + commit list */}
-        <ScrollArea className="max-h-[70vh] rounded-md border">
-          <div className="flex">
-            <svg
-              width={svgWidth}
-              height={svgHeight}
-              className="shrink-0"
-              style={{ minWidth: svgWidth }}
-            >
-              {graph.rows.map((row, i) =>
-                row.edgesAbove.map((e, j) => {
-                  const x1 = PAD_X + e.top * COL_W;
-                  const x2 = PAD_X + e.bottom * COL_W;
-                  const y1 = (i - 1) * ROW_H + ROW_H / 2;
-                  const y2 = i * ROW_H + ROW_H / 2;
-                  const ym = (y1 + y2) / 2;
-                  return (
-                    <path
-                      key={`e-${i}-${j}`}
-                      d={`M ${x1} ${y1} C ${x1} ${ym}, ${x2} ${ym}, ${x2} ${y2}`}
-                      fill="none"
-                      stroke={color(e.color)}
-                      strokeWidth={1.5}
-                    />
-                  );
-                }),
-              )}
-              {graph.rows.map((row, i) => (
-                <circle
-                  key={`d-${row.commit.hash}`}
-                  cx={PAD_X + row.column * COL_W}
-                  cy={i * ROW_H + ROW_H / 2}
-                  r={DOT_R}
-                  fill={color(row.color)}
-                  stroke="var(--background)"
-                  strokeWidth={1.5}
-                />
-              ))}
-            </svg>
+      {/* Graph + commit list */}
+      <ScrollArea className="max-h-[75vh] rounded-md border">
+        <div className="flex">
+          <svg
+            width={svgWidth}
+            height={svgHeight}
+            className="shrink-0"
+            style={{ minWidth: svgWidth }}
+          >
+            {graph.rows.map((row, i) =>
+              row.edgesAbove.map((e, j) => {
+                const x1 = PAD_X + e.top * COL_W;
+                const x2 = PAD_X + e.bottom * COL_W;
+                const y1 = (i - 1) * ROW_H + ROW_H / 2;
+                const y2 = i * ROW_H + ROW_H / 2;
+                const ym = (y1 + y2) / 2;
+                return (
+                  <path
+                    key={`e-${i}-${j}`}
+                    d={`M ${x1} ${y1} C ${x1} ${ym}, ${x2} ${ym}, ${x2} ${y2}`}
+                    fill="none"
+                    stroke={color(e.color)}
+                    strokeWidth={1.5}
+                  />
+                );
+              }),
+            )}
+            {graph.rows.map((row, i) => (
+              <circle
+                key={`d-${row.commit.hash}`}
+                cx={PAD_X + row.column * COL_W}
+                cy={i * ROW_H + ROW_H / 2}
+                r={DOT_R}
+                fill={color(row.color)}
+                stroke="var(--background)"
+                strokeWidth={1.5}
+              />
+            ))}
+          </svg>
 
-            <ul className="min-w-0 flex-1">
-              {graph.rows.map((row) => (
-                <CommitRow
-                  key={row.commit.hash}
-                  row={row}
-                  selected={row.commit.hash === selected}
-                  onSelect={() => void selectCommit(row.commit.hash)}
-                />
-              ))}
-            </ul>
-          </div>
-        </ScrollArea>
-
-        {/* Diff panel */}
-        <div className="min-w-0">
-          {!selected ? (
-            <p className="text-sm text-muted-foreground">
-              Select a commit to view its changes.
-            </p>
-          ) : diffLoading ? (
-            <p className="text-sm text-muted-foreground">Loading diff…</p>
-          ) : patch == null ? (
-            <p className="text-sm text-destructive">Could not load diff.</p>
-          ) : (
-            <ScrollArea className="max-h-[70vh]">
-              <GitDiffPanel patch={patch} />
-            </ScrollArea>
-          )}
+          <ul className="min-w-0 flex-1">
+            {graph.rows.map((row) => (
+              <CommitRow
+                key={row.commit.hash}
+                row={row}
+                href={`/projects/${encodeURIComponent(projectSlug)}/git/${row.commit.hash}${
+                  app ? `?app=${encodeURIComponent(app)}` : ""
+                }`}
+              />
+            ))}
+          </ul>
         </div>
-      </div>
+      </ScrollArea>
     </div>
   );
 }
 
-function CommitRow({
-  row,
-  selected,
-  onSelect,
-}: {
-  row: GraphRow;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+function CommitRow({ row, href }: { row: GraphRow; href: string }) {
   const { commit } = row;
   return (
     <li id={`commit-${commit.hash}`} style={{ height: ROW_H }}>
-      <button
-        type="button"
-        onClick={onSelect}
-        className={`flex h-full w-full items-center gap-2 px-2 text-left text-sm hover:bg-muted/60 ${
-          selected ? "bg-muted" : ""
-        }`}
+      <Link
+        href={href}
+        className="flex h-full w-full items-center gap-2 px-2 text-left text-sm hover:bg-muted/60"
       >
         {commit.refs.map((ref) => (
           <Badge
@@ -313,7 +238,7 @@ function CommitRow({
         <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
           {formatRelativeTime(commit.authorDate)}
         </span>
-      </button>
+      </Link>
     </li>
   );
 }

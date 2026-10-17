@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     await insertTaskAttachments(
       saved.map((s) => ({ ...s, taskId, author: "user" })),
     );
-    revalidatePath(`/projects/${slug}`);
+    revalidatePath("/projects/[slug]", "layout");
     return NextResponse.json({ attached: saved.length });
   } catch (err) {
     return NextResponse.json(

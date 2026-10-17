@@ -107,3 +107,40 @@ export function parsePatch(patch: string): ParsedFile[] {
   }
   return files;
 }
+
+export type CommitHeader = {
+  hash: string;
+  author: string;
+  authorDate: string;
+  committer: string;
+  commitDate: string;
+  subject: string;
+  body: string;
+};
+
+/**
+ * The commit part of `git show --format=fuller` (everything before the first
+ * "diff --git"): hash, author / committer with dates, subject and body.
+ */
+export function parseCommitHeader(patch: string): CommitHeader {
+  const head = patch.split(/\n(?=diff --git )/)[0];
+  const field = (name: string) =>
+    new RegExp(`^${name}:\\s*(.*)$`, "m").exec(head)?.[1]?.trim() ?? "";
+  const message = head
+    .split("\n")
+    .filter((l) => l.startsWith("    ") || l === "")
+    .slice(1) // the blank line after the headers
+    .map((l) => l.slice(4))
+    .join("\n")
+    .trim();
+  const [subject = "", ...rest] = message.split("\n");
+  return {
+    hash: /^commit ([0-9a-f]+)/m.exec(head)?.[1] ?? "",
+    author: field("Author"),
+    authorDate: field("AuthorDate"),
+    committer: field("Commit"),
+    commitDate: field("CommitDate"),
+    subject,
+    body: rest.join("\n").trim(),
+  };
+}

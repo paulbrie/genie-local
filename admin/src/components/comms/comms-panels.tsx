@@ -175,7 +175,7 @@ export function FilesPanel({
 /** Link to the commit in its project's git history, when it's a verified commit of a known project. */
 export function commitHref(c: CommitInfo): string | null {
   return c.project != null && c.verified
-    ? `/projects/${encodeURIComponent(c.project)}?tab=git&app=${encodeURIComponent(c.app ?? "")}&commit=${c.hash}`
+    ? `/projects/${encodeURIComponent(c.project)}/git/${c.hash}${c.app ? `?app=${encodeURIComponent(c.app)}` : ""}`
     : null;
 }
 
