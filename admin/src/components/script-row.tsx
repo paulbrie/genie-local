@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -40,6 +41,17 @@ export function ScriptList({
   );
   const namesKey = scripts.map((s) => s.name).join("\n");
 
+  // ?script=<app>:<name> (the sidebar's right-click menu): bring that row into
+  // view and mark it.
+  const focus = useSearchParams().get("script");
+  const focused = focus?.startsWith(`${appSlug}:`) ? focus.slice(appSlug.length + 1) : null;
+  useEffect(() => {
+    if (!focused) return;
+    document
+      .querySelector(`[data-app="${CSS.escape(appSlug)}"] [data-script="${CSS.escape(focused)}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [appSlug, focused]);
+
   useEffect(() => {
     const names = namesKey.split("\n");
     let active = true;
@@ -64,9 +76,10 @@ export function ScriptList({
   }, [projectSlug, appId, namesKey]);
 
   return (
-    <div className="divide-y rounded-md border">
+    <div data-app={appSlug} className="divide-y rounded-md border">
       {scripts.map(({ name, command }, i) => (
         <ScriptRow
+          highlighted={name === focused}
           key={name}
           projectSlug={projectSlug}
           appSlug={appSlug}
@@ -89,6 +102,7 @@ function ScriptRow({
   command,
   status,
   onStatus,
+  highlighted,
 }: {
   projectSlug: string;
   appSlug: string;
@@ -97,6 +111,7 @@ function ScriptRow({
   command: string;
   status: RunStatus;
   onStatus: (s: RunStatus) => void;
+  highlighted: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
 
@@ -114,7 +129,13 @@ function ScriptRow({
   const running = status.running;
 
   return (
-    <div data-script={script} className="flex items-center gap-2 px-2.5 py-1.5">
+    <div
+      data-script={script}
+      aria-current={highlighted ? "true" : undefined}
+      className={`flex items-center gap-2 px-2.5 py-1.5 transition-colors ${
+        highlighted ? "bg-primary/10 ring-1 ring-primary/40 ring-inset" : ""
+      }`}
+    >
       <StatusDot
         color={running ? "bg-emerald-500" : "bg-muted-foreground/30"}
         pulse={running}

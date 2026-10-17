@@ -22,6 +22,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   FolderOpen,
+  FolderKanban,
   ScrollText,
   Server,
   Share2,
@@ -34,9 +35,11 @@ import {
 import { useSubject } from "subjecto/react";
 
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
+import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
+import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { activeRuns, openRun } from "@/store/runs";
 import { mobileNav } from "@/store/ui";
@@ -57,6 +60,8 @@ type NavItem = {
 
 const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
+  // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
+  { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
   { href: "/processes", label: "Processes", icon: Activity },
   { href: "/chrome", label: "Chrome", icon: Globe },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },
@@ -269,6 +274,18 @@ export function AppSidebar() {
 
       <nav className="flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
         {NAV.map((item) => {
+          if (item.href === "/projects")
+            return (
+              <ProjectsGroup
+                key={item.href}
+                item={item}
+                pathname={pathname}
+                rail={rail}
+                open={!closedGroups.includes(item.href) || pathname.startsWith("/projects/")}
+                onToggle={() => toggleGroup(item.href)}
+                onNavigate={closeMobile}
+              />
+            );
           if (item.children)
             return (
               <NavGroup
@@ -588,6 +605,132 @@ function NavGroup({
         </button>
       </div>
       {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
+    </div>
+  );
+}
+
+/**
+ * Projects, with the projects as its sub-items (like the terminals under
+ * Terminals): a dot when one of its apps is running, and its tickets to do.
+ * The list comes from /api/projects, refreshed on navigation and every 30 s.
+ */
+function ProjectsGroup({
+  item,
+  pathname,
+  rail,
+  open,
+  onToggle,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string;
+  rail: boolean;
+  open: boolean;
+  onToggle: () => void;
+  onNavigate: () => void;
+}) {
+  const [list, setList] = useState<ProjectNavItem[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const res = await fetch(`${BASE_PATH}/api/projects`, { cache: "no-store" });
+        if (!res.ok) return;
+        const json = (await res.json()) as { projects: ProjectNavItem[] };
+        if (active) setList(json.projects);
+      } catch {
+        /* ignore: keep the last list */
+      }
+    };
+    void load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [pathname]);
+
+  const Icon = item.icon;
+  const active = isActive(item, pathname);
+  const rowClass = (on: boolean) =>
+    on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground";
+
+  // The icon rail has no room for a dozen names: just the Projects page.
+  if (rail)
+    return (
+      <Link
+        href={item.href}
+        onClick={onNavigate}
+        title={item.label}
+        aria-current={active ? "page" : undefined}
+        className={`flex items-center justify-center rounded-md px-2.5 py-1.5 transition-colors ${rowClass(active || pathname.startsWith("/projects/"))}`}
+      >
+        <Icon className="size-[15px] shrink-0" />
+      </Link>
+    );
+
+  return (
+    <div>
+      <div className={`flex items-center rounded-md transition-colors ${rowClass(active)}`}>
+        <Link
+          href={item.href}
+          onClick={onNavigate}
+          aria-current={active ? "page" : undefined}
+          className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
+        >
+          <Icon className="size-[15px] shrink-0" />
+          <span className="truncate">{item.label}</span>
+          {list && <span className="ml-auto text-xs tabular-nums opacity-60">{list.length}</span>}
+        </Link>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
+          title={open ? "Fold" : "Unfold"}
+          className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+        >
+          <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+        </button>
+      </div>
+      {open && list && (
+        <div className="mt-px flex flex-col gap-px">
+          {list.map((p) => {
+            const href = `/projects/${encodeURIComponent(p.slug)}`;
+            const on = pathname === href || pathname.startsWith(`${href}/`);
+            return (
+              // Right-click: the project's tabs, and its scripts.
+              <ProjectContextMenu key={p.slug} slug={p.slug} hasGit={p.hasGit} ports={p.ports} onNavigate={onNavigate}>
+                <Link
+                  href={href}
+                  onClick={onNavigate}
+                  aria-current={on ? "page" : undefined}
+                  title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
+                  className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
+                    on ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  }`}
+                >
+                  <StatusDot
+                    color={p.running ? "bg-emerald-500" : "bg-muted-foreground/30"}
+                    pulse={p.running}
+                    size="sm"
+                    label={p.running ? "Running" : "Not running"}
+                  />
+                  <span className="truncate">{p.slug}</span>
+                  {p.ports.length > 0 && (
+                    <span className="shrink-0 font-mono text-[10px] text-emerald-700 dark:text-emerald-400">
+                      :{p.ports.join(" :")}
+                    </span>
+                  )}
+                  {p.openTasks > 0 && (
+                    <span className="ml-auto shrink-0 tabular-nums opacity-70">{p.openTasks}</span>
+                  )}
+                </Link>
+              </ProjectContextMenu>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
