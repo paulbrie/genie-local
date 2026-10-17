@@ -169,6 +169,41 @@ export const taskComments = pgTable("task_comments", {
     .defaultNow(),
 });
 
+/**
+ * Every admin login attempt and logout: who tried (IP, browser, the username
+ * typed; never the password), and for a failure, why.
+ */
+export const adminLogins = pgTable("admin_logins", {
+  id: serial("id").primaryKey(),
+  at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+  // 'login' | 'logout'
+  event: text("event").notNull().default("login"),
+  ok: boolean("ok").notNull(),
+  // For a failed login (LOGIN_FAILURES): 'wrong_password' | 'unknown_user' | …
+  reason: text("reason"),
+  username: text("username"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  // The session this login opened / this logout ended (admin_sessions.id).
+  sessionId: text("session_id"),
+});
+
+/**
+ * Admin sessions, keyed by a hash of the session cookie (the cookie itself is
+ * a stateless signed token). The top bar's heartbeat keeps last_seen_at fresh
+ * while a tab is open: seen in the last minute = connected.
+ */
+export const adminSessions = pgTable("admin_sessions", {
+  id: text("id").primaryKey(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  // 'login' (the login form) | 'token' (a cookie first seen elsewhere, e.g. `npm run session`)
+  via: text("via").notNull().default("login"),
+  endedAt: timestamp("ended_at", { withTimezone: true }),
+});
+
 /** A saved database connection for the DB explorer. Password is encrypted. */
 export const connections = pgTable("connections", {
   id: serial("id").primaryKey(),
@@ -238,3 +273,5 @@ export type Note = typeof notes.$inferSelect;
 export type Task = typeof tasks.$inferSelect;
 export type TaskComment = typeof taskComments.$inferSelect;
 export type TaskAttachment = typeof taskAttachments.$inferSelect;
+export type AdminLogin = typeof adminLogins.$inferSelect;
+export type AdminSession = typeof adminSessions.$inferSelect;

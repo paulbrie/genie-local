@@ -9,6 +9,7 @@ import { formatBytes } from "@/lib/format";
 import type { SystemStats } from "@/lib/stats";
 import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
+import { SessionsIndicator } from "@/components/sessions-indicator";
 
 const POLL_MS = 5000;
 
@@ -106,6 +107,7 @@ export function StatsToolbar() {
             ? `updated ${new Date(stats.ts).toLocaleTimeString()}`
             : "loading…"}
       </span>
+      <SessionsIndicator />
       <StatsHistoryChart />
     </header>
   );

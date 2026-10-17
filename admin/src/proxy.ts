@@ -1,33 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { originAllowed } from "@/lib/origin";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
-const PUBLIC_HOSTS = (process.env.APP_PUBLIC_HOSTS ?? "")
-  .split(",")
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
-
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-
-// CSRF: a state-changing request must come from this app's own origin. Browsers
-// always send Origin on cross-origin POST/PUT/PATCH/DELETE; requests without it
-// (curl, server-side agents) carry no ambient cookie risk.
-function originAllowed(req: NextRequest): boolean {
-  const origin = req.headers.get("origin");
-  if (!origin) return true;
-  let host: string;
-  try {
-    host = new URL(origin).host.toLowerCase();
-  } catch {
-    return false;
-  }
-  const reqHost = (
-    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? ""
-  ).toLowerCase();
-  return host === reqHost || PUBLIC_HOSTS.includes(host) ||
-    PUBLIC_HOSTS.includes(host.replace(/:\d+$/, ""));
-}
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -48,7 +25,8 @@ export async function proxy(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const authed = await verifySessionToken(token);
 
-  if (!SAFE_METHODS.has(method) && !originAllowed(req)) {
+  // /api/login checks the origin itself, so a blocked login is logged with why.
+  if (!SAFE_METHODS.has(method) && !originAllowed(req) && path !== "/api/login") {
     return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
   }
 
