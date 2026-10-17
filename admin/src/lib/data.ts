@@ -204,6 +204,33 @@ export async function deleteTask(projectId: number, taskId: number) {
     .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
 }
 
+export async function getTask(projectId: number, taskId: number) {
+  const [row] = await db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Record the delegation on the task and leave a line in its thread. */
+export async function assignTask(
+  projectId: number,
+  taskId: number,
+  assignee: string,
+  note: string | null,
+) {
+  await db
+    .update(tasks)
+    .set({ assignee, assignedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
+  await db.insert(taskComments).values({
+    taskId,
+    author: "user",
+    body: `Delegated to ${assignee}${note ? `: ${note}` : ""}`,
+  });
+}
+
 /** Every comment on the project's tasks, oldest first (thread order). */
 export async function getTaskComments(projectId: number) {
   return db

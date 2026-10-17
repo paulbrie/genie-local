@@ -116,6 +116,9 @@ export const tasks = pgTable("tasks", {
   done: boolean("done").notNull().default(false),
   // The commit that finished the task (for done tasks).
   commitSha: text("commit_sha"),
+  // The terminal (Claude session, by its admin name) the task was delegated to.
+  assignee: text("assignee"),
+  assignedAt: timestamp("assigned_at", { withTimezone: true }),
   // Manual sort order within a project (smaller = higher in the list).
   position: integer("position").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })

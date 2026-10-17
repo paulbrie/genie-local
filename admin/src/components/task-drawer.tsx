@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { updateTaskAction } from "@/app/actions";
 import { TaskAttachments, filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
 import { TaskComments } from "@/components/task-comments";
+import { TaskDelegate } from "@/components/task-delegate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -187,6 +188,13 @@ export function TaskDrawer({
               </Button>
             </div>
           </div>
+
+          <section className="space-y-1.5">
+            <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Delegate
+            </h3>
+            <TaskDelegate slug={slug} task={task} />
+          </section>
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

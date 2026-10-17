@@ -1,6 +1,6 @@
 "use client";
 
-import { GitCommitHorizontal, MessageSquare, Paperclip, X } from "lucide-react";
+import { Bot, GitCommitHorizontal, MessageSquare, Paperclip, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -413,6 +413,12 @@ function TaskCard({
       )}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
         <span>{formatRelativeTime(task.updatedAt)}</span>
+        {task.assignee && (
+          <span className="flex min-w-0 items-center gap-0.5" title={`Delegated to ${task.assignee}`}>
+            <Bot className="size-3 shrink-0" />
+            <span className="truncate">{task.assignee}</span>
+          </span>
+        )}
         {commentCount > 0 && (
           <span
             className={`flex items-center gap-0.5 ${
@@ -432,7 +438,7 @@ function TaskCard({
         )}
         {task.commitSha && (
           <Link
-            href={`/projects/${encodeURIComponent(slug)}?tab=git&commit=${task.commitSha}`}
+            href={`/projects/${encodeURIComponent(slug)}/git/${task.commitSha}`}
             onClick={(e) => e.stopPropagation()}
             className="flex items-center gap-0.5 font-mono hover:text-foreground hover:underline"
             title="Open the commit in the Git tab"

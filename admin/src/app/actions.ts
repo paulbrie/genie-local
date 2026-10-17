@@ -46,6 +46,8 @@ import {
   deleteTask,
   deleteTaskAttachment,
   deleteTaskComment,
+  getTask,
+  assignTask,
   getAppRunTarget,
   getProjectIdBySlug,
   reorderNotes,
@@ -90,6 +92,12 @@ import { requireAdmin } from "@/lib/require-admin";
 import { rescanProject, scanAndPersist } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
 import {
+  delegateBrief,
+  delegateTargets,
+  sendBrief,
+  type DelegateTarget,
+} from "@/lib/task-delegate";
+import {
   removeAttachmentFile,
   removeTaskAttachmentDir,
 } from "@/lib/task-attachments";
@@ -107,6 +115,14 @@ async function requireProjectId(slug: string): Promise<number> {
   return id;
 }
 
+/**
+ * Refresh a project's pages after a change: the layout (header, tab counts)
+ * and every tab under /projects/<slug>/… (scripts, tasks, notes, git).
+ */
+function revalidateProject() {
+  revalidatePath("/projects/[slug]", "layout");
+}
+
 export async function rescanAllAction() {
   await requireAdmin();
   await scanAndPersist();
@@ -117,7 +133,7 @@ export async function rescanProjectAction(slug: string) {
   await requireAdmin();
   const parsed = slugSchema.parse(slug);
   await rescanProject(parsed);
-  revalidatePath(`/projects/${parsed}`);
+  revalidateProject();
   revalidatePath("/");
 }
 
@@ -131,7 +147,7 @@ export async function deleteProjectAction(slug: string) {
   const id = await requireProjectId(slug);
   await setProjectArchived(id, true);
   revalidatePath("/");
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 /** Restore a previously-archived project so the scan tracks it again. */
@@ -140,7 +156,7 @@ export async function restoreProjectAction(slug: string) {
   const id = await requireProjectId(slug);
   await setProjectArchived(id, false);
   revalidatePath("/");
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function addNoteAction(slug: string, formData: FormData) {
@@ -148,7 +164,7 @@ export async function addNoteAction(slug: string, formData: FormData) {
   const id = await requireProjectId(slug);
   const body = z.string().trim().min(1).max(5000).parse(formData.get("body"));
   await addNote(id, body);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function updateNoteAction(
@@ -161,7 +177,7 @@ export async function updateNoteAction(
   const parsedNoteId = z.number().int().positive().parse(noteId);
   const parsedBody = z.string().trim().min(1).max(5000).parse(body);
   await updateNote(id, parsedNoteId, parsedBody);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function deleteNoteAction(slug: string, noteId: number) {
@@ -169,7 +185,7 @@ export async function deleteNoteAction(slug: string, noteId: number) {
   const id = await requireProjectId(slug);
   const parsedNoteId = z.number().int().positive().parse(noteId);
   await deleteNote(id, parsedNoteId);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function reorderNotesAction(slug: string, orderedIds: number[]) {
@@ -177,7 +193,7 @@ export async function reorderNotesAction(slug: string, orderedIds: number[]) {
   const id = await requireProjectId(slug);
   const ids = z.array(z.number().int().positive()).max(1000).parse(orderedIds);
   await reorderNotes(id, ids);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function addTaskAction(slug: string, formData: FormData) {
@@ -192,7 +208,7 @@ export async function addTaskAction(slug: string, formData: FormData) {
     .optional()
     .parse(typeof rawDesc === "string" && rawDesc.trim() ? rawDesc : undefined);
   const taskId = await addTask(id, title, description ?? null);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
   // The caller uploads any files picked or pasted in the form to this task next.
   return taskId;
 }
@@ -216,7 +232,7 @@ export async function moveTaskAction(
     taskStatusSchema.parse(status),
     z.array(z.number().int().positive()).max(1000).parse(orderedIds),
   );
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function updateTaskAction(
@@ -240,7 +256,7 @@ export async function updateTaskAction(
     status: taskStatusSchema.parse(fields.status),
     commitSha: sha ? parseCommitSha(sha) : null,
   });
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 // Thrown as a plain message: the dialog shows it as is (a ZodError would print as JSON).
@@ -251,13 +267,45 @@ function parseCommitSha(sha: string): string {
   return sha.toLowerCase();
 }
 
+/** Live Claude terminals for the ticket drawer's Delegate picker. */
+export async function delegateTargetsAction(
+  slug: string,
+): Promise<DelegateTarget[]> {
+  await requireAdmin();
+  await requireProjectId(slug);
+  return delegateTargets(slug);
+}
+
+/**
+ * Delegate a ticket to a Claude terminal: type a one-line brief into it (it
+ * reads the ticket through the local-genie MCP) and record the assignee.
+ */
+export async function delegateTaskAction(
+  slug: string,
+  taskId: number,
+  terminal: string,
+  note: string | null,
+): Promise<{ queued: boolean }> {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const task = await getTask(id, z.number().int().positive().parse(taskId));
+  if (!task) throw new Error(`No task ${taskId} in project ${slug}`);
+  const name = z.string().trim().min(1).max(100).parse(terminal);
+  const trimmedNote = z.string().max(2000).parse(note ?? "").trim() || null;
+  const status = await sendBrief(name, delegateBrief(slug, task, trimmedNote));
+  await assignTask(id, task.id, name, trimmedNote);
+  revalidateProject();
+  // A working terminal holds the brief until its current turn ends.
+  return { queued: status === "claude-working" };
+}
+
 export async function deleteTaskAction(slug: string, taskId: number) {
   await requireAdmin();
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
   await deleteTask(id, parsedTaskId);
   await removeTaskAttachmentDir(parsedTaskId);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function deleteTaskAttachmentAction(
@@ -271,7 +319,7 @@ export async function deleteTaskAttachmentAction(
     z.number().int().positive().parse(attachmentId),
   );
   if (rel) await removeAttachmentFile(rel);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function addTaskCommentAction(
@@ -286,14 +334,14 @@ export async function addTaskCommentAction(
   if (!(await addTaskComment(id, parsedTaskId, parsedBody))) {
     throw new Error(`No task ${parsedTaskId} in project ${slug}`);
   }
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function deleteTaskCommentAction(slug: string, commentId: number) {
   await requireAdmin();
   const id = await requireProjectId(slug);
   await deleteTaskComment(id, z.number().int().positive().parse(commentId));
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 export async function reorderTasksAction(slug: string, orderedIds: number[]) {
@@ -301,7 +349,7 @@ export async function reorderTasksAction(slug: string, orderedIds: number[]) {
   const id = await requireProjectId(slug);
   const ids = z.array(z.number().int().positive()).max(1000).parse(orderedIds);
   await reorderTasks(id, ids);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
 }
 
 /**
@@ -327,7 +375,7 @@ export async function setAppPortAction(
   if (taken) return { ok: false, message: taken };
   await updateAppPort(projectId, parsedAppId, parsedPort);
   const result = await applyNginx();
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
   revalidatePath("/nginx");
   return result;
 }
@@ -400,7 +448,7 @@ export async function startAppAction(
     port: t.port,
     script: parsedScript,
   });
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
   return status;
 }
 
@@ -414,7 +462,7 @@ export async function stopAppAction(
   // Stopping only needs a well-formed name (the unit may be a since-removed script).
   const parsedScript = scriptNameSchema.parse(script);
   const status = await stopApp(t.projectSlug, t.appSlug, parsedScript);
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
   return status;
 }
 
@@ -433,7 +481,7 @@ export async function restartAppAction(
     port: t.port,
     script: parsedScript,
   });
-  revalidatePath(`/projects/${slug}`);
+  revalidateProject();
   return status;
 }
 

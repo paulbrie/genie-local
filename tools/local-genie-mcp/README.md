@@ -23,7 +23,7 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | Tool | Args | Purpose |
 | --- | --- | --- |
 | `list_projects` | — | slugs + names of tracked projects |
-| `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `comment_count`, `attachment_count` |
+| `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `assignee` (the terminal it was delegated to), `comment_count`, `attachment_count` |
 | `create_task` | `project`, `title`, `description?` | add a task (to the top) |
 | `update_task` | `project`, `id`, `title?`, `description?`, `commit?` | edit title/description/commit sha |
 | `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; `done` still accepted |

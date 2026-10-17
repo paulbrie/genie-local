@@ -96,7 +96,8 @@ server.registerTool(
   async ({ project, status }) => {
     const pid = await projectIdBySlug(project);
     const rows = await q(
-      `select id, title, description, status, commit_sha, position, created_at, updated_at,
+      `select id, title, description, status, commit_sha, assignee, assigned_at,
+              position, created_at, updated_at,
               (select count(*)::int from task_comments c where c.task_id = tasks.id)
                 as comment_count,
               (select count(*)::int from task_attachments a where a.task_id = tasks.id)
