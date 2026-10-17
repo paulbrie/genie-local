@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getRunningInfo } from "@/lib/app-run-status";
+import { mountPath } from "@/lib/nginx";
 import { runSlug } from "@/lib/run-slug";
 import { getProjectDetail } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
@@ -21,6 +22,10 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   ]);
   const apps = detail.apps.map(({ app }, i) => ({
     app: app.slug,
+    appId: app.id,
+    port: app.port,
+    // The live app through nginx (as the Scripts tab's "live ↗"), when it has a port.
+    url: app.port ? mountPath(slug, app.slug, detail.apps.length === 1) : null,
     scripts: Object.keys(scripts[i]).map((name) => ({
       name,
       running: running.has(runSlug(slug, app.slug, name)),

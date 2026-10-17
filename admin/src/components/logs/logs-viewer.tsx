@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -41,19 +42,26 @@ export function LogsViewer() {
 
   // Deep-link support: /admin/logs?file=projects/<slug>.log opens that file, and
   // ?filter=<text> pre-sets the sidebar filter so the list is narrowed to the
-  // relevant logs (callers pass the app group `runSlug(project, app)` or a run id).
-  const [filter, setFilter] = useState(() =>
-    typeof window === "undefined"
-      ? ""
-      : (new URLSearchParams(window.location.search).get("filter") ?? ""),
-  );
-  const [selected, setSelected] = useState<string | null>(() =>
-    typeof window === "undefined"
-      ? null
-      : new URLSearchParams(window.location.search).get("file"),
-  );
+  // relevant logs (callers pass a script's `runSlug(project, app, script)`, its
+  // app group, or a run id). Followed on every navigation, not just the first:
+  // the sidebar's menu links here while the page may already be open.
+  const params = useSearchParams();
+  const paramsKey = params.toString();
+  const [filter, setFilter] = useState(() => params.get("filter") ?? "");
+  const [selected, setSelected] = useState<string | null>(() => params.get("file"));
   const [tail, setTail] = useState<LogTail | null>(null);
   const [tailError, setTailError] = useState<string | null>(null);
+  const [seenParams, setSeenParams] = useState(paramsKey);
+  if (paramsKey !== seenParams) {
+    // New link while mounted: adopt it (state adjusted during render, not in an effect).
+    setSeenParams(paramsKey);
+    setFilter(params.get("filter") ?? "");
+    if (params.get("file")) {
+      setSelected(params.get("file"));
+      setTail(null);
+      setTailError(null);
+    }
+  }
   const [bytes, setBytes] = useState(String(256 * 1024));
   const [autoRefresh, setAutoRefresh] = useState(true);
 
@@ -227,6 +235,11 @@ export function LogsViewer() {
           {!selected ? (
             <p className="text-sm text-muted-foreground">
               Pick a log on the left to view its contents.
+            </p>
+          ) : tailError === "not found" ? (
+            <p className="text-sm text-muted-foreground">
+              No log yet for <code className="font-mono">{selected}</code>: it&apos;s created the
+              first time the script runs from the admin.
             </p>
           ) : tailError ? (
             <p className="text-sm text-destructive">Error: {tailError}</p>
