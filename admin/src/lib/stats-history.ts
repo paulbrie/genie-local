@@ -24,16 +24,20 @@ export function isHistoryRange(v: string): v is HistoryRange {
   return v === "1d" || v === "7d" || v === "30d";
 }
 
-/** One downsampled point (percentages 0–100; byte fields for tooltips). */
+/**
+ * One downsampled point (percentages 0–100; byte fields for tooltips). Disk is
+ * null where no sample in the bucket had it (history imported from sysstat,
+ * which doesn't record disk usage): the chart leaves a gap, not a 0 %.
+ */
 export type HistoryPoint = {
   t: number;
   cpu: number;
   mem: number;
-  disk: number;
+  disk: number | null;
   memUsedBytes: number;
   memTotalBytes: number;
-  diskUsedBytes: number;
-  diskTotalBytes: number;
+  diskUsedBytes: number | null;
+  diskTotalBytes: number | null;
 };
 
 export type StatsHistory = {
@@ -47,11 +51,11 @@ type RawPoint = {
   t: number;
   cpu: number;
   mem: number;
-  disk: number;
+  disk?: number;
   mu: number;
   mt: number;
-  du: number;
-  dt: number;
+  du?: number;
+  dt?: number;
 };
 
 /** Roughly this many points across the window — enough for a smooth sparkline. */
@@ -59,6 +63,8 @@ const TARGET_BUCKETS = 180;
 
 type Acc = {
   n: number;
+  /** Samples that had disk figures (sysstat imports don't). */
+  diskN: number;
   cpu: number;
   mem: number;
   disk: number;
@@ -103,17 +109,20 @@ export async function readStatsHistory(
     const key = Math.floor((p.t - start) / bucketMs);
     let a = buckets.get(key);
     if (!a) {
-      a = { n: 0, cpu: 0, mem: 0, disk: 0, mu: 0, mt: 0, du: 0, dt: 0, t: 0 };
+      a = { n: 0, diskN: 0, cpu: 0, mem: 0, disk: 0, mu: 0, mt: 0, du: 0, dt: 0, t: 0 };
       buckets.set(key, a);
     }
     a.n++;
     a.cpu += p.cpu ?? 0;
     a.mem += p.mem ?? 0;
-    a.disk += p.disk ?? 0;
     a.mu += p.mu ?? 0;
     a.mt += p.mt ?? 0;
-    a.du += p.du ?? 0;
-    a.dt += p.dt ?? 0;
+    if (typeof p.disk === "number") {
+      a.diskN++;
+      a.disk += p.disk;
+      a.du += p.du ?? 0;
+      a.dt += p.dt ?? 0;
+    }
     a.t += p.t;
   }
 
@@ -123,11 +132,11 @@ export async function readStatsHistory(
       t: Math.round(a.t / a.n),
       cpu: a.cpu / a.n,
       mem: a.mem / a.n,
-      disk: a.disk / a.n,
+      disk: a.diskN ? a.disk / a.diskN : null,
       memUsedBytes: a.mu / a.n,
       memTotalBytes: a.mt / a.n,
-      diskUsedBytes: a.du / a.n,
-      diskTotalBytes: a.dt / a.n,
+      diskUsedBytes: a.diskN ? a.du / a.diskN : null,
+      diskTotalBytes: a.diskN ? a.dt / a.diskN : null,
     }));
 
   return { range, bucketMs, points };

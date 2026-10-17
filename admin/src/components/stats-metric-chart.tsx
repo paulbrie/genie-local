@@ -34,7 +34,8 @@ export default function StatsMetricChart({
   accent: string;
   range: HistoryRange;
   points: HistoryPoint[];
-  value: (p: HistoryPoint) => number;
+  /** null leaves a gap in the line (no data for that stretch). */
+  value: (p: HistoryPoint) => number | null;
 }) {
   const chartData = points.map((p) => ({ t: p.t, v: value(p) }));
   const config = { v: { label, color: accent } } satisfies ChartConfig;
@@ -79,7 +80,7 @@ export default function StatsMetricChart({
                 const t = payload?.[0]?.payload?.t as number | undefined;
                 return t == null ? "" : new Date(t).toLocaleString();
               }}
-              formatter={(v) => `${Number(v).toFixed(0)}%`}
+              formatter={(v) => (v == null ? "no data" : `${Number(v).toFixed(0)}%`)}
             />
           }
         />

@@ -141,7 +141,9 @@ export function StatsHistoryChart() {
               points={points}
               value={(p) => p.disk}
               detail={(p) =>
-                `${p.disk.toFixed(0)}% · ${formatBytes(p.diskUsedBytes)} / ${formatBytes(p.diskTotalBytes)}`
+                p.disk == null
+                  ? "no data"
+                  : `${p.disk.toFixed(0)}% · ${formatBytes(p.diskUsedBytes ?? 0)} / ${formatBytes(p.diskTotalBytes ?? 0)}`
               }
             />
             <p className="text-right text-xs text-muted-foreground">
@@ -169,18 +171,24 @@ function Metric({
   accent: string;
   range: HistoryRange;
   points: HistoryPoint[];
-  value: (p: HistoryPoint) => number;
+  /** null where the metric has no data (a gap in the chart). */
+  value: (p: HistoryPoint) => number | null;
   detail: (p: HistoryPoint) => string;
 }) {
   const last = points[points.length - 1];
-  const peak = points.reduce((m, p) => (value(p) > value(m) ? p : m), points[0]);
+  // The peak among the points that have this metric.
+  const peak = points.reduce<number | null>((m, p) => {
+    const v = value(p);
+    return v != null && (m == null || v > m) ? v : m;
+  }, null);
 
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between text-xs">
         <span className="font-medium">{label}</span>
         <span className="text-muted-foreground">
-          now {detail(last)} · peak {value(peak).toFixed(0)}%
+          now {detail(last)}
+          {peak != null && ` · peak ${peak.toFixed(0)}%`}
         </span>
       </div>
       <StatsMetricChart
