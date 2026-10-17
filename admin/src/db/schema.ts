@@ -204,6 +204,28 @@ export const adminSessions = pgTable("admin_sessions", {
   endedAt: timestamp("ended_at", { withTimezone: true }),
 });
 
+/**
+ * A project recipe: a reusable prompt for starting (or extending) a kind of
+ * project, e.g. "Next.js + Drizzle admin app". Saved in the admin's Recipes
+ * page; agents read them through the local-genie MCP (list_recipes / get_recipe).
+ */
+export const projectRecipes = pgTable(
+  "project_recipes",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    // What kind of project it makes, for grouping (e.g. "Next.js app").
+    kind: text("kind"),
+    // One line: when to use it.
+    description: text("description"),
+    // The prompt itself (markdown).
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("project_recipes_name_key").on(t.name)],
+);
+
 /** A saved database connection for the DB explorer. Password is encrypted. */
 export const connections = pgTable("connections", {
   id: serial("id").primaryKey(),
@@ -275,3 +297,4 @@ export type TaskComment = typeof taskComments.$inferSelect;
 export type TaskAttachment = typeof taskAttachments.$inferSelect;
 export type AdminLogin = typeof adminLogins.$inferSelect;
 export type AdminSession = typeof adminSessions.$inferSelect;
+export type ProjectRecipe = typeof projectRecipes.$inferSelect;

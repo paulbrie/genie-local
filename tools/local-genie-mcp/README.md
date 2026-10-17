@@ -35,6 +35,9 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | `list_task_attachments` | `project`, `id?` | files on a task, with `abs_path` to read them |
 | `add_task_attachment` | `project`, `id`, `file`, `name?` | attach a local file as Claude |
 | `delete_task_attachment` | `project`, `attachmentId` | remove a file |
+| `list_recipes` | — | saved project recipes (reusable prompts): id, name, kind, description |
+| `get_recipe` | `id?` or `name?` | one recipe's full prompt |
+| `save_recipe` | `name`, `body`, `kind?`, `description?` | create / update (by name) a recipe |
 | `list_notes` | `project` | list notes (manual order) |
 | `add_note` | `project`, `body` | add a note (to the top) |
 | `update_note` | `project`, `id`, `body` | edit a note |

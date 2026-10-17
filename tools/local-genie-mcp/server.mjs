@@ -426,6 +426,69 @@ server.registerTool(
   },
 );
 
+// --- project recipes (the admin's Recipes page: reusable project prompts) --
+server.registerTool(
+  "list_recipes",
+  {
+    description:
+      "List the saved project recipes (reusable prompts for kinds of projects): id, name, kind, one-line description. Use get_recipe for the prompt itself.",
+    inputSchema: {},
+  },
+  async () =>
+    ok(
+      await q(
+        "select id, name, kind, description, updated_at from project_recipes order by kind nulls last, name",
+      ),
+    ),
+);
+
+server.registerTool(
+  "get_recipe",
+  {
+    description:
+      "Read one project recipe's full prompt, by id or by name (case-insensitive). Follow it to start or extend a project.",
+    inputSchema: {
+      id: z.number().int().positive().optional(),
+      name: z.string().min(1).optional(),
+    },
+  },
+  async ({ id, name }) => {
+    if (id === undefined && !name) throw new Error("Pass id or name");
+    const rows =
+      id !== undefined
+        ? await q("select * from project_recipes where id = $1", [id])
+        : await q("select * from project_recipes where lower(name) = lower($1)", [name]);
+    if (!rows.length) throw new Error(`No recipe ${id ?? `"${name}"`} (see list_recipes)`);
+    return ok(rows[0]);
+  },
+);
+
+server.registerTool(
+  "save_recipe",
+  {
+    description:
+      "Save a project recipe (create, or update the one with the same name): a reusable prompt for a kind of project, shown in the admin's Recipes page.",
+    inputSchema: {
+      name: z.string().min(1).max(120),
+      body: z.string().min(1).max(100000).describe("the prompt (markdown)"),
+      kind: z.string().max(80).optional().describe("project type, e.g. 'Web app'"),
+      description: z.string().max(300).optional().describe("one line: when to use it"),
+    },
+  },
+  async ({ name, body, kind, description }) => {
+    const rows = await q(
+      `insert into project_recipes (name, body, kind, description) values ($1, $2, $3, $4)
+       on conflict (name) do update set body = excluded.body,
+         kind = coalesce(excluded.kind, project_recipes.kind),
+         description = coalesce(excluded.description, project_recipes.description),
+         updated_at = now()
+       returning id, name, kind, description, updated_at`,
+      [name.trim(), body.trim(), kind?.trim() || null, description?.trim() || null],
+    );
+    return ok(rows[0]);
+  },
+);
+
 // --- notes (per project, same as the admin's Notes panel) -----------------
 server.registerTool(
   "list_notes",
