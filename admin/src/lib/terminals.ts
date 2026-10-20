@@ -372,7 +372,8 @@ export async function listTerminals(): Promise<Terminal[]> {
       }
       let content: string | undefined;
       try {
-        content = await tmux(["capture-pane", "-p", "-t", t.target]);
+        // -J joins wrapped lines, so a narrow pane can't split a prompt's text.
+        content = await tmux(["capture-pane", "-p", "-J", "-t", t.target]);
       } catch {
         /* ignore */
       }
@@ -553,7 +554,7 @@ export async function captureTerminal(name: string): Promise<{
   // stale "esc to interrupt" scrolled off the top can't make an idle Claude
   // read as "working". This matches how listTerminals() classifies.
   try {
-    visible = await tmux(["capture-pane", "-p", "-t", target]);
+    visible = await tmux(["capture-pane", "-p", "-J", "-t", target]);
   } catch {
     /* ignore */
   }

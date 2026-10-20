@@ -33,8 +33,18 @@ export function TaskComments({
     if (!el || !body) return;
     startTransition(async () => {
       try {
-        await addTaskCommentAction(slug, taskId, body);
+        const notice = await addTaskCommentAction(slug, taskId, body);
         el.value = "";
+        // A delegated ticket: say whether its agent was told.
+        if (notice.terminal && notice.sent) {
+          toast.success(
+            (notice.queued
+              ? `Sent to ${notice.terminal}: it reads it after its current turn`
+              : `Sent to ${notice.terminal}`) + (notice.reopened ? " · the ticket is back in progress" : ""),
+          );
+        } else if (notice.terminal && !notice.sent) {
+          toast.warning(`Comment saved, but ${notice.terminal} wasn't notified: ${notice.reason}`);
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : String(err));
       }

@@ -54,6 +54,7 @@ import {
   reorderTasks,
   setProjectArchived,
   moveTask,
+  setTaskStatus,
   updateAppPort,
   updateNote,
   updateTask,
@@ -92,6 +93,7 @@ import { requireAdmin } from "@/lib/require-admin";
 import { rescanProject, scanAndPersist } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
 import {
+  commentBrief,
   delegateBrief,
   delegateTargets,
   sendBrief,
@@ -322,11 +324,26 @@ export async function deleteTaskAttachmentAction(
   revalidateProject();
 }
 
+/** What happened to the assignee's notification when a comment was posted. */
+export type CommentNotice =
+  | { terminal: null }
+  /** reopened: the ticket was done and is back in progress while the agent works on the comment */
+  | { terminal: string; sent: true; queued: boolean; reopened: boolean }
+  | { terminal: string; sent: false; reason: string };
+
+/**
+ * Comment on a ticket as the user. If the ticket is delegated to a terminal,
+ * the comment is also typed into it (commentBrief) so the agent reads it now;
+ * a terminal that can't take it (gone, waiting on a prompt) doesn't block the
+ * comment: the reply says why it wasn't told. A done ticket whose agent was
+ * told goes back to in progress (the agent sets it done again when finished);
+ * one whose agent couldn't be told stays done: nobody is working on it.
+ */
 export async function addTaskCommentAction(
   slug: string,
   taskId: number,
   body: string,
-) {
+): Promise<CommentNotice> {
   await requireAdmin();
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
@@ -335,6 +352,24 @@ export async function addTaskCommentAction(
     throw new Error(`No task ${parsedTaskId} in project ${slug}`);
   }
   revalidateProject();
+
+  const task = await getTask(id, parsedTaskId);
+  if (!task?.assignee) return { terminal: null };
+  const reopen = task.status === "done";
+  try {
+    const status = await sendBrief(task.assignee, commentBrief(slug, task, parsedBody, reopen));
+    if (reopen) {
+      await setTaskStatus(id, task.id, "in_progress");
+      revalidateProject();
+    }
+    return { terminal: task.assignee, sent: true, queued: status === "claude-working", reopened: reopen };
+  } catch (err) {
+    return {
+      terminal: task.assignee,
+      sent: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export async function deleteTaskCommentAction(slug: string, commentId: number) {

@@ -61,6 +61,32 @@ export function delegateBrief(
   return parts.join(" ");
 }
 
+// A comment beyond this is cut in the brief: the agent reads it whole on the ticket.
+const COMMENT_IN_BRIEF = 1500;
+
+/**
+ * The one-line note typed into the assignee's terminal when the user comments
+ * on its ticket: the comment itself, and how to reply on the ticket.
+ */
+export function commentBrief(
+  slug: string,
+  task: { id: number; title: string },
+  body: string,
+  reopened = false,
+): string {
+  const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+  const text = oneLine(body);
+  const quoted =
+    text.length > COMMENT_IN_BRIEF ? `${text.slice(0, COMMENT_IN_BRIEF)}… (cut: read it whole on the ticket)` : text;
+  return [
+    `New comment from the user on ticket #${task.id} of project "${slug}" ("${oneLine(task.title)}"), which is assigned to you: "${quoted}".`,
+    `Read the thread with the local-genie MCP (list_task_comments, project "${slug}", id ${task.id}) and reply on the ticket with add_task_comment.`,
+    ...(reopened
+      ? [`The ticket was done: it's back in progress now. When you've handled this, set it to done again with the commit sha (set_task_status).`]
+      : []),
+  ].join(" ");
+}
+
 /** Type the brief into the terminal and submit it. Throws if it can't take it now. */
 export async function sendBrief(terminal: string, brief: string) {
   const target = (await listTerminals()).find((t) => t.name === terminal);
