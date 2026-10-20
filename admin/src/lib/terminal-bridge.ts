@@ -129,6 +129,10 @@ function installFitOnResize(container: HTMLElement, inst: Instance): { disconnec
  * from the drawn cell width.
  */
 function fitChecked(inst: Instance): void {
+  // A hidden / minimized window has no box to fit: the FitAddon would fall back
+  // to its 2-column minimum and squeeze the tmux window (shared by every viewer,
+  // and by the Claude in it) to 2 columns. Keep the last size until it's shown.
+  if (!isLaidOut(inst.terminal.element?.parentElement)) return;
   inst.fit.fit();
   const el = inst.terminal.element;
   const screen = el?.querySelector<HTMLElement>(".xterm-screen");
@@ -143,7 +147,14 @@ function fitChecked(inst: Instance): void {
   if (cols < inst.terminal.cols) inst.terminal.resize(cols, inst.terminal.rows);
 }
 
+/** The terminal's box is on screen with a real size (not display:none / collapsed). */
+function isLaidOut(box: HTMLElement | null | undefined): boolean {
+  return !!box && box.isConnected && box.clientWidth >= 40 && box.clientHeight >= 20;
+}
+
 function sendResize(inst: Instance) {
+  // Never send a size measured while hidden (see fitChecked).
+  if (!isLaidOut(inst.terminal.element?.parentElement)) return;
   if (inst.ws?.readyState === WebSocket.OPEN) {
     try {
       inst.ws.send(JSON.stringify({ type: "pty:resize", payload: { cols: inst.terminal.cols, rows: inst.terminal.rows } }));
