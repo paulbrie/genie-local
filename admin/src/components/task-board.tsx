@@ -5,8 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
+import { useSubject } from "subjecto/react";
 
 import { addTaskAction, deleteTaskAction, moveTaskAction } from "@/app/actions";
+import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
 import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
 import { useTaskLive } from "@/components/use-task-live";
@@ -22,6 +24,7 @@ import {
   type TaskStatus,
 } from "@/db/schema";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
+import { liveTerminals } from "@/store/terminals";
 
 /** A drag in progress (or a drop being saved): the board as it will be. */
 type Draft = { order: number[]; status: Record<number, TaskStatus> };
@@ -55,6 +58,16 @@ export function TaskBoard({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const commentsByTask = useMemo(() => groupBy(comments), [comments]);
+  // The terminals' live status (kept fresh app-wide by the terminal dock): an
+  // in-progress card shows its assignee's Claude state.
+  const [terms] = useSubject(liveTerminals);
+  const agentState = (assignee: string | null): AgentState => {
+    if (!assignee) return null;
+    const t = terms.find((x) => x.name === assignee);
+    // An empty list = not loaded yet: don't call the terminal gone.
+    if (!t) return terms.length ? "gone" : null;
+    return t.status;
+  };
   const attachmentsByTask = useMemo(() => groupBy(attachments), [attachments]);
 
   // --- new task form (files picked, dropped or pasted wait here until created)
@@ -282,25 +295,23 @@ export function TaskBoard({
               </button>
             </span>
           ))}
-          <Button type="submit" size="sm" className="ml-auto" disabled={isPending}>
+          {/* Live updates: in the form row, clear of the columns. */}
+          <span
+            className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground"
+            title={live ? "Changes from anywhere show up here as they happen" : "Reconnecting to live updates…"}
+          >
+            <StatusDot
+              color={live ? "bg-emerald-500" : "bg-amber-500"}
+              pulse={live}
+              label={live ? "Live" : "Reconnecting"}
+            />
+            {live ? "Live" : "Reconnecting…"}
+          </span>
+          <Button type="submit" size="sm" disabled={isPending}>
             Add task
           </Button>
         </div>
       </form>
-
-      <div className="-mb-2 flex justify-end">
-        <span
-          className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-          title={live ? "Changes from anywhere show up here as they happen" : "Reconnecting to live updates…"}
-        >
-          <StatusDot
-            color={live ? "bg-emerald-500" : "bg-amber-500"}
-            pulse={live}
-            label={live ? "Live" : "Reconnecting"}
-          />
-          {live ? "Live" : "Reconnecting…"}
-        </span>
-      </div>
 
       <div className="grid gap-3 md:grid-cols-3">
         {TASK_STATUSES.map((status) => (
@@ -327,6 +338,7 @@ export function TaskBoard({
                 comments={commentsByTask.get(t.id)}
                 attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
                 dragging={draggingId === t.id}
+                agent={t.status === "in_progress" ? agentState(t.assignee) : null}
                 onOpen={() => setOpenId(t.id)}
                 onDragStart={(e) => onDragStart(e, t.id)}
                 onDragEnd={onDragEnd}
@@ -363,6 +375,7 @@ function TaskCard({
   comments,
   attachmentCount,
   dragging,
+  agent,
   onOpen,
   onDragStart,
   onDragEnd,
@@ -373,6 +386,8 @@ function TaskCard({
   comments: TaskComment[] | undefined;
   attachmentCount: number;
   dragging: boolean;
+  /** For an in-progress card: its assignee terminal's state. */
+  agent: AgentState;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -402,9 +417,10 @@ function TaskCard({
         <span className="shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">
           #{task.id}
         </span>
-        <span className={`min-w-0 font-medium ${done ? "text-muted-foreground" : ""}`}>
+        <span className={`min-w-0 flex-1 font-medium ${done ? "text-muted-foreground" : ""}`}>
           {task.title}
         </span>
+        {agent && <AgentBadge name={task.assignee ?? ""} state={agent} />}
       </div>
       {task.description && (
         <p className="line-clamp-3 text-xs whitespace-pre-wrap text-muted-foreground">
@@ -449,5 +465,33 @@ function TaskCard({
         )}
       </div>
     </div>
+  );
+}
+
+/** An assignee terminal's live state: a TermStatus, or "gone" (no such terminal any more). */
+type AgentState = string | "gone" | null;
+
+const AGENT_LABEL: Record<string, string> = {
+  "claude-working": "Claude is working",
+  "claude-input": "Claude is waiting for you",
+  "claude-idle": "Claude is idle",
+  busy: "running a command (not Claude)",
+  idle: "at a shell prompt (Claude isn't running)",
+  gone: "terminal gone",
+};
+
+/** The Claude glyph of the agent working an in-progress ticket: twinkling, "?" or a dim spark. */
+function AgentBadge({ name, state }: { name: string; state: string }) {
+  const label = `${name}: ${AGENT_LABEL[state] ?? state}`;
+  const glyph = claudeGlyphState(state);
+  return (
+    <span role="img" aria-label={label} title={label} className="mt-0.5 flex shrink-0 items-center">
+      {glyph ? (
+        <ClaudeGlyph state={glyph} size="md" />
+      ) : (
+        // (the span carries the label: no second one inside)
+        <StatusDot color="bg-muted-foreground/40" />
+      )}
+    </span>
   );
 }
