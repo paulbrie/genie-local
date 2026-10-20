@@ -166,7 +166,8 @@ export async function getDashboardMetrics() {
     },
     terminals: terminals && {
       total: terminals.length,
-      claudeWorking: claude.filter((t) => t.status === "claude-working").length,
+      // (work still running in the background after the turn counts as working)
+      claudeWorking: claude.filter((t) => t.status === "claude-working" || t.status === "claude-background").length,
       claudeIdle: claude.filter((t) => t.status === "claude-idle").length,
       needsInput: claude.filter((t) => t.status === "claude-input").map((t) => t.name),
       tokens: claude.reduce((n, t) => n + (t.tokens?.total ?? 0), 0),

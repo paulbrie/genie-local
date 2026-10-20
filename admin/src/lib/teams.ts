@@ -242,7 +242,7 @@ export async function stopTeam(recipe: TeamRecipe): Promise<StepResult[]> {
       out.push({ name: m.name, ok: true, message: "not running" });
       continue;
     }
-    if (t.status !== "claude-working" && t.status !== "claude-idle" && t.status !== "claude-input") {
+    if (!t.status.startsWith("claude-")) {
       out.push({ name: m.name, ok: false, message: `not at a Claude prompt (${t.command || t.status}); not sent` });
       continue;
     }

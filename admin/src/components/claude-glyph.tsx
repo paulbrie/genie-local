@@ -33,8 +33,8 @@ function pageTicker() {
   return ticker;
 }
 
-/** The three states a Claude terminal glyph can show. */
-export type ClaudeState = "active" | "idle" | "input";
+/** The states a Claude terminal glyph can show. */
+export type ClaudeState = "active" | "idle" | "background" | "input";
 
 /**
  * Map a terminal status to its Claude glyph state, or null when it isn't a
@@ -48,6 +48,8 @@ export function claudeGlyphState(status: string): ClaudeState | null {
       return "input";
     case "claude-idle":
       return "idle";
+    case "claude-background":
+      return "background";
     default:
       return null;
   }
@@ -100,7 +102,13 @@ export function ClaudeGlyph({
     );
   }
 
-  // active = full-strength twinkle; idle = steady, dimmed spark.
-  const tone = state === "active" ? "text-orange-500" : "text-orange-500/60";
+  // active = full-strength twinkle; idle = steady, dimmed spark; background =
+  // the dimmed spark breathing: idle at its prompt, work still running behind it.
+  const tone =
+    state === "active"
+      ? "text-orange-500"
+      : state === "background"
+        ? "text-orange-500/70 motion-safe:animate-pulse"
+        : "text-orange-500/60";
   return <span ref={spark} aria-hidden data-g={FRAMES[FULL]} className={`${base} ${tone} before:content-[attr(data-g)]`} />;
 }

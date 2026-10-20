@@ -298,6 +298,7 @@ export function TerminalDock() {
           const list: {
             name: string;
             status?: TermStatus;
+            background?: string | null;
             tokens?: TokenMeter | null;
           }[] = json.terminals ?? [];
           reconcileTerminals(list.map((t) => t.name));
@@ -309,6 +310,7 @@ export function TerminalDock() {
               name: t.name,
               status: t.status ?? "idle",
               tokens: t.tokens ?? null,
+              background: t.background ?? null,
             })),
           );
         }
@@ -1032,6 +1034,8 @@ export function statusLabel(status: TermStatus): string {
       return "Claude needs your input";
     case "claude-idle":
       return "Claude is idle";
+    case "claude-background":
+      return "Claude is idle · work running in the background";
     case "busy":
       return "Running a command";
     default:

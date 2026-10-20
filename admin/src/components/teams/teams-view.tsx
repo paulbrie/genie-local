@@ -92,6 +92,7 @@ export function TeamsView() {
 const STATUS_TEXT: Record<string, string> = {
   "claude-working": "working",
   "claude-idle": "idle",
+  "claude-background": "background work",
   "claude-input": "waiting for input",
   idle: "shell",
   busy: "busy",

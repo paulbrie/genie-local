@@ -133,7 +133,8 @@ export function AppSidebar() {
   // The wisp's state (brand motion): looking for you while an agent waits on
   // you, flickering while one works, else idle blinking; a wink on hover.
   const waitingOn = terms.filter((t) => t.status === "claude-input").length;
-  const working = terms.filter((t) => t.status === "claude-working").length;
+  // (work running in the background after the turn counts as working)
+  const working = terms.filter((t) => t.status === "claude-working" || t.status === "claude-background").length;
   const [winking, setWinking] = useState(false);
   const wink = () => {
     if (winking) return;
@@ -441,8 +442,8 @@ export function AppSidebar() {
                         }}
                         title={
                           t.tokens
-                            ? `Open ${t.name} — ${termLabel(t.status)} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
-                            : `Open ${t.name} — ${termLabel(t.status)}`
+                            ? `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
+                            : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`
                         }
                         className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
@@ -536,6 +537,8 @@ function termLabel(status: TermStatus): string {
       return "Claude needs your input";
     case "claude-idle":
       return "Claude is idle";
+    case "claude-background":
+      return "Claude is idle · work running in the background";
     case "busy":
       return "Running a command";
     default:

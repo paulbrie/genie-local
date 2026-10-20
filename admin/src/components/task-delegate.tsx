@@ -15,6 +15,7 @@ import type { DelegateTarget } from "@/lib/task-delegate";
 
 const STATE: Record<string, { label: string; color: string }> = {
   "claude-idle": { label: "idle", color: "bg-emerald-500" },
+  "claude-background": { label: "idle · work running in the background", color: "bg-sky-500" },
   "claude-working": { label: "working · the brief waits its turn", color: "bg-sky-500" },
   "claude-input": { label: "waiting on a prompt · answer it first", color: "bg-amber-500" },
 };

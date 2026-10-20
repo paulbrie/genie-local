@@ -28,6 +28,8 @@ const DEFAULT_CWD = process.env.PROJECTS_ROOT
  * - `busy`           — running some command (foreground process isn't a shell)
  * - `claude-working` — running the Claude CLI and mid-turn (active/thinking)
  * - `claude-idle`    — running the Claude CLI, sitting idle at its prompt
+ * - `claude-background` — idle at its prompt, but work it started still runs in
+ *   the background (shells, agents, tasks: see backgroundWork)
  * - `claude-input`   — the Claude CLI is blocked on a prompt asking for your input
  */
 export type TermStatus =
@@ -35,6 +37,7 @@ export type TermStatus =
   | "busy"
   | "claude-working"
   | "claude-idle"
+  | "claude-background"
   | "claude-input";
 
 export type Terminal = {
@@ -50,6 +53,8 @@ export type Terminal = {
   tokens: ClaudeTokens | null; // cumulative session tokens (Claude sessions only)
   memBytes: number; // resident memory of the pane's process tree (shell + command)
   dead: boolean; // the pane's program exited and tmux kept it (remain-on-exit)
+  /** claude-background: what runs, e.g. "1 shell", "2 agents" (backgroundWork) */
+  background?: string | null;
 };
 
 // Login/interactive shells that mean "sitting at a prompt" (idle). A pane whose
@@ -92,6 +97,26 @@ const CLAUDE_WORKING_RE = /esc to interrupt/i;
 const CLAUDE_INPUT_RE =
   /❯\s+\d+\.\s|Do you want to proceed|Would you like to proceed|I trust this folder|Enter to confirm · Esc to cancel/i;
 
+// What Claude's footer (under its input box) counts while work it started runs
+// on in the background: "⏵⏵ auto mode on · 1 shell · ← for agents · ↓ to manage".
+const BG_ITEM_RE = /\b(\d+) (shells?|local agents?|background agents?|agents?|background tasks?|tasks?)\b/g;
+
+/**
+ * The background work a Claude pane reports, e.g. "1 shell" or "2 agents, 1
+ * shell"; null when none. Only the footer below the last prompt line is read,
+ * so a transcript that merely mentions "1 shell still running" doesn't count.
+ */
+export function backgroundWork(content?: string): string | null {
+  if (!content) return null;
+  const lines = content.split("\n");
+  const prompt = lines.findLastIndex((l) => l.trimStart().startsWith("❯"));
+  if (prompt < 0) return null;
+  const footer = lines.slice(prompt + 1).join(" ");
+  const items = [...new Set([...footer.matchAll(BG_ITEM_RE)].map((m) => `${m[1]} ${m[2]}`))];
+  if (items.length) return items.join(", ");
+  return /↓ to manage/.test(footer) ? "work" : null;
+}
+
 /**
  * Classify a pane. `content` (a capture of the pane) is needed to tell a Claude
  * session's sub-state apart (active / awaiting input / idle); without it a
@@ -102,6 +127,7 @@ export function classify(command: string, content?: string): TermStatus {
   if (cmd === "claude") {
     if (content && CLAUDE_WORKING_RE.test(content)) return "claude-working";
     if (content && CLAUDE_INPUT_RE.test(content)) return "claude-input";
+    if (backgroundWork(content)) return "claude-background";
     return "claude-idle";
   }
   return isBusy(command) ? "busy" : "idle";
@@ -383,7 +409,8 @@ export async function listTerminals(): Promise<Terminal[]> {
         parseClaudeTokens(content),
         status === "claude-working",
       );
-      return { ...t, status, tokens, memBytes };
+      const background = status === "claude-background" ? backgroundWork(content) : null;
+      return { ...t, status, tokens, memBytes, background };
     }),
   );
   // Drop tallies for sessions that no longer exist so the map can't grow without

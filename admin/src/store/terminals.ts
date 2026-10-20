@@ -25,6 +25,7 @@ export type TermStatus =
   | "busy"
   | "claude-working"
   | "claude-idle"
+  | "claude-background"
   | "claude-input";
 export const termStatus = new Subject<Record<string, TermStatus>>(
   {},
@@ -48,6 +49,8 @@ export type LiveTerminal = {
   name: string;
   status: TermStatus;
   tokens?: SessionTokens | null; // cumulative session tokens (Claude only)
+  /** claude-background: what's running, e.g. "1 shell", "2 agents" */
+  background?: string | null;
 };
 export const liveTerminals = new Subject<LiveTerminal[]>([], {
   name: "liveTerminals",

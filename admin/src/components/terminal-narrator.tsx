@@ -38,7 +38,8 @@ const PROGRESS_COOLDOWN_MS = 45_000;
 const RECENT_MAX = 12;
 
 const isWorking = (s: TermStatus) => s === "claude-working" || s === "busy";
-const isRest = (s: TermStatus) => s === "idle" || s === "claude-idle";
+// (claude-background: its turn is over, what it started runs on: a rest, as before)
+const isRest = (s: TermStatus) => s === "idle" || s === "claude-idle" || s === "claude-background";
 
 type Mem = {
   status: TermStatus;

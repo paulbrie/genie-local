@@ -23,7 +23,7 @@ type Cat = "working" | "asking" | "rest";
 function categorize(s: TermStatus): Cat {
   if (s === "claude-input") return "asking"; // blocked on a question/approval
   if (s === "claude-working" || s === "busy") return "working";
-  return "rest"; // "idle" | "claude-idle" — sitting at a prompt
+  return "rest"; // "idle" | "claude-idle" | "claude-background" — sitting at a prompt
 }
 
 // Per-terminal memory across polls. `workingLatch` = the terminal has been busy
