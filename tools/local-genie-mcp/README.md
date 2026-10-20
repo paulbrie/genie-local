@@ -29,10 +29,10 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; `done` still accepted |
 | `delete_task` | `project`, `id` | remove a task |
 | `reorder_tasks` | `project`, `orderedIds` | set manual order (position) |
-| `list_task_comments` | `project`, `id?` | a task's comment thread (author `user`/`claude`); all threads without `id` |
+| `list_task_comments` | `project`, `id?` | a task's comment thread (author `user`/`claude`), each comment with its `files` (abs paths); all threads without `id` |
 | `add_task_comment` | `project`, `id`, `body` | reply on a task as Claude (shown in the admin's Tasks tab) |
 | `delete_task_comment` | `project`, `commentId` | remove a comment |
-| `list_task_attachments` | `project`, `id?` | files on a task, with `abs_path` to read them |
+| `list_task_attachments` | `project`, `id?` | files on a task (`comment_id` when a comment's), with `abs_path` to read them |
 | `add_task_attachment` | `project`, `id`, `file`, `name?` | attach a local file as Claude |
 | `delete_task_attachment` | `project`, `attachmentId` | remove a file |
 | `list_recipes` | — | saved project recipes (reusable prompts): id, name, kind, description |

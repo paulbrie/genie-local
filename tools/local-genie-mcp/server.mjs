@@ -285,7 +285,7 @@ server.registerTool(
   "list_task_comments",
   {
     description:
-      "Read the comment thread on a task (oldest first). author is 'user' (the person in the admin UI) or 'claude'. Without `id`, returns the threads of every task in the project that has comments.",
+      "Read the comment thread on a task (oldest first). author is 'user' (the person in the admin UI) or 'claude'. Each comment lists the files that came with it (`files`: name, mime, size, abs_path: open screenshots to look at them). Without `id`, returns the threads of every task in the project that has comments.",
     inputSchema: {
       project: z.string(),
       id: z.number().int().positive().optional().describe("task id"),
@@ -295,13 +295,16 @@ server.registerTool(
     const pid =
       id === undefined ? await projectIdBySlug(project) : await requireTask(project, id);
     const rows = await q(
-      `select c.id, c.task_id, t.title as task_title, c.author, c.body, c.created_at
+      `select c.id, c.task_id, t.title as task_title, c.author, c.body, c.created_at,
+              coalesce((select json_agg(json_build_object('id', a.id, 'name', a.name, 'mime', a.mime,
+                                                          'size', a.size, 'path', a.path) order by a.id)
+                          from task_attachments a where a.comment_id = c.id), '[]') as files
          from task_comments c join tasks t on t.id = c.task_id
         where t.project_id = $1 ${id === undefined ? "" : "and c.task_id = $2"}
         order by c.task_id, c.created_at asc, c.id asc`,
       id === undefined ? [pid] : [pid, id],
     );
-    return ok(rows);
+    return ok(rows.map((r) => ({ ...r, files: r.files.map(withAbsPath) })));
   },
 );
 
@@ -363,7 +366,7 @@ server.registerTool(
     const pid =
       id === undefined ? await projectIdBySlug(project) : await requireTask(project, id);
     const rows = await q(
-      `select a.id, a.task_id, t.title as task_title, a.name, a.mime, a.size, a.path,
+      `select a.id, a.task_id, a.comment_id, t.title as task_title, a.name, a.mime, a.size, a.path,
               a.author, a.created_at
          from task_attachments a join tasks t on t.id = a.task_id
         where t.project_id = $1 ${id === undefined ? "" : "and a.task_id = $2"}

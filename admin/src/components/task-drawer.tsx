@@ -198,9 +198,10 @@ export function TaskDrawer({
 
           <section className="space-y-1.5">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Files ({attachments.length})
+              Files ({attachments.filter((a) => a.commentId == null).length})
             </h3>
-            <TaskAttachments slug={slug} taskId={task.id} attachments={attachments} />
+            {/* the ticket's own files; a comment's show under it in the thread */}
+            <TaskAttachments slug={slug} taskId={task.id} attachments={attachments.filter((a) => a.commentId == null)} />
           </section>
 
           <section className="space-y-1.5">
@@ -208,7 +209,7 @@ export function TaskDrawer({
               Comments ({comments.length})
             </h3>
             <div className="overflow-hidden rounded-md border">
-              <TaskComments slug={slug} taskId={task.id} comments={comments} />
+              <TaskComments slug={slug} taskId={task.id} comments={comments} attachments={attachments} />
             </div>
           </section>
         </div>

@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import {
   getProjectIdBySlug,
+  getTaskComment,
   insertTaskAttachments,
   taskInProject,
 } from "@/lib/data";
@@ -33,16 +34,21 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     return NextResponse.json({ error: "no such task" }, { status: 404 });
   }
   try {
-    const files = (await req.formData())
-      .getAll("files")
-      .filter((f): f is File => f instanceof File);
+    const form = await req.formData();
+    const files = form.getAll("files").filter((f): f is File => f instanceof File);
+    // Optional: the comment these files come with (shown under it in the thread).
+    const rawComment = form.get("commentId");
+    const commentId = typeof rawComment === "string" && rawComment ? Number(rawComment) : null;
+    if (commentId != null && (!Number.isInteger(commentId) || !(await getTaskComment(taskId, commentId)))) {
+      return NextResponse.json({ error: "no such comment on this task" }, { status: 404 });
+    }
     if (!files.length) {
       return NextResponse.json({ error: "no files" }, { status: 400 });
     }
     const saved = [];
     for (const file of files) saved.push(await saveAttachment(taskId, file));
     await insertTaskAttachments(
-      saved.map((s) => ({ ...s, taskId, author: "user" })),
+      saved.map((s) => ({ ...s, taskId, author: "user", commentId })),
     );
     revalidatePath("/projects/[slug]", "layout");
     return NextResponse.json({ attached: saved.length });

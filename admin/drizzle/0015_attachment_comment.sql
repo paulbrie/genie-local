@@ -1,0 +1,2 @@
+ALTER TABLE "task_attachments" ADD COLUMN "comment_id" integer;--> statement-breakpoint
+ALTER TABLE "task_attachments" ADD CONSTRAINT "task_attachments_comment_id_task_comments_id_fk" FOREIGN KEY ("comment_id") REFERENCES "public"."task_comments"("id") ON DELETE cascade ON UPDATE no action;

@@ -20,10 +20,13 @@ export async function uploadTaskFiles(
   slug: string,
   taskId: number,
   files: File[],
+  /** the comment the files come with (shown under it); omitted = the ticket's own files */
+  commentId?: number,
 ) {
   if (!files.length) return;
   const body = new FormData();
   for (const f of files) body.append("files", f);
+  if (commentId != null) body.append("commentId", String(commentId));
   const res = await fetch(
     `${BASE_PATH}/api/projects/${encodeURIComponent(slug)}/tasks/${taskId}/attachments`,
     { method: "POST", body },

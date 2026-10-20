@@ -147,6 +147,8 @@ export const taskAttachments = pgTable("task_attachments", {
   size: bigint("size", { mode: "number" }).notNull(),
   path: text("path").notNull(),
   author: text("author").notNull().default("user"),
+  // Set when the file came with a comment (shown under it in the thread); null = the ticket's own files.
+  commentId: integer("comment_id").references(() => taskComments.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
