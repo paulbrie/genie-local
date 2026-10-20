@@ -3,7 +3,7 @@ import "server-only";
 import path from "node:path";
 
 import { delegatedTickets } from "@/lib/data";
-import { listTerminals, sendKey, sendText, type TermStatus } from "@/lib/terminals";
+import { createTerminalRunning, listTerminals, sendKey, sendText, type TermStatus } from "@/lib/terminals";
 
 /** A ticket as the delegation picker mentions it. */
 export type TicketRef = { id: number; title: string; status: string; project: string };
@@ -138,7 +138,9 @@ export async function clearContext(terminal: string): Promise<void> {
         ? `"${terminal}" is working: its context can only be cleared when it's idle`
         : target.status === "claude-input"
           ? `"${terminal}" is waiting on a prompt; answer it first`
-          : `"${terminal}" isn't running Claude`,
+          : target.status === "claude-background"
+            ? `"${terminal}" has work running in the background: /clear could cut it off`
+            : `"${terminal}" isn't running Claude`,
     );
   }
   await sendText(terminal, "/clear");
@@ -152,6 +154,30 @@ export async function clearContext(terminal: string): Promise<void> {
     if (Date.now() > deadline) throw new Error(`"${terminal}" didn't come back to its prompt after /clear`);
     await sleep(400);
   }
+}
+
+/** How a new agent's Claude starts: as the team's agents do (Opus, high effort, auto permissions). */
+export const NEW_AGENT = { model: "opus", effort: "high", permissionMode: "auto" } as const;
+
+/** A new agent for a ticket is named after it: "<project>-<ticket id>", e.g. "acccess-52". */
+export const newAgentName = (slug: string, taskId: number) => `${slug}-${taskId}`;
+
+/**
+ * Start a new Claude agent in its own terminal (named `name`, both the tmux
+ * session and Claude's -n), in `cwd`, with `brief` as its first prompt: it
+ * starts on the ticket at once, no waiting for a ready prompt.
+ */
+export async function startAgent(name: string, cwd: string, brief: string): Promise<void> {
+  // A leading "-" would be read as a claude option, not as the prompt.
+  const prompt = brief.startsWith("-") ? ` ${brief}` : brief;
+  await createTerminalRunning(name, (target) => [
+    "new-session", "-d", "-s", target, "-x", "200", "-y", "50", "-c", cwd,
+    "claude", "--model", NEW_AGENT.model, "--effort", NEW_AGENT.effort,
+    "--permission-mode", NEW_AGENT.permissionMode, "-n", name, prompt,
+    // the pane stays readable if claude exits; the wheel scrolls tmux's history
+    ";", "set-option", "-w", "-t", target, "remain-on-exit", "on",
+    ";", "set-option", "-t", target, "mouse", "on",
+  ]);
 }
 
 /** Type the brief into the terminal and submit it. Throws if it can't take it now. */

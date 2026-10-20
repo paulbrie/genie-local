@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Eraser, GitCommitHorizontal, MessageSquare, Paperclip, Send, X } from "lucide-react";
+import { Bot, Eraser, GitCommitHorizontal, MessageSquare, Paperclip, Send, UserPlus, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -11,6 +11,7 @@ import {
   addTaskAction,
   delegateTargetsAction,
   delegateTaskAction,
+  delegateToNewAgentAction,
   deleteTaskAction,
   moveTaskAction,
 } from "@/app/actions";
@@ -517,6 +518,7 @@ const AGENT_LABEL: Record<string, string> = {
   "claude-working": "Claude is working",
   "claude-input": "Claude is waiting for you",
   "claude-idle": "Claude is idle",
+  "claude-background": "Claude is idle, work running in the background",
   busy: "running a command (not Claude)",
   idle: "at a shell prompt (Claude isn't running)",
   gone: "terminal gone",
@@ -563,6 +565,16 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
       );
   }
 
+  // A new agent is named after the ticket: "<project>-<ticket id>".
+  const newName = `${slug}-${task.id}`;
+  const newExists = !!targets?.some((t) => t.name === newName);
+  async function delegateNew() {
+    const pending = toast.loading(`Starting ${newName} on #${task.id}…`);
+    const res = await delegateToNewAgentAction(slug, task.id);
+    if (!res.ok) toast.error(res.error, { id: pending });
+    else toast.success(`${res.name} started on #${task.id}: it's in Terminals`, { id: pending });
+  }
+
   const list = (fresh: boolean) =>
     !targets ? (
       <ContextMenuLabel>Loading…</ContextMenuLabel>
@@ -579,7 +591,9 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
                 ? "working"
                 : t.status === "claude-input"
                   ? "at a prompt"
-                  : null
+                  : t.status === "claude-background"
+                    ? "background work"
+                    : null
               : t.canSend
                 ? null
                 : "at a prompt";
@@ -612,6 +626,19 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
           #{task.id} {task.title}
         </ContextMenuLabel>
         <ContextMenuSeparator />
+        <ContextMenuItem
+          disabled={newExists}
+          onClick={() => void delegateNew()}
+          title="A fresh Claude (Opus, high effort, auto permissions) in this project's folder, starting on this ticket"
+        >
+          <UserPlus />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span>New agent</span>
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
+              {newName} · opus, high{newExists ? " · exists" : ""}
+            </span>
+          </span>
+        </ContextMenuItem>
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <Send />

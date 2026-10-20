@@ -95,9 +95,13 @@ import {
   updateDiagram,
 } from "@/lib/diagrams";
 import { requireAdmin } from "@/lib/require-admin";
-import { rescanProject, scanAndPersist } from "@/lib/scan";
+import { getProjectDetail, rescanProject, scanAndPersist } from "@/lib/scan";
+import { listTerminals } from "@/lib/terminals";
 import { readScripts } from "@/lib/signals";
 import {
+  NEW_AGENT,
+  newAgentName,
+  startAgent,
   clearContext,
   commentBrief,
   delegateBrief,
@@ -320,6 +324,34 @@ export async function delegateTaskAction(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Delegate a ticket to a new agent: a fresh Claude terminal named
+ * "<project>-<ticket id>", started in the project's folder with the brief as
+ * its first prompt (Opus, high effort, auto permissions, as the team's agents).
+ */
+export async function delegateToNewAgentAction(
+  slug: string,
+  taskId: number,
+): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const task = await getTask(id, z.number().int().positive().parse(taskId));
+  const detail = await getProjectDetail(slug);
+  if (!task || !detail) return { ok: false, error: `No task ${taskId} in project ${slug}` };
+  const name = newAgentName(slug, task.id);
+  if ((await listTerminals()).some((t) => t.name === name)) {
+    return { ok: false, error: `A terminal "${name}" already exists: pick it under Delegate to` };
+  }
+  try {
+    await startAgent(name, detail.project.path, delegateBrief(slug, task, null));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  await assignTask(id, task.id, name, `a new agent (${NEW_AGENT.model}, ${NEW_AGENT.effort} effort) in ${detail.project.path}`);
+  revalidateProject();
+  return { ok: true, name };
 }
 
 export async function deleteTaskAction(slug: string, taskId: number) {
