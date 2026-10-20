@@ -1,18 +1,36 @@
 "use client";
 
-import { Bot, GitCommitHorizontal, MessageSquare, Paperclip, X } from "lucide-react";
+import { Bot, Eraser, GitCommitHorizontal, MessageSquare, Paperclip, Send, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { useSubject } from "subjecto/react";
 
-import { addTaskAction, deleteTaskAction, moveTaskAction } from "@/app/actions";
+import {
+  addTaskAction,
+  delegateTargetsAction,
+  delegateTaskAction,
+  deleteTaskAction,
+  moveTaskAction,
+} from "@/app/actions";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
 import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
+import { LastTicket } from "@/components/last-ticket";
 import { useTaskLive } from "@/components/use-task-live";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,6 +42,7 @@ import {
   type TaskStatus,
 } from "@/db/schema";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
+import type { DelegateTarget } from "@/lib/task-delegate";
 import { liveTerminals } from "@/store/terminals";
 
 /** A drag in progress (or a drop being saved): the board as it will be. */
@@ -331,24 +350,47 @@ export function TaskBoard({
               <span className="tabular-nums">{columns[status].length}</span>
             </h3>
             {columns[status].map((t) => (
-              <TaskCard
-                key={t.id}
-                slug={slug}
-                task={t}
-                comments={commentsByTask.get(t.id)}
-                attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
-                dragging={draggingId === t.id}
-                agent={t.status === "in_progress" ? agentState(t.assignee) : null}
-                onOpen={() => setOpenId(t.id)}
-                onDragStart={(e) => onDragStart(e, t.id)}
-                onDragEnd={onDragEnd}
-                onDragOver={(e) => {
-                  if (dragId.current == null) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  moveDragged(status, t.id);
-                }}
-              />
+              t.status === "open" ? (
+                // Right-click an open ticket: delegate it (optionally on a fresh context).
+                <DelegateMenu key={t.id} slug={slug} task={t}>
+                <TaskCard
+                  slug={slug}
+                  task={t}
+                  comments={commentsByTask.get(t.id)}
+                  attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
+                  dragging={draggingId === t.id}
+                  agent={null}
+                  onOpen={() => setOpenId(t.id)}
+                  onDragStart={(e) => onDragStart(e, t.id)}
+                  onDragEnd={onDragEnd}
+                  onDragOver={(e) => {
+                    if (dragId.current == null) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    moveDragged(status, t.id);
+                  }}
+                />
+                </DelegateMenu>
+              ) : (
+                <TaskCard
+                  key={t.id}
+                  slug={slug}
+                  task={t}
+                  comments={commentsByTask.get(t.id)}
+                  attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
+                  dragging={draggingId === t.id}
+                  agent={t.status === "in_progress" ? agentState(t.assignee) : null}
+                  onOpen={() => setOpenId(t.id)}
+                  onDragStart={(e) => onDragStart(e, t.id)}
+                  onDragEnd={onDragEnd}
+                  onDragOver={(e) => {
+                    if (dragId.current == null) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    moveDragged(status, t.id);
+                  }}
+                />
+              )
             ))}
           </section>
         ))}
@@ -495,3 +537,97 @@ function AgentBadge({ name, state }: { name: string; state: string }) {
     </span>
   );
 }
+
+/**
+ * An open ticket's right-click menu: Delegate to ▸ a live Claude terminal, or
+ * Delegate with clear context ▸ (the terminal's Claude is /clear-ed first, so
+ * it starts on a clean slate; only idle terminals can be cleared).
+ */
+function DelegateMenu({ slug, task, children }: { slug: string; task: Task; children: React.ReactNode }) {
+  const [targets, setTargets] = useState<DelegateTarget[] | null>(null);
+  const load = () => {
+    setTargets(null);
+    delegateTargetsAction(slug).then(setTargets, () => setTargets([]));
+  };
+
+  async function delegate(name: string, fresh: boolean) {
+    const pending = toast.loading(fresh ? `Clearing ${name}'s context, then delegating #${task.id}…` : `Delegating #${task.id} to ${name}…`);
+    const res = await delegateTaskAction(slug, task.id, name, null, fresh);
+    if (!res.ok) toast.error(res.error, { id: pending });
+    else
+      toast.success(
+        res.queued
+          ? `Brief queued in ${name}: it starts after its current turn`
+          : `Delegated #${task.id} to ${name}${fresh ? " on a fresh context" : ""}`,
+        { id: pending },
+      );
+  }
+
+  const list = (fresh: boolean) =>
+    !targets ? (
+      <ContextMenuLabel>Loading…</ContextMenuLabel>
+    ) : targets.length === 0 ? (
+      <ContextMenuLabel>No Claude terminal is running</ContextMenuLabel>
+    ) : (
+      targets.map((t) => {
+        // An agent already on another in-progress ticket isn't offered this one.
+        const why =
+          t.busyWith && t.busyWith.id !== task.id
+            ? `on #${t.busyWith.id} · ${t.busyWith.project}`
+            : fresh
+              ? t.status === "claude-working"
+                ? "working"
+                : t.status === "claude-input"
+                  ? "at a prompt"
+                  : null
+              : t.canSend
+                ? null
+                : "at a prompt";
+        const glyph = claudeGlyphState(t.status);
+        return (
+          <ContextMenuItem key={t.name} disabled={!!why} onClick={() => void delegate(t.name, fresh)}>
+            <span className="flex w-4 shrink-0 justify-center self-start pt-0.5">{glyph && <ClaudeGlyph state={glyph} />}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="flex items-center gap-1.5">
+                <span className="truncate">{t.name}</span>
+                {t.inProject && (
+                  <span className="shrink-0 rounded bg-emerald-500/15 px-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+                    this project
+                  </span>
+                )}
+                {why && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{why}</span>}
+              </span>
+              <LastTicket last={t.last} />
+            </span>
+          </ContextMenuItem>
+        );
+      })
+    );
+
+  return (
+    <ContextMenu onOpenChange={(open) => open && load()}>
+      <ContextMenuTrigger>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-60">
+        <ContextMenuLabel className="truncate">
+          #{task.id} {task.title}
+        </ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Send />
+            Delegate to
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-80">{list(false)}</ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger title="/clear the agent first, so it starts this ticket on a clean slate">
+            <Eraser />
+            Delegate with clear context
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-80">{list(true)}</ContextMenuSubContent>
+        </ContextMenuSub>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+

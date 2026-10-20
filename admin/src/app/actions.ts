@@ -46,6 +46,11 @@ import {
   deleteTask,
   deleteTaskAttachment,
   deleteTaskComment,
+  getTaskComment,
+  commentFileCount,
+  commentFilePaths,
+  taskInProject,
+  delegatedTickets,
   getTask,
   assignTask,
   getAppRunTarget,
@@ -93,6 +98,7 @@ import { requireAdmin } from "@/lib/require-admin";
 import { rescanProject, scanAndPersist } from "@/lib/scan";
 import { readScripts } from "@/lib/signals";
 import {
+  clearContext,
   commentBrief,
   delegateBrief,
   delegateTargets,
@@ -287,18 +293,33 @@ export async function delegateTaskAction(
   taskId: number,
   terminal: string,
   note: string | null,
-): Promise<{ queued: boolean }> {
+  /** /clear the terminal's Claude first, so it starts the ticket on a clean slate (idle terminals only) */
+  freshContext = false,
+): Promise<{ ok: true; queued: boolean } | { ok: false; error: string }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
   const task = await getTask(id, z.number().int().positive().parse(taskId));
-  if (!task) throw new Error(`No task ${taskId} in project ${slug}`);
+  if (!task) return { ok: false, error: `No task ${taskId} in project ${slug}` };
   const name = z.string().trim().min(1).max(100).parse(terminal);
   const trimmedNote = z.string().max(2000).parse(note ?? "").trim() || null;
-  const status = await sendBrief(name, delegateBrief(slug, task, trimmedNote));
-  await assignTask(id, task.id, name, trimmedNote);
-  revalidateProject();
-  // A working terminal holds the brief until its current turn ends.
-  return { queued: status === "claude-working" };
+  // One in-progress ticket per agent: one already on another isn't given this one.
+  const busy = (await delegatedTickets()).find(
+    (x) => x.assignee === name && x.status === "in_progress" && x.id !== task.id,
+  );
+  if (busy) {
+    return { ok: false, error: `${name} is on #${busy.id} (${busy.project}), still in progress: pick a free agent` };
+  }
+  // Returned, not thrown: in production a thrown action error reaches the page redacted.
+  try {
+    if (z.boolean().parse(freshContext)) await clearContext(name);
+    const status = await sendBrief(name, delegateBrief(slug, task, trimmedNote));
+    await assignTask(id, task.id, name, trimmedNote, freshContext);
+    revalidateProject();
+    // A working terminal holds the brief until its current turn ends.
+    return { ok: true, queued: status === "claude-working" };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export async function deleteTaskAction(slug: string, taskId: number) {
@@ -343,21 +364,47 @@ export async function addTaskCommentAction(
   slug: string,
   taskId: number,
   body: string,
-): Promise<CommentNotice> {
+  /** files follow (uploaded by the page): the agent is told after, by notifyCommentAction */
+  withFiles = false,
+): Promise<{ commentId: number; notice: CommentNotice | null }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
   const parsedTaskId = z.number().int().positive().parse(taskId);
   const parsedBody = z.string().trim().min(1).max(5000).parse(body);
-  if (!(await addTaskComment(id, parsedTaskId, parsedBody))) {
-    throw new Error(`No task ${parsedTaskId} in project ${slug}`);
-  }
+  const commentId = await addTaskComment(id, parsedTaskId, parsedBody);
+  if (commentId == null) throw new Error(`No task ${parsedTaskId} in project ${slug}`);
   revalidateProject();
+  if (z.boolean().parse(withFiles)) return { commentId, notice: null };
+  return { commentId, notice: await notifyAssignee(id, slug, parsedTaskId, parsedBody, 0) };
+}
 
-  const task = await getTask(id, parsedTaskId);
+/** Tell the ticket's agent about a comment whose files have been uploaded since. */
+export async function notifyCommentAction(
+  slug: string,
+  taskId: number,
+  commentId: number,
+): Promise<CommentNotice> {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const parsedTaskId = z.number().int().positive().parse(taskId);
+  const comment = await getTaskComment(parsedTaskId, z.number().int().positive().parse(commentId));
+  if (!comment || !(await taskInProject(id, parsedTaskId))) throw new Error(`No comment ${commentId} on task ${taskId}`);
+  return notifyAssignee(id, slug, parsedTaskId, comment.body, await commentFileCount(comment.id));
+}
+
+async function notifyAssignee(
+  projectId: number,
+  slug: string,
+  taskId: number,
+  body: string,
+  files: number,
+): Promise<CommentNotice> {
+  const id = projectId;
+  const task = await getTask(id, taskId);
   if (!task?.assignee) return { terminal: null };
   const reopen = task.status === "done";
   try {
-    const status = await sendBrief(task.assignee, commentBrief(slug, task, parsedBody, reopen));
+    const status = await sendBrief(task.assignee, commentBrief(slug, task, body, reopen, files));
     if (reopen) {
       await setTaskStatus(id, task.id, "in_progress");
       revalidateProject();
@@ -375,7 +422,12 @@ export async function addTaskCommentAction(
 export async function deleteTaskCommentAction(slug: string, commentId: number) {
   await requireAdmin();
   const id = await requireProjectId(slug);
-  await deleteTaskComment(id, z.number().int().positive().parse(commentId));
+  const parsed = z.number().int().positive().parse(commentId);
+  const files = await commentFilePaths(parsed);
+  // Its files leave with it, from disk too (the rows go by cascade).
+  if (await deleteTaskComment(id, parsed)) {
+    await Promise.all(files.map((f) => removeAttachmentFile(f).catch(() => {})));
+  }
   revalidateProject();
 }
 

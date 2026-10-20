@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -213,12 +213,33 @@ export async function getTask(projectId: number, taskId: number) {
   return row ?? null;
 }
 
+/**
+ * Every ticket delegated to a terminal (any project), newest delegation first:
+ * what each agent is on now (in progress) and what it had last.
+ */
+export async function delegatedTickets() {
+  return db
+    .select({
+      id: tasks.id,
+      title: tasks.title,
+      status: tasks.status,
+      assignee: tasks.assignee,
+      assignedAt: tasks.assignedAt,
+      project: projects.slug,
+    })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(isNotNull(tasks.assignee))
+    .orderBy(desc(tasks.assignedAt));
+}
+
 /** Record the delegation on the task and leave a line in its thread. */
 export async function assignTask(
   projectId: number,
   taskId: number,
   assignee: string,
   note: string | null,
+  freshContext = false,
 ) {
   await db
     .update(tasks)
@@ -227,7 +248,7 @@ export async function assignTask(
   await db.insert(taskComments).values({
     taskId,
     author: "user",
-    body: `Delegated to ${assignee}${note ? `: ${note}` : ""}`,
+    body: `Delegated to ${assignee}${freshContext ? " (fresh context)" : ""}${note ? `: ${note}` : ""}`,
   });
 }
 
@@ -242,15 +263,46 @@ export async function getTaskComments(projectId: number) {
     .then((rows) => rows.map((r) => r.comment));
 }
 
-/** Comment on a task as the user; false if the task isn't in the project. */
+/** Comment on a task as the user; its id, or null if the task isn't in the project. */
 export async function addTaskComment(
   projectId: number,
   taskId: number,
   body: string,
-): Promise<boolean> {
-  if (!(await taskInProject(projectId, taskId))) return false;
-  await db.insert(taskComments).values({ taskId, author: "user", body });
-  return true;
+): Promise<number | null> {
+  if (!(await taskInProject(projectId, taskId))) return null;
+  const [row] = await db
+    .insert(taskComments)
+    .values({ taskId, author: "user", body })
+    .returning({ id: taskComments.id });
+  return row.id;
+}
+
+/** A comment of the task (body), or null. */
+export async function getTaskComment(taskId: number, commentId: number) {
+  const [row] = await db
+    .select()
+    .from(taskComments)
+    .where(and(eq(taskComments.id, commentId), eq(taskComments.taskId, taskId)))
+    .limit(1);
+  return row ?? null;
+}
+
+/** How many files a comment came with. */
+export async function commentFileCount(commentId: number): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(taskAttachments)
+    .where(eq(taskAttachments.commentId, commentId));
+  return row?.n ?? 0;
+}
+
+/** The files on disk of a comment (to remove them with it). */
+export async function commentFilePaths(commentId: number): Promise<string[]> {
+  const rows = await db
+    .select({ path: taskAttachments.path })
+    .from(taskAttachments)
+    .where(eq(taskAttachments.commentId, commentId));
+  return rows.map((r) => r.path);
 }
 
 /** Every attachment on the project's tasks, oldest first. */
@@ -300,16 +352,19 @@ export async function deleteTaskAttachment(
   return row?.path ?? null;
 }
 
-export async function deleteTaskComment(projectId: number, commentId: number) {
+/** Delete a comment of the project; true if it was there. Its files' rows go with it (cascade). */
+export async function deleteTaskComment(projectId: number, commentId: number): Promise<boolean> {
   const owned = db
     .select({ id: tasks.id })
     .from(tasks)
     .where(eq(tasks.projectId, projectId));
-  await db
+  const rows = await db
     .delete(taskComments)
     .where(
       and(eq(taskComments.id, commentId), inArray(taskComments.taskId, owned)),
-    );
+    )
+    .returning({ id: taskComments.id });
+  return rows.length > 0;
 }
 
 /** Resolve the info needed to start/stop an app: its dir, port, and slugs. */

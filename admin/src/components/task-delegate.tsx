@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { delegateTargetsAction, delegateTaskAction } from "@/app/actions";
+import { LastTicket } from "@/components/last-ticket";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -52,9 +53,13 @@ export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
     if (!picked) return;
     startSending(async () => {
       try {
-        const { queued } = await delegateTaskAction(slug, task.id, picked, note || null);
+        const res = await delegateTaskAction(slug, task.id, picked, note || null);
+        if (!res.ok) {
+          toast.error(res.error);
+          return;
+        }
         toast.success(
-          queued
+          res.queued
             ? `Brief queued in ${picked}: it starts after its current turn`
             : `Delegated #${task.id} to ${picked}`,
         );
@@ -104,7 +109,7 @@ export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
                     type="button"
                     role="radio"
                     aria-checked={selected}
-                    disabled={!t.canSend}
+                    disabled={!t.canSend || (!!t.busyWith && t.busyWith.id !== task.id)}
                     onClick={() => setPicked(t.name)}
                     className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                       selected ? "bg-primary/10" : "hover:bg-muted/60"
@@ -126,7 +131,12 @@ export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
                         )}
                       </span>
                       <span className="block truncate text-[11px] text-muted-foreground">
-                        {state.label} · {t.cwd.replace(/^\/opt\/project\/projects\//, "")}
+                        {t.busyWith && t.busyWith.id !== task.id
+                          ? `on #${t.busyWith.id} · ${t.busyWith.project} (in progress): not offered`
+                          : `${state.label} · ${t.cwd.replace(/^\/opt\/project\/projects\//, "")}`}
+                      </span>
+                      <span className="block">
+                        <LastTicket last={t.last} />
                       </span>
                     </span>
                     {t.tokens != null && (
