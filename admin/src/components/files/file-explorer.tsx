@@ -4,10 +4,14 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
-  Eye, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
+  Copy, Eye, FileArchive, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
@@ -222,6 +226,17 @@ export function FileExplorer() {
     a.href = `${API}/raw?path=${encodeURIComponent(e.path)}&download=1${e.secret ? "&confirm=1" : ""}`;
     a.click();
   };
+  /** a folder as a .tar.gz (credential files and node_modules / build dirs left out: api/files/archive) */
+  const downloadFolder = (p: string) => {
+    const a = document.createElement("a");
+    a.href = `${API}/archive?path=${encodeURIComponent(p)}`;
+    a.click();
+  };
+  const copy = (text: string, what: string) =>
+    navigator.clipboard.writeText(text).then(() => toast.success(`${what} copied`), () => toast.error("The browser blocked the clipboard"));
+  // The right-clicked row; null = the empty space, i.e. the folder shown.
+  const [menuEntry, setMenuEntry] = useState<Entry | null>(null);
+  const menuTarget: Entry | null = menuEntry ?? (cwd ? { name: cwd.split("/").pop() || "/", path: cwd, type: "dir", size: 0, modified: "", secret: false } : null);
   const th = (key: SortKey, label: string, cls = "") => (
     <th scope="col" className={cn("px-2 py-1.5 font-medium", cls)} aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}>
       <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => setSort((s) => ({ key, desc: s.key === key ? !s.desc : key !== "name" && key !== "type" }))}>
@@ -304,6 +319,9 @@ export function FileExplorer() {
           aria-label="Files"
         >
           {dragging && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-primary/10 text-sm font-medium">Drop to upload into {cwd}</div>}
+          {/* Right-click a file / folder (or the empty space, for this folder): download, copy path, … */}
+          <ContextMenu>
+          <ContextMenuTrigger onContextMenuCapture={() => setMenuEntry(null)}>
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-background text-left text-xs text-muted-foreground">
               <tr>{th("name", "Name", "w-full")}{th("size", "Size", "text-right whitespace-nowrap")}{th("modified", "Modified", "whitespace-nowrap")}{th("type", "Type")}<th className="w-24" /></tr>
@@ -315,7 +333,7 @@ export function FileExplorer() {
                 </tr>
               )}
               {entries.map((e) => (
-                <tr key={e.path} aria-selected={selected?.path === e.path} onClick={() => setSelected(e)} onDoubleClick={() => (e.type === "dir" ? load(e.path) : setSelected(e))}
+                <tr key={e.path} aria-selected={selected?.path === e.path} onClick={() => setSelected(e)} onContextMenu={() => setMenuEntry(e)} onDoubleClick={() => (e.type === "dir" ? load(e.path) : setSelected(e))}
                   className={cn("group cursor-default border-t hover:bg-muted/60", selected?.path === e.path && "bg-muted")}>
                   <td className="max-w-0 px-2 py-1">
                     <span className="flex items-center gap-1.5 truncate">
@@ -349,6 +367,39 @@ export function FileExplorer() {
               {!listing && !error && <tr><td colSpan={5} className="px-2 py-8 text-center text-muted-foreground"><Loader2 className="mx-auto size-5 animate-spin" /></td></tr>}
             </tbody>
           </table>
+          </ContextMenuTrigger>
+          {menuTarget && (
+            <ContextMenuContent className="w-56">
+              <ContextMenuLabel className="truncate font-mono" title={menuTarget.path}>
+                {menuEntry ? menuTarget.name : `${menuTarget.path} (this folder)`}
+              </ContextMenuLabel>
+              <ContextMenuSeparator />
+              {menuEntry && (menuTarget.type === "dir" ? (
+                <ContextMenuItem onClick={() => load(menuTarget.path)}><FolderOpen /> Open</ContextMenuItem>
+              ) : (
+                <ContextMenuItem onClick={() => setSelected(menuTarget)}><Eye /> Preview</ContextMenuItem>
+              ))}
+              {!pseudo(menuTarget.path) && (menuTarget.type === "dir" ? (
+                <ContextMenuItem onClick={() => downloadFolder(menuTarget.path)} title="Credential files, node_modules and build folders are left out">
+                  <FileArchive /> Download as .tar.gz
+                </ContextMenuItem>
+              ) : menuTarget.type === "file" ? (
+                <ContextMenuItem onClick={() => download(menuTarget)}><Download /> Download</ContextMenuItem>
+              ) : null)}
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => copy(menuTarget.path, "Path")}><Copy /> Copy path</ContextMenuItem>
+              <ContextMenuItem onClick={() => copy(menuTarget.name, "Name")}><Copy /> Copy name</ContextMenuItem>
+              {menuEntry && changeable(menuTarget.path) && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem onClick={() => { setDraft(menuTarget.name); setDialog({ kind: "rename", entry: menuTarget }); }}><Pencil /> Rename</ContextMenuItem>
+                  <ContextMenuItem onClick={() => { setDraft(cwd); setDialog({ kind: "move", entry: menuTarget }); }}><MoveRight /> Move</ContextMenuItem>
+                  <ContextMenuItem variant="destructive" onClick={() => openDelete(menuTarget)}><Trash2 /> Delete</ContextMenuItem>
+                </>
+              )}
+            </ContextMenuContent>
+          )}
+          </ContextMenu>
         </section>
 
         <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border" aria-label="Preview">
