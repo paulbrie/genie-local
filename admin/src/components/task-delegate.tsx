@@ -6,12 +6,16 @@ import { toast } from "sonner";
 
 import { delegateTargetsAction, delegateTaskAction } from "@/app/actions";
 import { LastTicket } from "@/components/last-ticket";
+import { useSubject } from "subjecto/react";
+
+import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import type { Task } from "@/db/schema";
 import { formatRelativeTime } from "@/lib/format";
 import type { DelegateTarget } from "@/lib/task-delegate";
+import { liveTerminals } from "@/store/terminals";
 
 const STATE: Record<string, { label: string; color: string }> = {
   "claude-idle": { label: "idle", color: "bg-emerald-500" },
@@ -32,6 +36,9 @@ function fmtTokens(n: number): string {
  * back) and becomes the ticket's assignee.
  */
 export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
+  const [terms] = useSubject(liveTerminals);
+  const assigneeLive = task.assignee ? terms.find((t) => t.name === task.assignee) : undefined;
+  const assigneeGlyph = assigneeLive ? claudeGlyphState(assigneeLive.status) : null;
   const [targets, setTargets] = useState<DelegateTarget[] | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
   const [note, setNote] = useState("");
@@ -75,9 +82,17 @@ export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
   return (
     <div className="space-y-2">
       {task.assignee && (
-        <p className="text-xs">
-          Assigned to <span className="font-medium">{task.assignee}</span>
-          <span className="text-muted-foreground"> · {formatRelativeTime(task.assignedAt)}</span>
+        <p className="flex items-center gap-1.5 text-xs">
+          {/* the agent's live Claude state, as on the card */}
+          {assigneeGlyph && <ClaudeGlyph state={assigneeGlyph} />}
+          <span>
+            Assigned to <span className="font-medium">{task.assignee}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              · {formatRelativeTime(task.assignedAt)}
+              {assigneeLive ? ` · ${STATE[assigneeLive.status]?.label ?? assigneeLive.status}` : terms.length ? " · terminal gone" : ""}
+            </span>
+          </span>
         </p>
       )}
       <div className="overflow-hidden rounded-md border">

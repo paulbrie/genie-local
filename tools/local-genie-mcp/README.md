@@ -26,7 +26,7 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `assignee` (the terminal it was delegated to), `comment_count`, `attachment_count` |
 | `create_task` | `project`, `title`, `description?` | add a task (to the top) |
 | `update_task` | `project`, `id`, `title?`, `description?`, `commit?` | edit title/description/commit sha |
-| `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; `done` still accepted |
+| `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; in_progress / done on an unassigned ticket records the calling terminal as its agent; `done` still accepted |
 | `delete_task` | `project`, `id` | remove a task |
 | `reorder_tasks` | `project`, `orderedIds` | set manual order (position) |
 | `list_task_comments` | `project`, `id?` | a task's comment thread (author `user`/`claude`), each comment with its `files` (abs paths); all threads without `id` |

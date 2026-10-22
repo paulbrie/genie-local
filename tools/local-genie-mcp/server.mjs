@@ -3,6 +3,7 @@
 // list of any project tracked by the admin dashboard (the `tasks` table in the
 // `admin_dashboard` Postgres DB). Tasks are always scoped by project slug.
 
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { promises as fsp, readFileSync } from "node:fs";
 import path from "node:path";
@@ -57,6 +58,24 @@ const MIME_BY_EXT = {
   ".svg": "image/svg+xml", ".zip": "application/zip",
 };
 const STATUSES = ["open", "in_progress", "done"];
+
+/**
+ * The admin terminal this MCP server runs in ("admin-Ramona" → "Ramona"), from
+ * the tmux pane Claude was started in; null outside the admin's terminals.
+ * Used to record who works a ticket the agent picked up by itself.
+ */
+let terminalName;
+function myTerminal() {
+  if (terminalName !== undefined) return Promise.resolve(terminalName);
+  const pane = process.env.TMUX_PANE;
+  if (!pane) return Promise.resolve((terminalName = null));
+  return new Promise((resolve) =>
+    execFile("tmux", ["display", "-p", "-t", pane, "#{session_name}"], { timeout: 3000 }, (err, out) => {
+      const s = err ? "" : String(out).trim();
+      resolve((terminalName = s.startsWith("admin-") ? s.slice("admin-".length) : null));
+    }),
+  );
+}
 
 const ok = (data) => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
@@ -186,7 +205,7 @@ server.registerTool(
   "set_task_status",
   {
     description:
-      "Move a task to open / in_progress / done (shown as kanban columns in the admin). When finishing, pass `commit` with the sha that did it. Legacy: `done: true/false` instead of `status`.",
+      "Move a task to open / in_progress / done (shown as kanban columns in the admin). Set it in_progress when you start working on it, even if nobody delegated it to you: an unassigned ticket then records you as its agent (the admin shows your live status on it). When finishing, set done and pass `commit` with the sha that did it. Legacy: `done: true/false` instead of `status`.",
     inputSchema: {
       project: z.string(),
       id: z.number().int().positive(),
@@ -203,11 +222,15 @@ server.registerTool(
     const pid = await projectIdBySlug(project);
     const next = status ?? (done === undefined ? undefined : done ? "done" : "open");
     if (!next || !STATUSES.includes(next)) throw new Error("Pass status (open / in_progress / done)");
+    // Working on (or finishing) an unassigned ticket claims it for this terminal.
+    const claimer = next === "open" ? null : await myTerminal();
     const rows = await q(
-      `update tasks set status = $1, commit_sha = coalesce($4, commit_sha), updated_at = now()
+      `update tasks set status = $1, commit_sha = coalesce($4, commit_sha), updated_at = now(),
+              assigned_at = case when assignee is null and $5::text is not null then now() else assigned_at end,
+              assignee = coalesce(assignee, $5::text)
         where id = $2 and project_id = $3
-      returning id, title, status, commit_sha`,
-      [next, id, pid, commit?.toLowerCase() ?? null],
+      returning id, title, status, commit_sha, assignee`,
+      [next, id, pid, commit?.toLowerCase() ?? null, claimer],
     );
     if (!rows.length) throw new Error(`No task ${id} in project "${project}"`);
     return ok(rows[0]);

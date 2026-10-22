@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getGraph, listRepos, resolveRepo } from "@/lib/git-graph";
+import { getGraph, getViews, listRepos, resolveRepo, type GraphView } from "@/lib/git-graph";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,10 @@ const noStore = { headers: { "Cache-Control": "no-store" } };
  * which repo when the project holds several (defaults to the first). Returns the
  * list of repos too, so the UI can offer a picker.
  *
- * GET /api/git?project=<slug>&app=<appSlug>
+ * `view` switches the history to one local branch (`branch:<name>`) or one
+ * worktree (`wt:<path>`); the branches and worktrees on offer come back too.
+ *
+ * GET /api/git?project=<slug>&app=<appSlug>[&view=branch:<name>|wt:<path>]
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -38,6 +41,17 @@ export async function GET(request: Request) {
   if (!repoDir)
     return NextResponse.json({ error: "no git repo" }, { status: 404 });
 
-  const graph = await getGraph(repoDir);
-  return NextResponse.json({ repos, app, graph }, noStore);
+  const v = searchParams.get("view") ?? "";
+  const view: GraphView = v.startsWith("branch:")
+    ? { kind: "branch", branch: v.slice(7) }
+    : v.startsWith("wt:")
+      ? { kind: "worktree", path: v.slice(3) }
+      : { kind: "all" };
+  try {
+    const [graph, views] = await Promise.all([getGraph(repoDir, view), getViews(repoDir)]);
+    return NextResponse.json({ repos, app, graph, views }, noStore);
+  } catch (err) {
+    // a branch or worktree that's gone: say so, the UI falls back to all
+    return NextResponse.json({ error: err instanceof Error ? err.message : "git failed" }, { status: 404 });
+  }
 }

@@ -1,9 +1,11 @@
 "use client";
 
-import { GitBranch, Lock } from "lucide-react";
+import { GitBranch, GitMerge, Lock } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { GitMergeDialog } from "@/components/git-merge-dialog";
+import { Button } from "@/components/ui/button";
 import { BASE_PATH } from "@/lib/config";
 import { formatRelativeTime } from "@/lib/format";
 import type { Worktree } from "@/lib/worktrees";
@@ -20,9 +22,24 @@ function shortPath(p: string, repo: string): string {
  * uncommitted changes, ahead / behind the main checkout, last commit, and the
  * terminals working in each.
  */
-export function GitWorktrees({ projectSlug, app }: { projectSlug: string; app: string }) {
+export function GitWorktrees({
+  projectSlug,
+  app,
+  refreshKey = 0,
+  onMerged,
+}: {
+  projectSlug: string;
+  app: string;
+  /** bumped by the Git tab's Refresh: re-read */
+  refreshKey?: number;
+  /** a branch was merged locally: the history should reload */
+  onMerged?: () => void;
+}) {
   const [trees, setTrees] = useState<Worktree[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  // the merge dialog: null = closed; "" = pick a branch
+  const [merge, setMerge] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -37,12 +54,32 @@ export function GitWorktrees({ projectSlug, app }: { projectSlug: string; app: s
     return () => {
       active = false;
     };
-  }, [projectSlug, app]);
+  }, [projectSlug, app, reload, refreshKey]);
 
   if (error) return <p className="text-xs text-destructive">Couldn&apos;t list the worktrees: {error}</p>;
   if (!trees) return <p className="text-xs text-muted-foreground">Loading worktrees…</p>;
   // one worktree = just the repo itself: nothing to show
-  if (trees.length < 2) return null;
+  const dialog = merge != null && (
+    <GitMergeDialog
+      projectSlug={projectSlug}
+      app={app}
+      initialBranch={merge || null}
+      onClose={() => setMerge(null)}
+      onMerged={() => {
+        setReload((n) => n + 1);
+        onMerged?.();
+      }}
+    />
+  );
+  if (trees.length < 2)
+    return (
+      <div className="flex justify-end">
+        <Button size="sm" variant="outline" className="h-7" onClick={() => setMerge("")}>
+          <GitMerge className="size-3.5" /> Merge a branch…
+        </Button>
+        {dialog}
+      </div>
+    );
   const repo = trees[0].path;
   const mainBranch = trees[0].branch;
   const commitHref = (sha: string) =>
@@ -50,9 +87,15 @@ export function GitWorktrees({ projectSlug, app }: { projectSlug: string; app: s
 
   return (
     <section className="space-y-1.5">
-      <h3 className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-        <GitBranch className="size-3.5" /> Worktrees ({trees.length})
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          <GitBranch className="size-3.5" /> Worktrees ({trees.length})
+        </h3>
+        <Button size="sm" variant="outline" className="h-7" onClick={() => setMerge("")}>
+          <GitMerge className="size-3.5" /> Merge a branch…
+        </Button>
+      </div>
+      {dialog}
       <div className="overflow-x-auto rounded-md border">
         <table className="w-full text-xs">
           <thead className="bg-muted/40 text-left text-muted-foreground">
@@ -66,6 +109,7 @@ export function GitWorktrees({ projectSlug, app }: { projectSlug: string; app: s
                 Ahead / behind
               </th>
               <th className="px-2 py-1.5 font-medium">Last commit</th>
+              <th className="px-2 py-1.5" />
             </tr>
           </thead>
           <tbody>
@@ -117,6 +161,19 @@ export function GitWorktrees({ projectSlug, app }: { projectSlug: string; app: s
                       <span className="shrink-0 text-muted-foreground">{formatRelativeTime(t.lastCommit.at)}</span>
                       <span className="truncate">{t.lastCommit.subject}</span>
                     </span>
+                  )}
+                </td>
+                <td className="px-1 py-1">
+                  {!t.main && t.branch && (t.ahead ?? 0) > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => setMerge(t.branch!)}
+                      title={`Merge ${t.branch} into ${mainBranch} (preview first)`}
+                    >
+                      <GitMerge className="size-3" /> Merge
+                    </Button>
                   )}
                 </td>
               </tr>

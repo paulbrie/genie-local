@@ -41,6 +41,7 @@ import { Lockup, Wisp } from "@/components/brand/wisp";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { TerminalContextMenu } from "@/components/terminal-context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
@@ -427,34 +428,41 @@ export function AppSidebar() {
               )}
 
               {/* Currently-working terminals, as sub-items under Terminals.
-                  Clicking opens (or un-minimizes) the tmux window in the dock. */}
+                  Clicking opens (or un-minimizes) the tmux window in the dock;
+                  right-click: Open / Delete. */}
               {item.href === "/terminals" &&
                 !rail &&
                 workingTerms.length > 0 && (
                   <div className="mt-px flex flex-col gap-px">
                     {workingTerms.map((t) => (
-                      <button
+                      <TerminalContextMenu
                         key={t.name}
-                        type="button"
-                        onClick={() => {
-                          openTerminal(t.name);
-                          closeMobile();
-                        }}
-                        title={
-                          t.tokens
-                            ? `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
-                            : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`
-                        }
-                        className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        name={t.name}
+                        claude={t.status.startsWith("claude")}
+                        onNavigate={closeMobile}
                       >
-                        <TermDot status={t.status} />
-                        <span className="truncate">{t.name}</span>
-                        {t.tokens && t.tokens.total > 0 && (
-                          <span className="ml-auto shrink-0 font-mono tabular-nums opacity-70">
-                            {fmtTokens(t.tokens.total)}
-                          </span>
-                        )}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            openTerminal(t.name);
+                            closeMobile();
+                          }}
+                          title={
+                            t.tokens
+                              ? `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
+                              : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`
+                          }
+                          className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        >
+                          <TermDot status={t.status} />
+                          <span className="truncate">{t.name}</span>
+                          {t.tokens && t.tokens.total > 0 && (
+                            <span className="ml-auto shrink-0 font-mono tabular-nums opacity-70">
+                              {fmtTokens(t.tokens.total)}
+                            </span>
+                          )}
+                        </button>
+                      </TerminalContextMenu>
                     ))}
                   </div>
                 )}

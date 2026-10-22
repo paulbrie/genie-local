@@ -64,12 +64,26 @@ export type GitStatusFile = {
 
 export type GitGraph = {
   branch: string | null;
+  /** what the history shows: every ref, one local branch, or one worktree's HEAD */
+  view: GraphView;
   /** Column count, for sizing the SVG. */
   columns: number;
   rows: GraphRow[];
   status: GitStatusFile[];
   /** True when the log was truncated at LOG_LIMIT. */
   truncated: boolean;
+};
+
+/** What the graph shows. "all": every ref, status of the main checkout. */
+export type GraphView =
+  | { kind: "all" }
+  | { kind: "branch"; branch: string }
+  | { kind: "worktree"; path: string };
+
+/** The views on offer: local branches, and the repo's worktrees. */
+export type GraphViews = {
+  branches: string[];
+  worktrees: { path: string; branch: string | null; main: boolean }[];
 };
 
 /** A git repo inside a project (an app dir with a .git). */
@@ -165,12 +179,12 @@ function parseRefs(decoration: string): GitRef[] {
     });
 }
 
-/** Read up to LOG_LIMIT commits across all refs, newest first. */
-async function readLog(repoDir: string): Promise<Commit[]> {
+/** Read up to LOG_LIMIT commits of `rev` (default: all refs), newest first. */
+async function readLog(repoDir: string, rev?: string): Promise<Commit[]> {
   const format = ["%H", "%P", "%D", "%an", "%aI", "%s"].join(US) + RS;
   const out = await git(repoDir, [
     "log",
-    "--all",
+    rev ?? "--all",
     "--date-order",
     `--max-count=${LOG_LIMIT}`,
     `--pretty=format:${format}`,
@@ -316,18 +330,67 @@ export function assignLanes(commits: Commit[]): {
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Full graph payload for a repo: branch, placed rows, working-tree status. */
-export async function getGraph(repoDir: string): Promise<GitGraph> {
+/** The repo's worktrees (`git worktree list`), the main checkout first; missing folders left out. */
+async function readWorktrees(repoDir: string): Promise<GraphViews["worktrees"]> {
+  const out = await git(repoDir, ["worktree", "list", "--porcelain"]).catch(() => "");
+  return out
+    .trim()
+    .split(/\n\n+/)
+    .filter(Boolean)
+    .map((block, i) => ({
+      path: /^worktree (.+)$/m.exec(block)?.[1] ?? "",
+      branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? null,
+      main: i === 0,
+      prunable: /^prunable/m.test(block),
+    }))
+    .filter((w) => w.path && !w.prunable)
+    .map(({ path, branch, main }) => ({ path, branch, main }));
+}
+
+/** Local branches and worktrees the graph can be switched to. */
+export async function getViews(repoDir: string): Promise<GraphViews> {
+  const [refs, worktrees] = await Promise.all([
+    git(repoDir, ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"]).catch(() => ""),
+    readWorktrees(repoDir),
+  ]);
+  return { branches: refs.split("\n").filter(Boolean), worktrees };
+}
+
+/**
+ * Full graph payload for a repo: branch, placed rows, working-tree status.
+ * `view` narrows it to a local branch (its history; the status of the worktree
+ * it's checked out in, if any) or a worktree (its HEAD's history and its own
+ * status). Both are checked against what git lists, so nothing user-typed
+ * reaches git as a path or an option.
+ */
+export async function getGraph(repoDir: string, view: GraphView = { kind: "all" }): Promise<GitGraph> {
+  let dir = repoDir;
+  let rev: string | undefined;
+  let statusDir: string | null = repoDir;
+  if (view.kind === "branch") {
+    const { branches, worktrees } = await getViews(repoDir);
+    if (!branches.includes(view.branch)) throw new Error(`no local branch ${view.branch}`);
+    rev = `refs/heads/${view.branch}`;
+    statusDir = worktrees.find((w) => w.branch === view.branch)?.path ?? null;
+  } else if (view.kind === "worktree") {
+    const wt = (await readWorktrees(repoDir)).find((w) => w.path === view.path);
+    if (!wt) throw new Error(`no worktree at ${view.path}`);
+    dir = statusDir = wt.path;
+    rev = "HEAD";
+  }
   const [branch, commits, status] = await Promise.all([
-    git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"])
-      .then((s) => s.trim() || null)
-      .catch(() => null),
-    readLog(repoDir),
-    readStatus(repoDir),
+    view.kind === "branch"
+      ? Promise.resolve(view.branch)
+      : git(dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+          .then((s) => s.trim() || null)
+          .catch(() => null),
+    readLog(dir, rev),
+    statusDir ? readStatus(statusDir) : Promise.resolve([]),
   ]);
   const { rows, columns } = assignLanes(commits);
   return {
     branch,
+    view,
     columns,
     rows,
     status,

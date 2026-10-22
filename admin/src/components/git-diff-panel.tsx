@@ -2,15 +2,41 @@
 
 import { DiffModeEnum, DiffView } from "@git-diff-view/react";
 import "@git-diff-view/react/styles/diff-view.css";
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ALargeSmall, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Input } from "@/components/ui/input";
 import { parsePatch, type ParsedFile } from "@/lib/parse-patch";
 
 // Above this many files a filter box helps find one.
 const FILTER_FROM = 8;
+
+// The code's font size, three steps as in the terminal window (cycled by "AA"),
+// remembered in this browser.
+const FONT_SIZES = [
+  { label: "Small", px: 12 },
+  { label: "Medium", px: 14 },
+  { label: "Large", px: 16 },
+] as const;
+const FONT_KEY = "admin.diff.fontSize";
+const FONT_EVENT = "admin:diff-font"; // same-tab writes don't fire "storage"
+function subscribeFont(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(FONT_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(FONT_EVENT, onChange);
+  };
+}
+function readFont(): number {
+  try {
+    const i = FONT_SIZES.findIndex((f) => String(f.px) === localStorage.getItem(FONT_KEY));
+    return i >= 0 ? i : 0;
+  } catch {
+    return 0; // storage blocked: Small
+  }
+}
 
 type FileEntry = ParsedFile & {
   key: string;
@@ -61,6 +87,17 @@ export function GitDiffPanel({ patch }: { patch: string }) {
   const theme = resolvedTheme === "dark" ? "dark" : "light";
 
   const [open, setOpen] = useState<Set<string>>(new Set());
+  // the saved size (Small on the server and until hydrated)
+  const fontIdx = useSyncExternalStore(subscribeFont, readFont, () => 0);
+  const font = FONT_SIZES[fontIdx];
+  const cycleFont = () => {
+    try {
+      localStorage.setItem(FONT_KEY, String(FONT_SIZES[(fontIdx + 1) % FONT_SIZES.length].px));
+    } catch {
+      /* storage blocked: not remembered */
+    }
+    window.dispatchEvent(new Event(FONT_EVENT));
+  };
   const [filter, setFilter] = useState("");
   const shown = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -120,6 +157,16 @@ export function GitDiffPanel({ patch }: { patch: string }) {
         )}
         <button
           type="button"
+          onClick={cycleFont}
+          aria-label="Font size"
+          title={`Font size: ${font.label} (${font.px}px) — click to cycle`}
+          className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ALargeSmall className="size-3.5" />
+          {font.label}
+        </button>
+        <button
+          type="button"
           onClick={() =>
             setOpen((s) => {
               const next = new Set(s);
@@ -130,7 +177,7 @@ export function GitDiffPanel({ patch }: { patch: string }) {
               return next;
             })
           }
-          className="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           {allOpen ? <ChevronsDownUp className="size-3.5" /> : <ChevronsUpDown className="size-3.5" />}
           {allOpen ? "Collapse all" : "Expand all"}
@@ -202,6 +249,7 @@ export function GitDiffPanel({ patch }: { patch: string }) {
                         ],
                       }}
                       diffViewMode={wide ? DiffModeEnum.Split : DiffModeEnum.Unified}
+                      diffViewFontSize={font.px}
                       diffViewTheme={theme}
                       diffViewHighlight
                       diffViewWrap
