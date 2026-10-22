@@ -44,7 +44,7 @@ import {
 } from "@/db/schema";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import type { DelegateTarget } from "@/lib/task-delegate";
-import { liveTerminals } from "@/store/terminals";
+import { liveTerminals, openTerminal } from "@/store/terminals";
 
 /** A drag in progress (or a drop being saved): the board as it will be. */
 type Draft = { order: number[]; status: Record<number, TaskStatus> };
@@ -368,6 +368,7 @@ export function TaskBoard({
                   attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
                   dragging={draggingId === t.id}
                   agent={null}
+                  assigneeLive={!!t.assignee && terms.some((x) => x.name === t.assignee)}
                   onOpen={() => setOpenId(t.id)}
                   onDragStart={(e) => onDragStart(e, t.id)}
                   onDragEnd={onDragEnd}
@@ -388,6 +389,7 @@ export function TaskBoard({
                   attachmentCount={attachmentsByTask.get(t.id)?.length ?? 0}
                   dragging={draggingId === t.id}
                   agent={t.status === "in_progress" ? agentState(t.assignee) : null}
+                  assigneeLive={!!t.assignee && terms.some((x) => x.name === t.assignee)}
                   onOpen={() => setOpenId(t.id)}
                   onDragStart={(e) => onDragStart(e, t.id)}
                   onDragEnd={onDragEnd}
@@ -426,6 +428,7 @@ function TaskCard({
   attachmentCount,
   dragging,
   agent,
+  assigneeLive,
   onOpen,
   onDragStart,
   onDragEnd,
@@ -438,6 +441,8 @@ function TaskCard({
   dragging: boolean;
   /** For an in-progress card: its assignee terminal's state. */
   agent: AgentState;
+  /** the assignee's terminal exists: its name (and glyph) open it */
+  assigneeLive: boolean;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -470,7 +475,22 @@ function TaskCard({
         <span className={`min-w-0 flex-1 font-medium ${done ? "text-muted-foreground" : ""}`}>
           {task.title}
         </span>
-        {agent && <AgentBadge name={task.assignee ?? ""} state={agent} />}
+        {agent &&
+          (assigneeLive && task.assignee ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openTerminal(task.assignee!);
+              }}
+              className="self-start rounded hover:bg-muted"
+              title={`Open ${task.assignee}'s terminal`}
+            >
+              <AgentBadge name={task.assignee} state={agent} />
+            </button>
+          ) : (
+            <AgentBadge name={task.assignee ?? ""} state={agent} />
+          ))}
       </div>
       {task.description && (
         <p className="line-clamp-3 text-xs whitespace-pre-wrap text-muted-foreground">
@@ -479,12 +499,28 @@ function TaskCard({
       )}
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
         <span>{formatRelativeTime(task.updatedAt)}</span>
-        {task.assignee && (
-          <span className="flex min-w-0 items-center gap-0.5" title={`Delegated to ${task.assignee}`}>
-            <Bot className="size-3 shrink-0" />
-            <span className="truncate">{task.assignee}</span>
-          </span>
-        )}
+        {task.assignee &&
+          (assigneeLive ? (
+            // the agent's terminal, not the drawer
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                openTerminal(task.assignee!);
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+              className="flex min-w-0 items-center gap-0.5 hover:text-foreground hover:underline"
+              title={`Delegated to ${task.assignee}: open its terminal`}
+            >
+              <Bot className="size-3 shrink-0" />
+              <span className="truncate">{task.assignee}</span>
+            </button>
+          ) : (
+            <span className="flex min-w-0 items-center gap-0.5" title={`Delegated to ${task.assignee} (terminal gone)`}>
+              <Bot className="size-3 shrink-0" />
+              <span className="truncate">{task.assignee}</span>
+            </span>
+          ))}
         {commentCount > 0 && (
           <span
             className={`flex items-center gap-0.5 ${

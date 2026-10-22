@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FolderGit2, GitBranch, RefreshCw } from "lucide-react";
+import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, RefreshCw, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { GitCommitDialog } from "@/components/git-commit-dialog";
 import { GitWorktrees } from "@/components/git-worktrees";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,67 @@ export function GitGraphView({
   };
 
   // The repo picker (back to all branches) and the branch / worktree picker.
+  // Commit (a dialog) and Push, in the checkout the view shows; then re-read in place.
+  const [committing, setCommitting] = useState(false);
+  const [pushing, setPushing] = useState(false);
+  const reread = async () => {
+    try {
+      showGraph(await fetchGraphOrAll(projectSlug, app, view));
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const push = async () => {
+    setPushing(true);
+    try {
+      const r = await fetch(`${BASE_PATH}/api/git/push`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: projectSlug, app, view: view === ALL ? "" : view }),
+      });
+      const j = (await r.json()) as { branch?: string; pushed?: number; created?: boolean; error?: string };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      toast.success(
+        `Pushed ${j.pushed} commit${j.pushed === 1 ? "" : "s"} to origin/${j.branch}${j.created ? " (new on origin)" : ""}`,
+      );
+      await reread();
+    } catch (e) {
+      toast.error(`Not pushed: ${e instanceof Error ? e.message : String(e)}`, { duration: 15_000 });
+    } finally {
+      setPushing(false);
+    }
+  };
+
+  // Check out: switch the main checkout (and so its dev server) to the branch shown.
+  const [switching, setSwitching] = useState(false);
+  const checkout = async (branch: string, from: string | null, dir: string) => {
+    if (
+      !confirm(
+        `Switch ${dir} from ${from ?? "a detached HEAD"} to ${branch}?\n\n` +
+          "Its dev server reloads on the new branch, and agents working in that checkout will be on it too.",
+      )
+    )
+      return;
+    setSwitching(true);
+    try {
+      const r = await fetch(`${BASE_PATH}/api/git/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: projectSlug, app, branch }),
+      });
+      const j = (await r.json()) as { head?: string; error?: string };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      toast.success(`Checked out ${branch} (${String(j.head).slice(0, 7)})`);
+      showGraph(await fetchGraphOrAll(projectSlug, app, `branch:${branch}`));
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      toast.error(`Not checked out: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
   const load = (appSlug: string, nextView = ALL) => {
     setLoading(true);
     setError(null);
@@ -177,6 +239,13 @@ export function GitGraphView({
   if (!data) return null;
 
   const { repos, graph, views } = data;
+  // The checkout the dev server runs from, and whether the branch shown is another one.
+  const mainWt = views.worktrees.find((w) => w.main);
+  const canCheckout =
+    graph.view.kind === "branch" &&
+    !!mainWt &&
+    mainWt.branch !== graph.view.branch &&
+    !views.worktrees.some((w) => w.branch === (graph.view as { branch: string }).branch);
   const svgWidth = PAD_X * 2 + Math.max(graph.columns, 1) * COL_W;
   const svgHeight = Math.max(graph.rows.length * ROW_H, ROW_H);
 
@@ -234,6 +303,19 @@ export function GitGraphView({
           </SelectContent>
         </Select>
         {graph.branch && graph.view.kind !== "branch" && <Badge variant="secondary">{graph.branch}</Badge>}
+        {canCheckout && graph.view.kind === "branch" && mainWt && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8"
+            disabled={switching}
+            onClick={() => void checkout((graph.view as { branch: string }).branch, mainWt.branch, mainWt.path)}
+            title={`git switch the main checkout (${mainWt.path}, now on ${mainWt.branch ?? "a detached HEAD"}) to this branch: its dev server follows`}
+          >
+            <ArrowRightLeft className="size-3.5" />
+            {switching ? "Checking out…" : "Check out"}
+          </Button>
+        )}
         <span className="text-xs text-muted-foreground">
           {graph.rows.length} commit{graph.rows.length === 1 ? "" : "s"}
           {graph.truncated && " (latest 200)"}
@@ -242,6 +324,41 @@ export function GitGraphView({
           <Badge variant="destructive" title={graph.status.map((f) => `${f.code} ${f.path}`).join("\n")}>
             {graph.status.length} uncommitted
           </Badge>
+        )}
+        {graph.checkout && graph.status.length > 0 && (
+          <Button size="sm" variant="outline" className="h-8" onClick={() => setCommitting(true)} title={`Commit in ${graph.checkout}`}>
+            <GitCommitHorizontal className="size-3.5" />
+            Commit…
+          </Button>
+        )}
+        {graph.sync?.origin && graph.sync.ahead > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8"
+            disabled={pushing}
+            onClick={() => void push()}
+            title={
+              `git push ${graph.sync.branch} to origin/${graph.sync.branch}` +
+              (graph.sync.onOrigin ? "" : " (new there)") +
+              (graph.sync.behind > 0 ? ` — origin has ${graph.sync.behind} commit(s) this branch lacks: git will refuse until you pull` : "")
+            }
+          >
+            <Upload className="size-3.5" />
+            {pushing ? "Pushing…" : `Push ↑${graph.sync.ahead}`}
+          </Button>
+        )}
+        {committing && graph.checkout && (
+          <GitCommitDialog
+            projectSlug={projectSlug}
+            app={app}
+            view={view}
+            checkout={graph.checkout}
+            files={graph.status}
+            sync={graph.sync}
+            onClose={() => setCommitting(false)}
+            onDone={() => void reread()}
+          />
         )}
         <div className="ml-auto flex items-center gap-2">
           <Button

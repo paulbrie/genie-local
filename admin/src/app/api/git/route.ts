@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getGraph, getViews, listRepos, resolveRepo, type GraphView } from "@/lib/git-graph";
+import { getGraph, getViews, listRepos, parseView, resolveRepo } from "@/lib/git-graph";
 
 export const dynamic = "force-dynamic";
 
@@ -41,12 +41,7 @@ export async function GET(request: Request) {
   if (!repoDir)
     return NextResponse.json({ error: "no git repo" }, { status: 404 });
 
-  const v = searchParams.get("view") ?? "";
-  const view: GraphView = v.startsWith("branch:")
-    ? { kind: "branch", branch: v.slice(7) }
-    : v.startsWith("wt:")
-      ? { kind: "worktree", path: v.slice(3) }
-      : { kind: "all" };
+  const view = parseView(searchParams.get("view"));
   try {
     const [graph, views] = await Promise.all([getGraph(repoDir, view), getViews(repoDir)]);
     return NextResponse.json({ repos, app, graph, views }, noStore);

@@ -1,6 +1,8 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -126,7 +128,19 @@ export async function previewMerge(repoDir: string, branch: string): Promise<Mer
   };
 }
 
-let merging = false;
+// one merge, checkout, commit or push at a time, from the admin
+let busy: string | null = null;
+
+/** Run `fn` unless another git write from the admin is under way (then refuse). */
+export async function withRepoLock<T>(what: string, fn: () => Promise<T>): Promise<T> {
+  if (busy) throw new Error(`another ${busy} is running`);
+  busy = what;
+  try {
+    return await fn();
+  } finally {
+    busy = null;
+  }
+}
 
 /**
  * Merge `branch` into the main checkout's branch, in that checkout: a
@@ -135,9 +149,7 @@ let merging = false;
  * would overwrite uncommitted work there; a failed merge is aborted.
  */
 export async function mergeBranch(repoDir: string, branch: string, expectHead: string): Promise<{ head: string; fastForward: boolean }> {
-  if (merging) throw new Error("another merge is running");
-  merging = true;
-  try {
+  return withRepoLock("merge", async () => {
     const p = await previewMerge(repoDir, branch);
     if (p.targetHead !== expectHead) throw new Error(`${p.target} moved since the preview: look again`);
     if (p.conflicts.length) throw new Error(`it would conflict in ${p.conflicts.length} file(s): merge it by hand`);
@@ -155,7 +167,56 @@ export async function mergeBranch(repoDir: string, branch: string, expectHead: s
     const head = (await git(t.dir, ["rev-parse", "HEAD"])).trim();
     console.log(`[git-merge] ${branch} → ${t.branch} in ${t.dir}: ${p.fastForward ? "fast-forward" : "merge commit"} ${head}`);
     return { head, fastForward: p.fastForward };
-  } finally {
-    merging = false;
-  }
+  });
+}
+
+const IN_PROGRESS: [string, string][] = [
+  ["MERGE_HEAD", "merge"],
+  ["rebase-merge", "rebase"],
+  ["rebase-apply", "rebase"],
+  ["CHERRY_PICK_HEAD", "cherry-pick"],
+  ["REVERT_HEAD", "revert"],
+];
+
+/**
+ * Switch the repo's main checkout to another local branch (`git switch`), so
+ * what runs from it (the dev server) follows. Strict: refuses with uncommitted
+ * changes to tracked files, while a merge / rebase / cherry-pick is under way,
+ * or when the branch is checked out in a worktree (git allows a branch in one
+ * place only). Untracked files stay; git itself refuses if the switch would
+ * overwrite one.
+ */
+export async function switchBranch(
+  repoDir: string,
+  branch: string,
+): Promise<{ dir: string; from: string | null; to: string; head: string }> {
+  return withRepoLock("checkout", async () => {
+    await checkBranch(repoDir, branch);
+    const blocks = (await git(repoDir, ["worktree", "list", "--porcelain"])).trim().split(/\n\n+/);
+    const dir = /^worktree (.+)$/m.exec(blocks[0] ?? "")?.[1];
+    if (!dir) throw new Error("no main checkout");
+    const from = /^branch refs\/heads\/(.+)$/m.exec(blocks[0])?.[1] ?? null;
+    if (from === branch) throw new Error(`the checkout is already on ${branch}`);
+    const elsewhere = blocks.slice(1).find((b) => /^branch refs\/heads\/(.+)$/m.exec(b)?.[1] === branch);
+    if (elsewhere) {
+      throw new Error(
+        `${branch} is checked out in the worktree ${/^worktree (.+)$/m.exec(elsewhere)?.[1]}: git allows a branch in one place only`,
+      );
+    }
+    const gitDir = (await git(dir, ["rev-parse", "--absolute-git-dir"])).trim();
+    const op = IN_PROGRESS.find(([f]) => existsSync(path.join(gitDir, f)))?.[1];
+    if (op) throw new Error(`a ${op} is under way in the checkout: finish or abort it first`);
+    const dirty = (await git(dir, ["status", "--porcelain", "--untracked-files=no"])).split("\n").filter(Boolean);
+    if (dirty.length) {
+      const some = dirty.slice(0, 5).map((l) => l.slice(3)).join(", ");
+      throw new Error(
+        `${dirty.length} uncommitted change${dirty.length === 1 ? "" : "s"} in the checkout (${some}${dirty.length > 5 ? ", …" : ""}): commit or stash them first`,
+      );
+    }
+    const res = await gitStatus(dir, ["switch", "--no-guess", branch]);
+    if (res.code !== 0) throw new Error((res.err || res.out).trim().split("\n").slice(0, 6).join(" ") || "git switch failed");
+    const head = (await git(dir, ["rev-parse", "HEAD"])).trim();
+    console.log(`[git-checkout] ${dir}: ${from ?? "(detached)"} → ${branch} ${head}`);
+    return { dir, from, to: branch, head };
+  });
 }

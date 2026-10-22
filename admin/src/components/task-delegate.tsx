@@ -15,7 +15,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import type { Task } from "@/db/schema";
 import { formatRelativeTime } from "@/lib/format";
 import type { DelegateTarget } from "@/lib/task-delegate";
-import { liveTerminals } from "@/store/terminals";
+import { liveTerminals, openTerminal } from "@/store/terminals";
 
 const STATE: Record<string, { label: string; color: string }> = {
   "claude-idle": { label: "idle", color: "bg-emerald-500" },
@@ -86,7 +86,19 @@ export function TaskDelegate({ slug, task }: { slug: string; task: Task }) {
           {/* the agent's live Claude state, as on the card */}
           {assigneeGlyph && <ClaudeGlyph state={assigneeGlyph} />}
           <span>
-            Assigned to <span className="font-medium">{task.assignee}</span>
+            Assigned to{" "}
+            {assigneeLive ? (
+              <button
+                type="button"
+                onClick={() => openTerminal(task.assignee!)}
+                className="font-medium hover:underline"
+                title={`Open ${task.assignee}'s terminal`}
+              >
+                {task.assignee}
+              </button>
+            ) : (
+              <span className="font-medium">{task.assignee}</span>
+            )}
             <span className="text-muted-foreground">
               {" "}
               · {formatRelativeTime(task.assignedAt)}

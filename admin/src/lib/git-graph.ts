@@ -58,8 +58,23 @@ export type GitStatusFile = {
   /** Two-char porcelain XY code, e.g. " M", "??", "A ". */
   code: string;
   path: string;
+  /** a rename's or copy's old path */
+  from?: string;
   staged: boolean;
   unstaged: boolean;
+};
+
+/** A checkout's branch against origin: what Push would send. */
+export type GitSync = {
+  branch: string;
+  /** the repo has an "origin" remote */
+  origin: boolean;
+  /** origin/<branch> exists */
+  onOrigin: boolean;
+  /** commits origin/<branch> lacks (never pushed: commits on no remote at all) */
+  ahead: number;
+  /** commits origin/<branch> has that the branch lacks (pull first) */
+  behind: number;
 };
 
 export type GitGraph = {
@@ -70,6 +85,10 @@ export type GitGraph = {
   columns: number;
   rows: GraphRow[];
   status: GitStatusFile[];
+  /** the checkout `status` is from, where Commit and Push act; null: the branch isn't checked out */
+  checkout: string | null;
+  /** that checkout's branch against origin; null: detached, or no checkout */
+  sync: GitSync | null;
   /** True when the log was truncated at LOG_LIMIT. */
   truncated: boolean;
 };
@@ -79,6 +98,13 @@ export type GraphView =
   | { kind: "all" }
   | { kind: "branch"; branch: string }
   | { kind: "worktree"; path: string };
+
+/** A view as the API takes it: "branch:<name>", "wt:<path>", anything else = all. */
+export function parseView(v: string | null | undefined): GraphView {
+  if (v?.startsWith("branch:")) return { kind: "branch", branch: v.slice(7) };
+  if (v?.startsWith("wt:")) return { kind: "worktree", path: v.slice(3) };
+  return { kind: "all" };
+}
 
 /** The views on offer: local branches, and the repo's worktrees. */
 export type GraphViews = {
@@ -209,28 +235,49 @@ async function readLog(repoDir: string, rev?: string): Promise<Commit[]> {
   return commits;
 }
 
-async function readStatus(repoDir: string): Promise<GitStatusFile[]> {
+export async function readStatus(repoDir: string): Promise<GitStatusFile[]> {
   let out: string;
   try {
-    out = await git(repoDir, ["status", "--porcelain=v1"]);
+    // -z: paths verbatim (no quoting), a rename as "XY new\0old\0"
+    out = await git(repoDir, ["status", "--porcelain=v1", "-z"]);
   } catch {
     return [];
   }
   const files: GitStatusFile[] = [];
-  for (const line of out.split("\n")) {
-    if (line.length < 4) continue;
-    const code = line.slice(0, 2);
-    // Porcelain path starts at col 3; a rename shows "old -> new" — keep new.
-    const rest = line.slice(3);
-    const p = rest.includes(" -> ") ? rest.split(" -> ")[1] : rest;
-    files.push({
+  const parts = out.split("\0");
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i];
+    if (entry.length < 4) continue;
+    const code = entry.slice(0, 2);
+    const file: GitStatusFile = {
       code,
-      path: p,
+      path: entry.slice(3),
       staged: code[0] !== " " && code[0] !== "?",
       unstaged: code[1] !== " ",
-    });
+    };
+    if (code[0] === "R" || code[0] === "C") file.from = parts[++i];
+    files.push(file);
   }
   return files;
+}
+
+/** Where a checkout's branch stands against origin (local refs: Refresh fetches them). */
+export async function readSync(dir: string): Promise<GitSync | null> {
+  const branch = (await git(dir, ["symbolic-ref", "--short", "-q", "HEAD"]).catch(() => "")).trim();
+  if (!branch) return null;
+  const origin = (await git(dir, ["remote"]).catch(() => "")).split("\n").includes("origin");
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  const onOrigin =
+    origin && (await git(dir, ["rev-parse", "--verify", "--quiet", remoteRef]).then(() => true, () => false));
+  if (onOrigin) {
+    const [behind, ahead] = (await git(dir, ["rev-list", "--left-right", "--count", `${remoteRef}...refs/heads/${branch}`]))
+      .trim()
+      .split(/\s+/)
+      .map(Number);
+    return { branch, origin, onOrigin, ahead: ahead || 0, behind: behind || 0 };
+  }
+  const ahead = Number((await git(dir, ["rev-list", "--count", `refs/heads/${branch}`, "--not", "--remotes"]).catch(() => "0")).trim());
+  return { branch, origin, onOrigin, ahead: ahead || 0, behind: 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +404,23 @@ export async function getViews(repoDir: string): Promise<GraphViews> {
 }
 
 /**
+ * The checkout a view's status comes from, and Commit / Push act in: the main
+ * checkout (all), the worktree a branch is checked out in (null if none), or
+ * the worktree itself, all as git lists them (nothing user-typed is a path).
+ */
+export async function checkoutDir(repoDir: string, view: GraphView): Promise<string | null> {
+  if (view.kind === "all") return repoDir;
+  const { branches, worktrees } = await getViews(repoDir);
+  if (view.kind === "branch") {
+    if (!branches.includes(view.branch)) throw new Error(`no local branch ${view.branch}`);
+    return worktrees.find((w) => w.branch === view.branch)?.path ?? null;
+  }
+  const wt = worktrees.find((w) => w.path === view.path);
+  if (!wt) throw new Error(`no worktree at ${view.path}`);
+  return wt.path;
+}
+
+/**
  * Full graph payload for a repo: branch, placed rows, working-tree status.
  * `view` narrows it to a local branch (its history; the status of the worktree
  * it's checked out in, if any) or a worktree (its HEAD's history and its own
@@ -364,21 +428,10 @@ export async function getViews(repoDir: string): Promise<GraphViews> {
  * reaches git as a path or an option.
  */
 export async function getGraph(repoDir: string, view: GraphView = { kind: "all" }): Promise<GitGraph> {
-  let dir = repoDir;
-  let rev: string | undefined;
-  let statusDir: string | null = repoDir;
-  if (view.kind === "branch") {
-    const { branches, worktrees } = await getViews(repoDir);
-    if (!branches.includes(view.branch)) throw new Error(`no local branch ${view.branch}`);
-    rev = `refs/heads/${view.branch}`;
-    statusDir = worktrees.find((w) => w.branch === view.branch)?.path ?? null;
-  } else if (view.kind === "worktree") {
-    const wt = (await readWorktrees(repoDir)).find((w) => w.path === view.path);
-    if (!wt) throw new Error(`no worktree at ${view.path}`);
-    dir = statusDir = wt.path;
-    rev = "HEAD";
-  }
-  const [branch, commits, status] = await Promise.all([
+  const statusDir = await checkoutDir(repoDir, view);
+  const dir = view.kind === "worktree" && statusDir ? statusDir : repoDir;
+  const rev = view.kind === "branch" ? `refs/heads/${view.branch}` : view.kind === "worktree" ? "HEAD" : undefined;
+  const [branch, commits, status, sync] = await Promise.all([
     view.kind === "branch"
       ? Promise.resolve(view.branch)
       : git(dir, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -386,6 +439,7 @@ export async function getGraph(repoDir: string, view: GraphView = { kind: "all" 
           .catch(() => null),
     readLog(dir, rev),
     statusDir ? readStatus(statusDir) : Promise.resolve([]),
+    statusDir ? readSync(statusDir) : Promise.resolve(null),
   ]);
   const { rows, columns } = assignLanes(commits);
   return {
@@ -394,6 +448,8 @@ export async function getGraph(repoDir: string, view: GraphView = { kind: "all" 
     columns,
     rows,
     status,
+    checkout: statusDir,
+    sync,
     truncated: commits.length >= LOG_LIMIT,
   };
 }
