@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
+import { GitWorktrees } from "@/components/git-worktrees";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -150,6 +151,9 @@ export function GitGraphView({
           )}
         </div>
       </div>
+
+      {/* Where agents work: one worktree each, on their own branch. */}
+      <GitWorktrees projectSlug={projectSlug} app={app} />
 
       {/* Graph + commit list */}
       <ScrollArea className="max-h-[75vh] rounded-md border">
