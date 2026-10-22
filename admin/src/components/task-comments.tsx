@@ -6,7 +6,7 @@ import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { addTaskCommentAction, deleteTaskCommentAction, notifyCommentAction, type CommentNotice } from "@/app/actions";
-import { attachmentUrl, filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
+import { attachmentUrl, filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskAttachment, TaskComment } from "@/db/schema";
@@ -54,9 +54,12 @@ export function TaskComments({
 
   function submit() {
     const el = inputRef.current;
-    const body = el?.value.trim() || (files.length ? "(files)" : "");
-    if (!el || !body) return;
-    const sending = files;
+    const typed = el?.value.trim() || (files.length ? "(files)" : "");
+    if (!el || !typed) return;
+    // A too-long comment (pasted data) goes to a .txt file with it; the comment keeps an excerpt.
+    const spilled = spillLongText(typed, "comment");
+    const body = spilled.text;
+    const sending = spilled.file ? [...files, spilled.file] : files;
     startTransition(async () => {
       try {
         // With files: comment, upload them to it, then tell the agent (so it sees them).

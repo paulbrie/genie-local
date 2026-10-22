@@ -16,7 +16,7 @@ import {
   moveTaskAction,
 } from "@/app/actions";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
-import { filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
+import { filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
 import { LastTicket } from "@/components/last-ticket";
 import { useTaskLive } from "@/components/use-task-live";
@@ -100,7 +100,10 @@ export function TaskBoard({
     const form = e.currentTarget;
     const formData = new FormData(form);
     if (!(formData.get("title") as string)?.trim()) return;
-    const files = newFiles;
+    // A too-long description (pasted data) goes to a .txt attachment; the ticket keeps an excerpt.
+    const spilled = spillLongText(String(formData.get("description") ?? ""), "description");
+    formData.set("description", spilled.text);
+    const files = spilled.file ? [...newFiles, spilled.file] : newFiles;
     startTransition(async () => {
       try {
         const taskId = await addTaskAction(slug, formData);
@@ -110,7 +113,11 @@ export function TaskBoard({
         }
         form.reset();
         setNewFiles([]);
-        toast.success(`Task #${taskId} added`);
+        toast.success(
+          spilled.file
+            ? `Task #${taskId} added; its long description is attached as ${spilled.file.name}`
+            : `Task #${taskId} added`,
+        );
       } catch (err) {
         toast.error(err instanceof Error ? err.message : String(err));
       }

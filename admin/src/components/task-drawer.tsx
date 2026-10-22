@@ -6,7 +6,7 @@ import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { updateTaskAction } from "@/app/actions";
-import { TaskAttachments, filesFromPaste, uploadTaskFiles } from "@/components/task-attachments";
+import { TaskAttachments, filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { TaskComments } from "@/components/task-comments";
 import { TaskDelegate } from "@/components/task-delegate";
 import { Button } from "@/components/ui/button";
@@ -86,15 +86,24 @@ export function TaskDrawer({
       toast.error("Commit must be a git sha (4 to 64 hex characters)");
       return;
     }
+    // A too-long description (pasted data) goes to a .txt attachment; the ticket keeps an excerpt.
+    const spilled = spillLongText(description, "description");
     startTransition(async () => {
       try {
         await updateTaskAction(slug, task.id, {
           title,
-          description: description || null,
+          description: spilled.text || null,
           status,
           commitSha: commitSha || null,
         });
-        toast.success("Task updated");
+        if (spilled.file) {
+          await uploadTaskFiles(slug, task.id, [spilled.file]);
+          setDescription(spilled.text);
+          router.refresh();
+          toast.success(`Task updated; its long description is attached as ${spilled.file.name}`);
+        } else {
+          toast.success("Task updated");
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : String(err));
       }

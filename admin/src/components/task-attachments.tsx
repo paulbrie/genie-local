@@ -37,6 +37,24 @@ export async function uploadTaskFiles(
   }
 }
 
+/** The longest description / comment kept inline (the server's own limit is 5000). */
+export const TEXT_LIMIT = 5000;
+const EXCERPT = 1500;
+
+/**
+ * Text too long for a ticket or comment (usually pasted data) is spilled to a
+ * .txt attachment: the ticket keeps an excerpt and a note naming the file, so
+ * it can still be saved, and agents read the whole text from the attachment.
+ */
+export function spillLongText(text: string, base: string): { text: string; file: File | null } {
+  if (text.length <= TEXT_LIMIT) return { text, file: null };
+  const name = `${base}-${stamp()}.txt`;
+  return {
+    text: `${text.slice(0, EXCERPT).trimEnd()}\n\n… ${text.length.toLocaleString("en")} characters in all: the full text is attached as ${name}.`,
+    file: new File([text], name, { type: "text/plain" }),
+  };
+}
+
 function stamp() {
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
 }
