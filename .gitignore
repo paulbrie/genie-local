@@ -21,6 +21,8 @@ out/
 # Runtime logs / pids / caches
 .run-logs/
 .stats-history/
+# files attached to tickets and comments in the admin (screenshots, pasted data)
+.task-attachments/
 *.log
 *.pid
 
