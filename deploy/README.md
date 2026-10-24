@@ -1,7 +1,7 @@
 # deploy/ — replicate the Genie server on a fresh Ubuntu 24.04 box
 
 Reproduces the reference server documented in the top-level [`README.md`](../README.md):
-Node 20, PostgreSQL 17 (PGDG), nginx, tmux, the Claude Code CLI, the **admin**
+Node 24 (>= 24.22.1), PostgreSQL 17 (PGDG), nginx, tmux, the Claude Code CLI, the **admin**
 Next.js dashboard (systemd: PROD `next start` at `/admin` on :3002 and an
 on-demand DEV `next dev` at `/admin-dev` on :3003, behind nginx :3000), the
 `genie-stats` publisher, and (optionally) code-server.
