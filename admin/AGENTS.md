@@ -137,3 +137,35 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 - Dashboard (`src/app/page.tsx`) and detail (`src/app/projects/[slug]/page.tsx`)
   are `dynamic = 'force-dynamic'` (they read live signals every load). `params`
   is a `Promise` — `await` it.
+- **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
+  shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
+  reactions, live cursors, follow mode). Pieces:
+  · `src/lib/boards/core.mjs` (+ `core.d.mts`) — the doc model and `applyOps`, plain
+    JS so both the browser and the raw-Node hub import it. A board is one jsonb doc
+    (`boards.doc`); edits are small ops (put/patch/del/vote/reply/meta/chat), a patch
+    sets whole fields, last writer wins per field in the hub's order. Tests:
+    `core.test.ts`.
+  · `server/boards.mjs` — the hub, in the custom server like the PTY bridge: the
+    `<basePath>/boards-ws?board=<id>` socket (cookie + Origin checked in
+    `server.mjs`), one in-memory room per open board, broadcasts every batch (the
+    sender's copy is its ack), relays presence, saves `doc` 1.2 s after an edit, on
+    the last disconnect and on SIGTERM (an abrupt crash can lose that last second).
+    Next route handlers reach it through `globalThis.__boardsHub` (same process).
+  · Identity: the admin has one shared login, so each browser picks a display name
+    and colour, kept in localStorage (`src/components/boards/identity.ts`).
+  · Claude is a participant: asked in the board's Claude panel, `@claude` in a
+    comment, or the opt-in facilitator (after 45 s of quiet, at most every 4 min,
+    adds up to 3 suggestions people keep or dismiss). `server/boards-claude.mjs`
+    runs the logged-in `claude` CLI (default model, every tool disallowed, admin
+    secrets stripped from its env) and gets back `{ reply, ops }` in the agent op
+    language (`translateAgentOps`), which the hub plays back with Claude's cursor.
+  · Agents: `/api/boards` (list/create), `/api/boards/<id>` (GET doc + one JSON line
+    per item, `?format=text`; PATCH title/archived; DELETE archived), `POST
+    /api/boards/<id>/ops` (`{ agent, ops, chat? }`, applied live with the agent's
+    cursor). Auth: the session cookie, or `x-api-key: $BOARDS_API_KEY` (proxy.ts,
+    like `DIAGRAMS_API_KEY`; kept out of terminals and agent runs).
+    `scripts/boards-mcp.mjs` wraps it as an MCP server (`boards_list`,
+    `board_read`, `board_edit`, `board_create`); setup in its header.
+  · Images: `POST /api/boards/<id>/assets` saves to `BOARD_ASSETS_DIR`
+    (`/opt/project/.board-assets/<id>/`), served by `/api/boards/assets/<id>/<file>`;
+    raster types only.

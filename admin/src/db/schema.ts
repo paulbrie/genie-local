@@ -286,9 +286,32 @@ export const diagrams = pgTable("diagrams", {
     .defaultNow(),
 });
 
+/**
+ * A collaborative whiteboard (/boards). The whole board lives in `doc` (see
+ * src/lib/boards/core.mjs): the board hub in server.mjs keeps open boards in
+ * memory and writes `doc` back a moment after each edit, so rows are only
+ * read directly while nobody has the board open.
+ */
+export const boards = pgTable("boards", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  doc: jsonb("doc").notNull().default({}),
+  // The display name of whoever created it (the admin has one shared login).
+  createdBy: text("created_by"),
+  // Soft-delete marker, as for diagrams: non-null = archived.
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type Connection = typeof connections.$inferSelect;
 export type SavedQuery = typeof savedQueries.$inferSelect;
 export type Diagram = typeof diagrams.$inferSelect;
+export type Board = typeof boards.$inferSelect;
 
 export type Project = typeof projects.$inferSelect;
 export type App = typeof apps.$inferSelect;

@@ -66,6 +66,16 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Same for boards: agents read and edit whiteboards with BOARDS_API_KEY.
+  const boardsKey = process.env.BOARDS_API_KEY;
+  if (
+    boardsKey &&
+    path.startsWith("/api/boards") &&
+    timingSafeEqual(req.headers.get("x-api-key") ?? "", boardsKey)
+  ) {
+    return NextResponse.next();
+  }
+
   // API → 401 JSON; pages → redirect to this instance's login page.
   if (path.startsWith("/api/")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
