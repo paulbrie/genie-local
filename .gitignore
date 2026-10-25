@@ -23,6 +23,8 @@ out/
 .stats-history/
 # files attached to tickets and comments in the admin (screenshots, pasted data)
 .task-attachments/
+# images people put on the admin's boards
+.board-assets/
 *.log
 *.pid
 
