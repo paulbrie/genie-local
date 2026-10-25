@@ -139,7 +139,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is a `Promise` — `await` it.
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
-  reactions, live cursors, follow mode). Sections fold: the chevron on the title
+  reactions, live cursors, follow mode). A selected section has **Tidy** (lay its contents on a grid, in reading order,
+  and size the frame to match) and **Fit** (size the frame around what it holds);
+  both are pure helpers in core (`arrangeSectionOps`, `fitSectionOps`) that agents
+  can call as the `arrange` / `fit` ops. Sections fold: the chevron on the title
   collapses the frame to a bar with a count, and what's inside drops out of sight,
   of hit-testing and of the selection (`hiddenByCollapsed`). Drawing a connector
   highlights the ends it would attach to; someone working outside your view shows as a marker on the edge

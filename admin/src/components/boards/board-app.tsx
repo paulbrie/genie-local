@@ -12,6 +12,7 @@ import {
   Eraser,
   Frame,
   Hand,
+  LayoutGrid,
   ImagePlus,
   Maximize,
   MessageCircle,
@@ -20,6 +21,7 @@ import {
   Pencil,
   Redo2,
   SendToBack,
+  Shrink,
   Sparkles,
   Square,
   StickyNote,
@@ -47,7 +49,9 @@ import {
   CLAUDE_COLOR,
   CLAUDE_ID,
   COLORS,
+  arrangeSectionOps,
   contentBounds,
+  fitSectionOps,
   hiddenByCollapsed,
   INKS,
   maxZ,
@@ -304,6 +308,28 @@ function SelectionBar({
         />
       )}
       {inks && <Swatches small nowrap colors={Object.values(INKS)} value={first.color as string} onPick={(c) => patchAll({ color: c })} />}
+      {only === "section" && objs.length === 1 && (
+        <div className="ml-1 flex gap-0.5 border-l pl-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Tidy the contents onto a grid and size the frame to match"
+            onClick={() => sync.apply(arrangeSectionOps(doc, objs[0].id))}
+            data-testid="section-arrange"
+          >
+            <LayoutGrid /> Tidy
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Resize the frame around what it holds"
+            onClick={() => sync.apply(fitSectionOps(doc, objs[0].id))}
+            data-testid="section-fit"
+          >
+            <Shrink /> Fit
+          </Button>
+        </div>
+      )}
       {only === "shape" && (
         <div className="ml-1 flex gap-0.5 border-l pl-1">
           {SHAPES.map((s) => {

@@ -144,3 +144,6 @@ export function describeBoard(
   opts?: { only?: Set<string>; maxText?: number; names?: boolean },
 ): string;
 export function hiddenByCollapsed(doc: BoardDoc): Set<string>;
+export function sectionChildIds(doc: BoardDoc, sectionId: string): string[];
+export function fitSectionOps(doc: BoardDoc, sectionId: string, pad?: number): Op[];
+export function arrangeSectionOps(doc: BoardDoc, sectionId: string, opts?: { gap?: number; pad?: number }): Op[];

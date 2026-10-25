@@ -583,6 +583,15 @@ export function translateAgentOps(doc, agentOps, actor, now) {
       if (Object.keys(set).length) push({ k: "patch", id, set });
       return;
     }
+    if (kind === "arrange" || kind === "fit") {
+      const id = resolve(a.id);
+      if (!id || work.objects[id].type !== "section") {
+        errors.push(`#${i}: ${kind} needs a section id`);
+        return;
+      }
+      for (const op of kind === "arrange" ? arrangeSectionOps(work, id) : fitSectionOps(work, id)) push(op);
+      return;
+    }
     if (kind === "delete") {
       const id = resolve(a.id);
       if (id) push({ k: "del", id });
@@ -722,4 +731,77 @@ export function hiddenByCollapsed(doc) {
     }
   }
   return hidden;
+}
+
+// ---------------------------------------------------------------- sections
+
+/** What sits in a section: anything (bar connectors) whose middle is inside it. */
+export function sectionChildIds(doc, sectionId) {
+  const s = doc.objects[sectionId];
+  if (!s || s.type !== "section") return [];
+  return Object.values(doc.objects)
+    .filter((o) => {
+      if (o.id === s.id || o.type === "connector") return false;
+      const cx = o.x + o.w / 2;
+      const cy = o.y + o.h / 2;
+      return cx >= s.x && cx <= s.x + s.w && cy >= s.y && cy <= s.y + s.h;
+    })
+    .map((o) => o.id);
+}
+
+const SECTION_PAD = 40;
+const SECTION_GAP = 24;
+
+/** Resize a section around what it holds, leaving everything where it is. */
+export function fitSectionOps(doc, sectionId, pad = SECTION_PAD) {
+  const s = doc.objects[sectionId];
+  const kids = sectionChildIds(doc, sectionId).map((id) => doc.objects[id]);
+  if (!s || !kids.length) return [];
+  const x1 = Math.min(...kids.map((o) => o.x));
+  const y1 = Math.min(...kids.map((o) => o.y));
+  const x2 = Math.max(...kids.map((o) => o.x + o.w));
+  const y2 = Math.max(...kids.map((o) => o.y + o.h));
+  return [
+    {
+      k: "patch",
+      id: s.id,
+      set: { x: Math.round(x1 - pad), y: Math.round(y1 - pad), w: Math.round(x2 - x1 + pad * 2), h: Math.round(y2 - y1 + pad * 2) },
+    },
+  ];
+}
+
+/**
+ * Lay a section's contents out on a grid in reading order and size the section
+ * to match. Cells are as big as the largest item so rows and columns line up;
+ * the number of columns comes from the section's present width, so a wide frame
+ * stays wide. Connectors follow their ends on their own.
+ */
+export function arrangeSectionOps(doc, sectionId, { gap = SECTION_GAP, pad = SECTION_PAD } = {}) {
+  const s = doc.objects[sectionId];
+  if (!s) return [];
+  const kids = sectionChildIds(doc, sectionId)
+    .map((id) => doc.objects[id])
+    // Reading order, with a row tolerance so a slightly uneven row stays a row.
+    .sort((a, b) => (Math.abs(a.y - b.y) > Math.min(a.h, b.h) / 2 ? a.y - b.y : a.x - b.x));
+  if (!kids.length) return [];
+  const cellW = Math.max(...kids.map((o) => o.w));
+  const cellH = Math.max(...kids.map((o) => o.h));
+  const fit = Math.floor((s.w - pad * 2 + gap) / (cellW + gap));
+  const cols = Math.max(1, Math.min(kids.length, fit || 1));
+  const rows = Math.ceil(kids.length / cols);
+  const ops = kids.map((o, i) => ({
+    k: "patch",
+    id: o.id,
+    set: {
+      // Each item centred in its cell, so mixed sizes still look tidy.
+      x: Math.round(s.x + pad + (i % cols) * (cellW + gap) + (cellW - o.w) / 2),
+      y: Math.round(s.y + pad + Math.floor(i / cols) * (cellH + gap) + (cellH - o.h) / 2),
+    },
+  }));
+  ops.push({
+    k: "patch",
+    id: s.id,
+    set: { w: Math.round(pad * 2 + cols * cellW + (cols - 1) * gap), h: Math.round(pad * 2 + rows * cellH + (rows - 1) * gap) },
+  });
+  return ops;
 }

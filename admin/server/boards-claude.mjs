@@ -304,6 +304,9 @@ const OPS_HELP = `Ops you can use (a JSON array, applied in order):
 - {"op":"connect","from":"<id or ref>","to":"<id or ref>","label":"optional"}   an arrow between two items
 - {"op":"update","id":"<id or ref>", …only the fields to change: x, y, w, h, text, title, color, shape, label}
 - {"op":"delete","id":"<id>"}   only when asked to remove something
+- {"op":"arrange","id":"<section id>"}  tidy that section's contents onto a grid and size the section to match
+- {"op":"fit","id":"<section id>"}      resize a section around what it already holds
+- a section takes {"collapsed":true} to fold it to a bar, or false to open it
 - {"op":"reply","id":"<comment id>","text":"…"}
 Colours: yellow, orange, red, pink, purple, blue, teal, green, gray, white.
 Coordinates are board pixels: x grows right, y grows down, x/y is an item's top-left corner. Lay things out tidily on a grid with about 40px gaps; don't drop new items on top of existing ones unless you are rearranging them.`;
