@@ -139,7 +139,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is a `Promise` — `await` it.
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
-  reactions, live cursors, follow mode). A selected section has **Tidy** (lay its contents on a grid, in reading order,
+  reactions, live cursors, follow mode). Sticky / text / shape text renders as Markdown through
+  `src/components/markdown.tsx` (tables, links, lists, code; no
+  `dangerouslySetInnerHTML`, link schemes filtered) — editing is the raw Markdown.
+  Links answer the pointer only once their object is selected, so dragging one
+  about doesn't open tabs; text that is nothing but a URL draws as a link card.
+  A selected section has **Tidy** (lay its contents on a grid, in reading order,
   and size the frame to match) and **Fit** (size the frame around what it holds);
   both are pure helpers in core (`arrangeSectionOps`, `fitSectionOps`) that agents
   can call as the `arrange` / `fit` ops. Sections fold: the chevron on the title

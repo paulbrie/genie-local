@@ -770,6 +770,7 @@ export function BoardCanvas(props: Props) {
               me={me}
               handlers={handlers}
               hiddenCount={foldedCounts.get(o.id)}
+              selected={selected.has(o.id)}
               lockedBy={remoteEditing.get(o.id)}
             />
           ),

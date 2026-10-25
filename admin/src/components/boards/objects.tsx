@@ -1,8 +1,9 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useRef } from "react";
-import { Check, ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, ExternalLink, Sparkles, X } from "lucide-react";
 
+import { Markdown } from "@/components/markdown";
 import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
@@ -193,12 +194,67 @@ type Props = {
   handlers: ObjectHandlers;
   /** How many things a folded section is hiding. */
   hiddenCount?: number;
+  /** Selected: its links become clickable (otherwise a click just picks it up). */
+  selected?: boolean;
   /** Someone else is typing in it (their colour). */
   lockedBy?: string;
 };
 
 /** One board object in world coordinates (connectors render via ConnectorView). */
-export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0 }: Props) {
+/** The address, when the whole of the text is one http(s) link and nothing else. */
+function soleUrl(text: string): URL | null {
+  const t = text.trim();
+  if (/\s/.test(t)) return null;
+  try {
+    const u = new URL(t);
+    return u.protocol === "http:" || u.protocol === "https:" ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Nothing but a link: show it as a card rather than a line of blue text, so a
+ * pasted address reads as the thing it points at.
+ */
+function LinkCard({ url, selected }: { url: URL; selected?: boolean }) {
+  const rest = `${url.pathname}${url.search}`.replace(/\/$/, "");
+  return (
+    <a
+      href={url.href}
+      target="_blank"
+      rel="noreferrer"
+      className={cn(
+        "flex items-center gap-2 rounded-md bg-black/5 px-2 py-1.5 text-left no-underline",
+        selected ? "pointer-events-auto hover:bg-black/10" : "pointer-events-none",
+      )}
+      title={url.href}
+    >
+      <ExternalLink className="size-[1.1em] shrink-0 opacity-60" />
+      <span className="min-w-0">
+        <span className="block truncate font-semibold">{url.host.replace(/^www\./, "")}</span>
+        {rest && rest !== "/" && <span className="block truncate text-[0.8em] opacity-60">{rest}</span>}
+      </span>
+    </a>
+  );
+}
+
+/**
+ * Written text as Markdown — tables, links, lists, code. Links only answer the
+ * pointer once the thing they're on is selected, so dragging a sticky around
+ * doesn't keep opening tabs.
+ */
+function Body({ text, className, selected }: { text: string; className?: string; selected?: boolean }) {
+  const url = soleUrl(text);
+  if (url) return <LinkCard url={url} selected={selected} />;
+  return (
+    <div className={cn("pointer-events-none", selected && "[&_a]:pointer-events-auto")}>
+      <Markdown source={text} breaks className={cn("space-y-1", className)} />
+    </div>
+  );
+}
+
+export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0, selected }: Props) {
   const box: React.CSSProperties = { left: o.x, top: o.y, width: o.w, height: o.h, zIndex: o.z };
   const ring = lockedBy ? { boxShadow: `0 0 0 2px ${lockedBy}` } : undefined;
   const suggestion = o.suggestion ? <SuggestionBar id={o.id} h={handlers} /> : null;
@@ -223,8 +279,8 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
                 style={{ fontSize: fs, height: "100%" }}
               />
             ) : (
-              <div className="whitespace-pre-wrap break-words text-center leading-snug" style={{ fontSize: fs }}>
-                {o.text}
+              <div className="break-words text-center leading-snug" style={{ fontSize: fs }}>
+                <Body text={o.text} className="text-zinc-900" selected={selected} />
               </div>
             )}
           </div>
@@ -251,8 +307,8 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
               style={{ fontSize: o.fontSize, color: o.color }}
             />
           ) : (
-            <div className="whitespace-pre-wrap break-words leading-tight" style={{ fontSize: o.fontSize, color: o.color }}>
-              {o.text || <span className="opacity-40">Text</span>}
+            <div className="break-words leading-tight" style={{ fontSize: o.fontSize, color: o.color }}>
+              {o.text ? <Body text={o.text} className="text-inherit" selected={selected} /> : <span className="opacity-40">Text</span>}
             </div>
           )}
           <VoteBadge votes={o.votes} me={me} />
@@ -273,8 +329,8 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
                 style={{ fontSize: 15 }}
               />
             ) : (
-              <div className="whitespace-pre-wrap break-words" style={{ fontSize: 15 }}>
-                {o.text}
+              <div className="break-words" style={{ fontSize: 15 }}>
+                <Body text={o.text} className="text-zinc-900" selected={selected} />
               </div>
             )}
           </div>
