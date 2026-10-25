@@ -28,6 +28,7 @@ import next from "next";
 import { WebSocketServer } from "ws";
 
 import { handlePtyConnection, verifySessionToken, getCookie, reapOrphanedAttaches } from "./server/pty.mjs";
+import { flushBoards, handleBoardConnection } from "./server/boards.mjs";
 
 // Browser terminals of a previous run of this server are still attached to
 // their tmux sessions (see reapOrphanedAttaches): detach them.
@@ -46,6 +47,8 @@ require("@next/env").loadEnvConfig(process.cwd(), dev);
 
 const basePath = process.env.APP_BASE_PATH || "/admin";
 const PTY_PATH = `${basePath}/pty`;
+// Real-time whiteboards (/boards): one socket per open board, ?board=<id>.
+const BOARDS_PATH = `${basePath}/boards-ws`;
 
 // Loopback by default: nginx is the only public entry point (and the only place
 // TLS + the Secure cookie flag are guaranteed). Override with HOST if needed.
@@ -80,6 +83,7 @@ const server = createServer((req, res) => handle(req, res));
 
 // noServer: we own the upgrade routing (Next HMR vs our /pty) below.
 const wss = new WebSocketServer({ noServer: true });
+const boardsWss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
 
 server.on("upgrade", (req, socket, head) => {
   let pathname;
@@ -90,7 +94,7 @@ server.on("upgrade", (req, socket, head) => {
     return;
   }
 
-  if (pathname === PTY_PATH) {
+  if (pathname === PTY_PATH || pathname === BOARDS_PATH) {
     if (!originAllowed(req)) {
       socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -106,6 +110,16 @@ server.on("upgrade", (req, socket, head) => {
           socket.destroy();
           return;
         }
+        if (pathname === BOARDS_PATH) {
+          const boardId = Number(new URL(req.url, "http://localhost").searchParams.get("board"));
+          if (!Number.isInteger(boardId) || boardId <= 0) {
+            socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          boardsWss.handleUpgrade(req, socket, head, (ws) => handleBoardConnection(ws, boardId));
+          return;
+        }
         wss.handleUpgrade(req, socket, head, (ws) => handlePtyConnection(ws));
       })
       .catch(() => socket.destroy());
@@ -117,7 +131,17 @@ server.on("upgrade", (req, socket, head) => {
   else socket.destroy();
 });
 
+// Boards keep their docs in memory and save a moment after each edit: flush
+// them before a restart takes the process down.
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.once(sig, () => {
+    const exit = () => process.exit(0);
+    setTimeout(exit, 3000).unref();
+    flushBoards().finally(exit);
+  });
+}
+
 server.listen(port, hostname, () => {
   // eslint-disable-next-line no-console
-  console.log(`> admin server on :${port} (dev=${dev}) basePath=${basePath} pty=${PTY_PATH}`);
+  console.log(`> admin server on :${port} (dev=${dev}) basePath=${basePath} pty=${PTY_PATH} boards=${BOARDS_PATH}`);
 });
