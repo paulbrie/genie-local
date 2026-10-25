@@ -274,6 +274,7 @@ function SelectionBar({
   screen,
   area,
   onAskClaude,
+  onAskClaudeFor,
   onDuplicate,
 }: {
   sync: BoardSync;
@@ -281,6 +282,7 @@ function SelectionBar({
   screen: { x: number; y: number };
   area: { w: number; h: number };
   onAskClaude: () => void;
+  onAskClaudeFor: (request: string) => void;
   onDuplicate: () => void;
 }) {
   const doc = sync.doc.getValue();
@@ -422,6 +424,34 @@ function SelectionBar({
         </Button>
         <Button size="icon-xs" variant="ghost" title="Delete (⌫)" onClick={() => sync.apply(objs.map((o) => ({ k: "del" as const, id: o.id })))}>
           <Trash2 />
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="text-[#d97757]"
+          title="Sum these up on a new sticky"
+          onClick={() =>
+            onAskClaudeFor(
+              "Sum up the selected items on one new sticky, placed just below them. A few lines at most, in the group's own words. Leave the originals alone.",
+            )
+          }
+          data-testid="claude-summarise"
+        >
+          <Sparkles /> Sum up
+        </Button>
+        <Button
+          size="xs"
+          variant="ghost"
+          className="text-[#d97757]"
+          title="Reword these more clearly, in place"
+          onClick={() =>
+            onAskClaudeFor(
+              "Reword the text of each selected item so it reads more clearly and briefly, keeping the meaning and the author's voice. Update them in place; add nothing and remove nothing.",
+            )
+          }
+          data-testid="claude-rephrase"
+        >
+          <Sparkles /> Reword
         </Button>
         <Button size="xs" variant="ghost" className="text-[#d97757]" title="Ask Claude about the selection" onClick={onAskClaude}>
           <Sparkles /> Ask
@@ -1029,6 +1059,10 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           onAskClaude={() => {
             setClaudeOpen(true);
             setAskNonce((n) => n + 1);
+          }}
+          onAskClaudeFor={(request) => {
+            setClaudeOpen(true);
+            sync.askClaude(request, selection, worldViewport());
           }}
         />
       )}

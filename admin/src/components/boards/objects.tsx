@@ -201,6 +201,22 @@ type Props = {
 };
 
 /** One board object in world coordinates (connectors render via ConnectorView). */
+/**
+ * Defang link targets a board shouldn't open: anything that isn't http(s),
+ * mailto or a plain path — `javascript:` above all. Board text is written by
+ * whoever is on the board and by Claude pasting from the web, so this guards at
+ * the source rather than trusting whichever renderer is downstream.
+ */
+function safeMarkdown(text: string): string {
+  // The target, allowing one level of brackets inside it (…(1)…), plus an
+  // optional "title" after it.
+  return text.replace(/\]\(([^()\s]*(?:\([^()]*\)[^()\s]*)*)([^()]*)\)/g, (whole, target: string, title: string) => {
+    const t = target.trim();
+    const ok = t === "" || /^(https?:\/\/|mailto:)/i.test(t) || /^(\/|\.{1,2}\/|#)/.test(t);
+    return ok ? whole : `](#${title.trim() ? ` ${title.trim()}` : ""})`;
+  });
+}
+
 /** The address, when the whole of the text is one http(s) link and nothing else. */
 function soleUrl(text: string): URL | null {
   const t = text.trim();
@@ -247,9 +263,10 @@ function LinkCard({ url, selected }: { url: URL; selected?: boolean }) {
 function Body({ text, className, selected }: { text: string; className?: string; selected?: boolean }) {
   const url = soleUrl(text);
   if (url) return <LinkCard url={url} selected={selected} />;
+  const source = safeMarkdown(text);
   return (
     <div className={cn("pointer-events-none", selected && "[&_a]:pointer-events-auto")}>
-      <Markdown source={text} breaks className={cn("space-y-1", className)} />
+      <Markdown source={source} breaks className={cn("space-y-1", className)} />
     </div>
   );
 }

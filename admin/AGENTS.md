@@ -144,6 +144,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   `dangerouslySetInnerHTML`, link schemes filtered) — editing is the raw Markdown.
   Links answer the pointer only once their object is selected, so dragging one
   about doesn't open tabs; text that is nothing but a URL draws as a link card.
+  `safeMarkdown` in `boards/objects.tsx` neuters any link target that isn't
+  http(s) / mailto / a path before rendering — board text is written by whoever is
+  on the board and by Claude pasting from the web, so it guards at the source
+  rather than trusting the renderer. A selection can also be sent straight to
+  Claude as **Sum up** (one new sticky) or **Reword** (rewritten in place).
   A selected section has **Tidy** (lay its contents on a grid, in reading order,
   and size the frame to match) and **Fit** (size the frame around what it holds);
   both are pure helpers in core (`arrangeSectionOps`, `fitSectionOps`) that agents
