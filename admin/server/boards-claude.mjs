@@ -31,7 +31,57 @@ export function claudeBusy() {
   return running >= MAX_CONCURRENT;
 }
 
-export function runClaudeCli(prompt, { timeoutMs, web = false } = {}) {
+/**
+ * What Claude is doing, in a few words, from one streamed content block —
+ * for the board's chat and its cursor. Null for steps not worth showing.
+ */
+export function describeStep(block) {
+  if (block?.type === "text") {
+    // Claude's running commentary is worth showing; its closing JSON answer is
+    // not (the caller posts that as the reply a moment later).
+    const t = block.text?.trim();
+    if (!t || t.startsWith("{") || t.startsWith("```")) return null;
+    return t.slice(0, 200);
+  }
+  if (block?.type !== "tool_use") return null;
+  const a = block.input ?? {};
+  const host = (u) => {
+    try {
+      return new URL(u).host.replace(/^www\./, "");
+    } catch {
+      return String(u).slice(0, 60);
+    }
+  };
+  switch (block.name) {
+    case "mcp__browser__browser_open":
+      return `Opening ${host(a.url)}…`;
+    case "mcp__browser__browser_text":
+      return "Reading the page…";
+    case "mcp__browser__browser_snapshot":
+      return "Looking at what's on the page…";
+    case "mcp__browser__browser_click":
+      return "Clicking through…";
+    case "mcp__browser__browser_type":
+      return "Filling something in…";
+    case "mcp__browser__browser_scroll":
+      return "Scrolling for more…";
+    case "mcp__browser__browser_back":
+      return "Going back…";
+    case "WebFetch":
+      return `Fetching ${host(a.url)}…`;
+    case "WebSearch":
+      return `Searching the web for ${JSON.stringify(String(a.query ?? "").slice(0, 60))}…`;
+    default:
+      // Internal plumbing (ToolSearch and friends) isn't worth narrating.
+      return null;
+  }
+}
+
+/**
+ * Run the CLI. `onStep(text)` is called as the work happens (see
+ * describeStep); the promise still resolves with the final answer text.
+ */
+export function runClaudeCli(prompt, { timeoutMs, web = false, onStep } = {}) {
   timeoutMs ??= web ? 300_000 : 180_000;
   // Each web run gets its own throwaway browser, closed when the run ends.
   const session = `board-claude-${process.pid}-${++browserRuns}`;
@@ -53,8 +103,11 @@ export function runClaudeCli(prompt, { timeoutMs, web = false } = {}) {
       [
         "-p",
         prompt,
+        // Streamed so the board can show what Claude is doing while it works;
+        // the final answer arrives as the closing "result" event.
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--strict-mcp-config",
         ...(web ? ["--mcp-config", JSON.stringify(mcp), "--allowed-tools", ...WEB, "mcp__browser"] : []),
         "--disallowed-tools",
@@ -63,13 +116,47 @@ export function runClaudeCli(prompt, { timeoutMs, web = false } = {}) {
       ],
       { cwd: "/tmp", env, stdio: ["ignore", "pipe", "pipe"] },
     );
-    let out = "";
     let err = "";
+    let pending = "";
+    let answer = null;
+    let failed = null;
+
+    const onLine = (line) => {
+      if (!line.trim()) return;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return; // not an event line; the CLI prints nothing else, but be safe
+      }
+      if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+        for (const block of msg.message.content) {
+          const step = describeStep(block);
+          if (step && onStep) {
+            try {
+              onStep(step);
+            } catch {
+              /* a broken listener must not sink the run */
+            }
+          }
+        }
+        return;
+      }
+      if (msg.type === "result") {
+        if (msg.subtype === "success" && typeof msg.result === "string") answer = msg.result;
+        else failed = new Error(String(msg.result ?? msg.subtype ?? "Claude returned an error").slice(0, 300));
+      }
+    };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       done(reject, new Error("Claude took too long"));
     }, timeoutMs);
-    child.stdout.on("data", (d) => (out += d));
+    child.stdout.on("data", (d) => {
+      pending += d;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const line of lines) onLine(line);
+    });
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => {
       clearTimeout(timer);
@@ -77,14 +164,11 @@ export function runClaudeCli(prompt, { timeoutMs, web = false } = {}) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      onLine(pending);
       if (code !== 0) return done(reject, new Error(err.trim().slice(0, 300) || `claude exited ${code}`));
-      try {
-        const env = JSON.parse(out);
-        if (env.is_error || typeof env.result !== "string") return done(reject, new Error("Claude returned an error"));
-        done(resolve, env.result);
-      } catch (e) {
-        done(reject, e);
-      }
+      if (failed) return done(reject, failed);
+      if (answer === null) return done(reject, new Error("Claude returned no answer"));
+      done(resolve, answer);
     });
   });
 }

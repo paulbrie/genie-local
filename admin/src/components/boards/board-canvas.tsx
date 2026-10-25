@@ -832,11 +832,13 @@ export function BoardCanvas(props: Props) {
               <path d="M1 1 L1 16 L5.5 12 L8.5 19 L11 18 L8 11 L14 11 Z" fill={peer.user.color} stroke="white" strokeWidth="1.5" />
             </svg>
             <div
-              className="ml-3 -mt-1 flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium text-white shadow"
+              className="ml-3 -mt-1 flex max-w-[22rem] items-center gap-1 truncate rounded-full px-2 py-0.5 text-xs font-medium text-white shadow"
               style={{ background: peer.user.color }}
             >
               {peer.user.name}
-              {peer.kind !== "human" && peer.status === "thinking" && <span className="animate-pulse">· thinking…</span>}
+              {peer.kind !== "human" && peer.status === "thinking" && (
+                <span className="animate-pulse truncate">· {peer.note || "thinking…"}</span>
+              )}
             </div>
           </div>
         ) : null,

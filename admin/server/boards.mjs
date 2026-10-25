@@ -176,7 +176,7 @@ class Room {
       if (!rooms.has(this.id)) break;
       const focus = opFocus(this.doc, op);
       if (focus) {
-        this.botPresence(user, kind, { cursor: focus, status: "editing" }, ttlMs);
+        this.botPresence(user, kind, { cursor: focus, status: "editing", note: null }, ttlMs);
         await sleep(delay);
       }
       this.apply(user, [op]);
@@ -402,6 +402,25 @@ export async function handleBoardConnection(ws, boardId) {
 
 // ------------------------------------------------------------------ Claude
 
+/**
+ * Shows what Claude is up to while it works: the step goes on its cursor, and
+ * (for a panel ask) into the message that will become its reply, so the chat
+ * reads as a live account of the research. Steps arriving faster than this are
+ * dropped — the next one, or the reply itself, supersedes them.
+ */
+const STEP_EVERY_MS = 500;
+
+function stepReporter(room, { chatId } = {}) {
+  let last = 0;
+  return (text) => {
+    const now = Date.now();
+    if (now - last < STEP_EVERY_MS) return;
+    last = now;
+    room.botPresence(CLAUDE, "claude", { status: "thinking", note: text.slice(0, 80) }, 0);
+    if (chatId) claudeChat(room, chatId, text, true);
+  };
+}
+
 function claudeChat(room, id, text, pending = false) {
   room.apply(CLAUDE, [{ k: "chat", msg: { id, text, role: "claude", author: CLAUDE, pending } }]);
 }
@@ -423,7 +442,7 @@ async function withClaude(room, cursorNear, fn) {
   } finally {
     room.claudeRuns--;
     room.broadcast({ t: "claude", busy: room.claudeRuns > 0 });
-    room.botPresence(CLAUDE, "claude", { status: "idle" }, 15_000);
+    room.botPresence(CLAUDE, "claude", { status: "idle", note: null }, 15_000);
     room.maybeEvict();
   }
 }
@@ -453,7 +472,7 @@ async function runAsk(room, client, text, selection, viewport) {
         selection: Array.isArray(selection) ? selection.filter((id) => isId(id) && room.doc.objects[id]) : [],
         viewport: vp,
       });
-      const answer = parseAnswer(await runClaudeCli(prompt, { web: true }));
+      const answer = parseAnswer(await runClaudeCli(prompt, { web: true, onStep: stepReporter(room, { chatId: replyId }) }));
       const { ops, errors } = translateAgentOps(room.doc, answer.ops, CLAUDE, Date.now());
       if (errors.length) console.warn(`[boards] claude op errors on ${room.id}:`, errors.slice(0, 5));
       claudeChat(room, replyId, answer.reply || (ops.length ? "Done." : "Hmm, nothing to change there."), ops.length > 0);
@@ -475,7 +494,10 @@ async function runCommentMention(room, commentId) {
   await withClaude(room, { x: comment.x, y: comment.y }, async () => {
     try {
       const answer = parseAnswer(
-        await runClaudeCli(commentPrompt({ doc: room.doc, title: room.title, people: room.humans(), comment }), { web: true }),
+        await runClaudeCli(commentPrompt({ doc: room.doc, title: room.title, people: room.humans(), comment }), {
+          web: true,
+          onStep: stepReporter(room),
+        }),
       );
       const { ops } = translateAgentOps(room.doc, answer.ops, CLAUDE, Date.now());
       if (answer.reply && room.doc.objects[commentId]) {

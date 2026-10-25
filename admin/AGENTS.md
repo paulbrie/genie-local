@@ -160,7 +160,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     env, no shell or file tools; asks and @mentions also get WebFetch, WebSearch and
     a real browser via `server/boards-browser-mcp.mjs`, an MCP over `agent-browser`
     that only reaches public http(s) addresses, one throwaway session per run;
-    `--strict-mcp-config` keeps the account's other MCP servers out) and gets back `{ reply, ops }` in the agent op
+    `--strict-mcp-config` keeps the account's other MCP servers out). Runs stream
+    (`--output-format stream-json`), so what Claude is doing — the page it opened,
+    the click, its own asides — shows live on its cursor and, for a panel ask, in
+    the message that becomes its reply (`describeStep`, `stepReporter`) and gets back `{ reply, ops }` in the agent op
     language (`translateAgentOps`), which the hub plays back with Claude's cursor.
   · Agents: `/api/boards` (list/create), `/api/boards/<id>` (GET doc + one JSON line
     per item, `?format=text`; PATCH title/archived; DELETE archived), `POST

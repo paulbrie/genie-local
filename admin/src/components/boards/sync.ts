@@ -23,6 +23,8 @@ export type Peer = {
   viewport?: { x: number; y: number; w: number; h: number } | null;
   editing?: string | null;
   status?: "idle" | "thinking" | "editing";
+  /** What Claude (or an agent) is doing right now, for its cursor label. */
+  note?: string | null;
 };
 
 export type Reaction = { key: string; emoji: string; at: { x: number; y: number }; user: Author };
