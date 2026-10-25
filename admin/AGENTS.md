@@ -139,7 +139,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is a `Promise` — `await` it.
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
-  reactions, live cursors, follow mode). Sticky / text / shape text renders as Markdown through
+  reactions, live cursors, follow mode). Text boxes have a **Fit** that sizes the box to its words (measured from an
+  offscreen copy of what's drawn, so markdown and wrapping count); a frame's title
+  has its own size. Markdown on a board is sized relative to each object's own
+  font size (`BOARD_TEXT`), since the shared renderer fixes its blocks at document
+  sizes. Sticky / text / shape text renders as Markdown through
   `src/components/markdown.tsx` (tables, links, lists, code; no
   `dangerouslySetInnerHTML`, link schemes filtered) — editing is the raw Markdown.
   Links answer the pointer only once their object is selected, so dragging one
@@ -158,7 +162,8 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   highlights the ends it would attach to, and dropping an end on one of the four
   dots on a shape pins the line to that side (`side` on a connector end; Unpin in
   the toolbar lets it find its own place again). Lines can be curved (`curved`),
-  drawn as a bezier leaving each end head-on, with hit-testing and arrowheads
+  drawn as a bezier that always meets a shape square-on — an unpinned end takes
+  the side it heads for (`autoSide`), which is what gives the curve its shape, with hit-testing and arrowheads
   following the curve; someone working outside your view shows as a marker on the edge
   of it, pointing their way — click it to follow them. Pieces:
   · `src/lib/boards/core.mjs` (+ `core.d.mts`) — the doc model and `applyOps`, plain

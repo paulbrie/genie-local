@@ -76,6 +76,24 @@ export function sidePoint(o: BoardObject, side: Side, gap = 4): { p: Pt; dir: Pt
   }
 }
 
+/**
+ * The side a line should leave by when nobody pinned one: whichever the other
+ * end lies off, measured against the box's own proportions so a wide box isn't
+ * always left-and-right.
+ */
+export function autoSide(o: BoardObject, towards: Pt): Side {
+  const c = center(o);
+  const dx = towards.x - c.x;
+  const dy = towards.y - c.y;
+  return Math.abs(dx) / Math.max(o.w / 2, 1) >= Math.abs(dy) / Math.max(o.h / 2, 1)
+    ? dx >= 0
+      ? "right"
+      : "left"
+    : dy >= 0
+      ? "bottom"
+      : "top";
+}
+
 /** The four places a line can be pinned on a box. */
 export function sideHandles(o: BoardObject): { side: Side; p: Pt }[] {
   return (["top", "right", "bottom", "left"] as Side[]).map((side) => ({ side, p: sidePoint(o, side, 0).p }));
@@ -99,6 +117,9 @@ export function connectorPoints(doc: BoardDoc, c: Connector): { a: Pt; b: Pt; da
   const end = (o: BoardObject | null, side: Side | undefined, towards: Pt, fallback: Pt) => {
     if (!o) return { p: fallback, dir: null };
     if (side) return sidePoint(o, side);
+    // A curve always meets a shape square-on — that right angle is what gives it
+    // its shape — so an unpinned end takes the side it is heading for.
+    if (c.curved) return sidePoint(o, autoSide(o, towards));
     return { p: boundaryPoint(o, towards), dir: null };
   };
   const from = end(A, c.from.side, cb, ca);
@@ -164,7 +185,7 @@ export function bounds(doc: BoardDoc, o: BoardObject): Rect {
   }
   // A folded section is only as tall as its bar, so selecting it, and the ring
   // around it, match what you can actually see.
-  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: o.w, h: SECTION_BAR_H };
+  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: o.w, h: sectionBarH(o) };
   return { x: o.x, y: o.y, w: o.w, h: o.h };
 }
 
@@ -203,9 +224,16 @@ export function penHit(o: BoardObject & { type: "pen" }, p: Pt, slop: number) {
   return false;
 }
 
-const SECTION_TITLE_H = 28;
+/** The tab above a frame, which is how you grab it; it grows with the title. */
+export function sectionTitleH(o: { fontSize?: number }) {
+  return (o.fontSize ?? 13) * 1.1 + 12;
+}
 /** A folded section is just this bar, where the top of its frame was. */
 export const SECTION_BAR_H = 44;
+/** …taller when its title is set large. */
+export function sectionBarH(o: { fontSize?: number }) {
+  return Math.max(SECTION_BAR_H, Math.round((o.fontSize ?? 13) * 2.2));
+}
 
 /**
  * The topmost object under a world point. Sections are only grabbed by their
@@ -230,12 +258,13 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
       case "section": {
         if (o.collapsed) {
           // Folded: the bar is the whole of it, and grabbing it moves it.
-          if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + SECTION_BAR_H) return o;
+          if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + sectionBarH(o)) return o;
           break;
         }
         const inX = p.x >= o.x - slop && p.x <= o.x + o.w + slop;
         const inY = p.y >= o.y - slop && p.y <= o.y + o.h + slop;
-        const title = p.x >= o.x && p.x <= o.x + Math.min(o.w, 260) && p.y >= o.y - SECTION_TITLE_H / Math.max(zoom, 0.5) && p.y <= o.y;
+        const titleH = sectionTitleH(o);
+        const title = p.x >= o.x && p.x <= o.x + Math.max(260, o.w) && p.y >= o.y - titleH && p.y <= o.y;
         const edge = inX && inY && (p.x - o.x < slop * 2 || o.x + o.w - p.x < slop * 2 || p.y - o.y < slop * 2 || o.y + o.h - p.y < slop * 2);
         if (title || edge) return o;
         break;

@@ -8,7 +8,7 @@ import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
-import { arrivalFrom, connectorPath, connectorPoints, penPath, SECTION_BAR_H } from "./geometry";
+import { arrivalFrom, connectorPath, connectorPoints, penPath, sectionBarH } from "./geometry";
 import { initials } from "./identity";
 
 export type ObjectHandlers = {
@@ -33,6 +33,7 @@ function EditableText({
   className,
   style,
   autoHeight,
+  "data-fit": dataFit,
 }: {
   value: string;
   onChange: (v: string, h?: number) => void;
@@ -40,6 +41,8 @@ function EditableText({
   className?: string;
   style?: React.CSSProperties;
   autoHeight?: boolean;
+  /** Marks the element Fit measures, so it works while editing too. */
+  "data-fit"?: string;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -81,6 +84,7 @@ function EditableText({
       spellCheck
       className={cn("block w-full resize-none border-0 bg-transparent p-0 outline-none", className)}
       style={style}
+      data-fit={dataFit}
     />
   );
 }
@@ -256,6 +260,23 @@ function LinkCard({ url, selected }: { url: URL; selected?: boolean }) {
 }
 
 /**
+ * The shared markdown renderer sizes its blocks for documents (paragraphs at
+ * text-sm and so on), which would ignore the size set on a sticky or a text box.
+ * On a board everything is relative to the object's own font size instead, so
+ * headings still stand out and the size control means something. Margins are
+ * tightened to suit a sticky rather than a page.
+ */
+const BOARD_TEXT = [
+  "[&_p]:text-[length:1em] [&_ul]:text-[length:1em] [&_ol]:text-[length:1em] [&_li]:text-[length:1em]",
+  "[&_h1]:text-[length:1.6em] [&_h2]:text-[length:1.35em] [&_h3]:text-[length:1.15em]",
+  "[&_h4]:text-[length:1em] [&_h5]:text-[length:1em] [&_h6]:text-[length:1em]",
+  "[&_table]:text-[length:0.9em] [&_pre]:text-[length:0.85em] [&_code]:text-[length:0.9em]",
+  "[&_p]:my-[0.3em] [&_ul]:my-[0.3em] [&_ol]:my-[0.3em] [&_pre]:my-[0.4em]",
+  "[&_h1]:mb-[0.3em] [&_h1]:mt-0 [&_h2]:mb-[0.25em] [&_h2]:mt-[0.4em] [&_h3]:mb-[0.2em] [&_h3]:mt-[0.35em]",
+  "[&>*>*:first-child]:mt-0 [&>*>*:last-child]:mb-0",
+].join(" ");
+
+/**
  * Written text as Markdown — tables, links, lists, code. Links only answer the
  * pointer once the thing they're on is selected, so dragging a sticky around
  * doesn't keep opening tabs.
@@ -265,7 +286,7 @@ function Body({ text, className, selected }: { text: string; className?: string;
   if (url) return <LinkCard url={url} selected={selected} />;
   const source = safeMarkdown(text);
   return (
-    <div className={cn("pointer-events-none", selected && "[&_a]:pointer-events-auto")}>
+    <div className={cn("pointer-events-none", BOARD_TEXT, selected && "[&_a]:pointer-events-auto")}>
       <Markdown source={source} breaks className={cn("space-y-1", className)} />
     </div>
   );
@@ -318,13 +339,14 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
             <EditableText
               value={o.text}
               autoHeight
+              data-fit={o.id}
               onChange={(t, h) => handlers.onText(o.id, t, h)}
               onDone={handlers.onEditEnd}
               className="leading-tight"
               style={{ fontSize: o.fontSize, color: o.color }}
             />
           ) : (
-            <div className="break-words leading-tight" style={{ fontSize: o.fontSize, color: o.color }}>
+            <div className="break-words leading-tight" data-fit={o.id} style={{ fontSize: o.fontSize, color: o.color }}>
               {o.text ? <Body text={o.text} className="text-inherit" selected={selected} /> : <span className="opacity-40">Text</span>}
             </div>
           )}
@@ -371,7 +393,7 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
           value={o.title}
           onChange={(t) => handlers.onText(o.id, t)}
           onDone={handlers.onEditEnd}
-          style={{ fontSize: 12, height: 16 }}
+          style={{ fontSize: o.fontSize, height: o.fontSize * 1.3 }}
         />
       ) : (
         <span className="truncate">{o.title || "Section"}</span>
@@ -379,11 +401,11 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
 
       if (o.collapsed) {
         return (
-          <div className="absolute select-none" style={{ ...box, height: SECTION_BAR_H, ...ring }}>
+          <div className="absolute select-none" style={{ ...box, height: sectionBarH(o), ...ring }}>
             {suggestion}
             <div
-              className="flex h-full w-full items-center gap-1.5 rounded-md border border-black/10 px-2 text-sm font-semibold text-zinc-800"
-              style={{ background: o.color }}
+              className="flex h-full w-full items-center gap-1.5 rounded-md border border-black/10 px-2 font-semibold text-zinc-800"
+              style={{ background: o.color, fontSize: o.fontSize }}
             >
               {fold}
               {titleText}
@@ -401,8 +423,14 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
       return (
         <div className="absolute" style={{ ...box, ...ring }}>
           <div
-            className="absolute -top-7 left-0 flex max-w-[260px] items-center gap-1 truncate rounded-t-md px-1.5 py-1 text-xs font-semibold text-zinc-800"
-            style={{ background: o.color, minWidth: 60 }}
+            className="absolute left-0 flex items-center gap-1 truncate rounded-t-md px-1.5 py-1 font-semibold text-zinc-800"
+            style={{
+              background: o.color,
+              minWidth: 60,
+              maxWidth: Math.max(260, o.w),
+              fontSize: o.fontSize,
+              top: -(o.fontSize * 1.1 + 12),
+            }}
           >
             {fold}
             {titleText}

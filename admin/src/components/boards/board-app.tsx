@@ -268,6 +268,38 @@ function ToolRail({
 
 // ------------------------------------------------------------------ selection toolbar
 
+/**
+ * Size a text box to the words in it. Measured from a copy of what's on screen,
+ * laid out off to the side at its natural width: that accounts for the markdown,
+ * the chosen size and the wrapping without disturbing the board. The width never
+ * grows, so a wrapped paragraph keeps its shape and only loses empty space.
+ */
+function fitTextOps(id: string, currentW: number) {
+  const el = document.querySelector<HTMLElement>(`[data-fit="${CSS.escape(id)}"]`);
+  if (!el) return [];
+  const probe = el.cloneNode(true) as HTMLElement;
+  Object.assign(probe.style, {
+    position: "fixed",
+    left: "-99999px",
+    top: "0",
+    width: "max-content",
+    maxWidth: "none",
+    height: "auto",
+    visibility: "hidden",
+  });
+  document.body.append(probe);
+  try {
+    // Outside the board's scaled layer, so these are board units already.
+    const natural = probe.getBoundingClientRect().width;
+    const w = Math.max(40, Math.min(Math.round(currentW), Math.ceil(natural) + 2));
+    probe.style.width = `${w}px`;
+    const h = Math.max(24, Math.ceil(probe.getBoundingClientRect().height));
+    return [{ k: "patch" as const, id, set: { w, h } }];
+  } finally {
+    probe.remove();
+  }
+}
+
 function SelectionBar({
   sync,
   objs,
@@ -347,9 +379,22 @@ function SelectionBar({
           })}
         </div>
       )}
-      {only === "text" && (
+      {only === "text" && objs.length === 1 && (
         <div className="ml-1 flex gap-0.5 border-l pl-1">
-          {[14, 20, 32, 48, 72].map((s) => (
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Size the box to its text"
+            onClick={() => sync.apply(fitTextOps(objs[0].id, objs[0].w))}
+            data-testid="text-fit"
+          >
+            <Shrink /> Fit
+          </Button>
+        </div>
+      )}
+      {(only === "text" || only === "section") && (
+        <div className="ml-1 flex gap-0.5 border-l pl-1">
+          {(only === "section" ? [13, 18, 26, 36] : [14, 20, 32, 48, 72]).map((s) => (
             <Button key={s} size="xs" variant={first.fontSize === s ? "secondary" : "ghost"} onClick={() => patchAll({ fontSize: s })}>
               {s}
             </Button>

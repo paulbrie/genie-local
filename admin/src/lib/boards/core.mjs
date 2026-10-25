@@ -243,6 +243,7 @@ export function sanitizeObject(o) {
     case "section":
       out.title = str(o.title, LIMITS.title, "Section");
       out.color = color(o.color, "#f4f4f5");
+      out.fontSize = num(o.fontSize, 8, 200, 13);
       // Folded: the frame shows as a bar and what's inside it is hidden.
       if (o.collapsed === true) out.collapsed = true;
       break;
@@ -682,6 +683,7 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
         break;
       case "section":
         d.title = o.title;
+        d.fontSize = o.fontSize;
         if (o.collapsed) d.collapsed = true;
         break;
       case "connector":
