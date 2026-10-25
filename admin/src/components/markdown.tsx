@@ -1,18 +1,47 @@
 import * as React from "react";
 
+import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
 /**
  * A dependency-free Markdown renderer for the small subset our docs use:
- * headings, paragraphs, bold/italic, inline + fenced code, links, unordered
- * lists, GFM pipe tables, and `---` rules. It builds React elements directly
- * (no `dangerouslySetInnerHTML`), so rendered content can't inject markup.
+ * headings, paragraphs, bold/italic/strikethrough, inline + fenced code,
+ * links (and bare URLs), ordered / unordered / task lists, blockquotes, GFM
+ * pipe tables, and `---` rules. It builds React elements directly (no
+ * `dangerouslySetInnerHTML`), so rendered content can't inject markup, and
+ * links only go to http(s), mailto, or a path / anchor (no `javascript:`).
  *
  * This intentionally mirrors the repo's hand-rolled frontmatter parser rather
  * than pulling in remark/marked for one README.
  */
 
 /* --------------------------------- inline --------------------------------- */
+
+/** A link target that's safe to render: http(s), mailto, or a path / anchor on this site. */
+function safeHref(href: string): string | null {
+  if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
+  // a site path is the admin's own: under its base path
+  if (/^\/(?!\/)/.test(href)) return BASE_PATH && !href.startsWith(`${BASE_PATH}/`) ? `${BASE_PATH}${href}` : href;
+  if (/^(#|\.{1,2}\/)/.test(href)) return href;
+  return null;
+}
+
+function renderLink(href: string, label: React.ReactNode, key: string): React.ReactNode {
+  const safe = safeHref(href);
+  if (!safe) return <span key={key}>{label}</span>;
+  const external = /^https?:\/\//i.test(safe);
+  return (
+    <a
+      key={key}
+      href={safe}
+      className="font-medium text-primary underline underline-offset-2 break-words hover:no-underline"
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+    >
+      {label}
+    </a>
+  );
+}
 
 type InlineRule = {
   re: RegExp;
@@ -34,18 +63,14 @@ const INLINE_RULES: InlineRule[] = [
     ),
   },
   {
-    re: /\[([^\]]+)\]\(([^)\s]+)\)/,
-    render: (m, key) => (
-      <a
-        key={key}
-        href={m[2]}
-        className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-        target={/^https?:\/\//.test(m[2]) ? "_blank" : undefined}
-        rel={/^https?:\/\//.test(m[2]) ? "noreferrer" : undefined}
-      >
-        {renderInline(m[1], `${key}i`)}
-      </a>
-    ),
+    // the target may hold one level of parentheses: (https://en.wikipedia.org/wiki/X_(y))
+    re: /\[([^\]]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/,
+    render: (m, key) => renderLink(m[2], renderInline(m[1], `${key}i`), key),
+  },
+  {
+    // a bare URL (trailing punctuation left out)
+    re: /https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/,
+    render: (m, key) => renderLink(m[0], m[0], key),
   },
   {
     re: /\*\*([^*]+?)\*\*/,
@@ -56,7 +81,12 @@ const INLINE_RULES: InlineRule[] = [
     ),
   },
   {
-    re: /(?:\*([^*]+?)\*|_([^_]+?)_)/,
+    re: /~~([^~]+?)~~/,
+    render: (m, key) => <del key={key}>{renderInline(m[1], `${key}i`)}</del>,
+  },
+  {
+    // _x_ only at word edges: snake_case_names stay as they are
+    re: /(?:\*([^*\s][^*]*?)\*|(?<![\w])_([^_]+?)_(?![\w]))/,
     render: (m, key) => <em key={key}>{renderInline(m[1] ?? m[2], `${key}i`)}</em>,
   },
 ];
@@ -115,7 +145,29 @@ function splitTableRow(line: string): string[] {
     .map((c) => c.trim());
 }
 
-function renderBlocks(md: string): React.ReactNode[] {
+/** A paragraph's lines: joined with spaces, or (breaks) kept as line breaks. */
+function renderLines(lines: string[], key: string, breaks: boolean): React.ReactNode[] {
+  if (!breaks) return renderInline(lines.join(" "), key);
+  return lines.flatMap((l, n) => [...(n ? [<br key={`${key}br${n}`} />] : []), ...renderInline(l, `${key}l${n}`)]);
+}
+
+/** A list item's text, with a GFM task box ("[ ]" / "[x]") drawn as one. */
+function renderItem(text: string, key: string): React.ReactNode {
+  const task = /^\[([ xX])\]\s+(.*)$/.exec(text);
+  if (!task) return renderInline(text, key);
+  const done = task[1] !== " ";
+  return (
+    <span className="inline-flex items-start gap-1.5">
+      <input type="checkbox" checked={done} readOnly disabled className="mt-1 size-3.5 shrink-0 accent-primary" />
+      <span className={done ? "text-muted-foreground line-through" : ""}>{renderInline(task[2], key)}</span>
+    </span>
+  );
+}
+
+const LIST_RE = /^\s*(?:[-*+]|\d{1,9}[.)])\s+/;
+const QUOTE_RE = /^\s*>\s?/;
+
+function renderBlocks(md: string, breaks = false): React.ReactNode[] {
   const lines = md.replace(/\r\n/g, "\n").split("\n");
   const out: React.ReactNode[] = [];
   let i = 0;
@@ -132,11 +184,11 @@ function renderBlocks(md: string): React.ReactNode[] {
     }
 
     // Fenced code block.
-    const fence = /^```(\w*)\s*$/.exec(line);
+    const fence = /^\s*```([\w+#.-]*)\s*$/.exec(line);
     if (fence) {
       const buf: string[] = [];
       i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) {
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
         buf.push(lines[i]);
         i++;
       }
@@ -220,13 +272,28 @@ function renderBlocks(md: string): React.ReactNode[] {
       continue;
     }
 
-    // Unordered list. Continuation lines (indented, non-blank) fold into the
-    // current item so wrapped list entries render as one bullet.
-    if (/^\s*[-*]\s+/.test(line)) {
+    // Blockquote: its lines, rendered as markdown in turn.
+    if (QUOTE_RE.test(line)) {
+      const buf: string[] = [];
+      while (i < lines.length && QUOTE_RE.test(lines[i])) buf.push(lines[i++].replace(QUOTE_RE, ""));
+      out.push(
+        <blockquote key={nextKey()} className="my-2 border-l-2 pl-3 text-muted-foreground">
+          {renderBlocks(buf.join("\n"), breaks)}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    // Unordered or ordered list (by its first item). Continuation lines
+    // (indented, non-blank) fold into the current item so wrapped list
+    // entries render as one bullet.
+    if (LIST_RE.test(line)) {
+      const ordered = /^\s*\d/.test(line);
+      const start = ordered ? parseInt(line.trim(), 10) : undefined;
       const items: string[] = [];
       while (i < lines.length) {
         const l = lines[i];
-        const m = /^\s*[-*]\s+(.*)$/.exec(l);
+        const m = /^\s*(?:[-*+]|\d{1,9}[.)])\s+(.*)$/.exec(l);
         if (m) {
           items.push(m[1]);
           i++;
@@ -237,15 +304,20 @@ function renderBlocks(md: string): React.ReactNode[] {
           break;
         }
       }
+      const List = ordered ? "ol" : "ul";
       out.push(
-        <ul
+        <List
           key={nextKey()}
-          className="my-2 list-disc space-y-1 pl-5 text-sm leading-relaxed"
+          start={start !== 1 ? start : undefined}
+          className={`my-2 space-y-1 pl-5 text-sm leading-relaxed ${ordered ? "list-decimal" : "list-disc"}`}
         >
           {items.map((it, idx) => (
-            <li key={idx}>{renderInline(it, `${nextKey()}-${idx}`)}</li>
+            // a task item's box stands in for its bullet
+            <li key={idx} className={/^\[[ xX]\]\s/.test(it) ? "-ml-5 list-none" : undefined}>
+              {renderItem(it, `${nextKey()}-${idx}`)}
+            </li>
           ))}
-        </ul>,
+        </List>,
       );
       continue;
     }
@@ -256,23 +328,24 @@ function renderBlocks(md: string): React.ReactNode[] {
     while (i < lines.length && lines[i].trim() !== "") {
       const l = lines[i];
       if (
-        /^```/.test(l) ||
+        /^\s*```/.test(l) ||
         /^(#{1,6})\s+/.test(l) ||
         /^(-{3,}|\*{3,}|_{3,})\s*$/.test(l) ||
-        /^\s*[-*]\s+/.test(l) ||
+        LIST_RE.test(l) ||
+        QUOTE_RE.test(l) ||
         (l.includes("|") &&
           i + 1 < lines.length &&
           isTableSeparator(lines[i + 1]))
       ) {
         break;
       }
-      para.push(l.trim());
+      para.push(breaks ? l.trimEnd() : l.trim());
       i++;
     }
     if (para.length) {
       out.push(
         <p key={nextKey()} className="my-2 text-sm leading-relaxed">
-          {renderInline(para.join(" "), nextKey())}
+          {renderLines(para, nextKey(), breaks)}
         </p>,
       );
     }
@@ -284,13 +357,16 @@ function renderBlocks(md: string): React.ReactNode[] {
 export function Markdown({
   source,
   className,
+  breaks = false,
 }: {
   source: string;
   className?: string;
+  /** keep single line breaks (notes, tickets, comments), as GitHub comments do */
+  breaks?: boolean;
 }) {
   return (
     <div className={cn("text-foreground/90", className)}>
-      {renderBlocks(source)}
+      {renderBlocks(source, breaks)}
     </div>
   );
 }

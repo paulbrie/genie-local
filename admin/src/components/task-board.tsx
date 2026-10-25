@@ -94,6 +94,11 @@ export function TaskBoard({
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newFiles, setNewFiles] = useState<File[]>([]);
+  const removeNewFile = (i: number) =>
+    setNewFiles((all) => {
+      dropThumb(all[i]);
+      return all.filter((_, j) => j !== i);
+    });
 
   function onAdd(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -112,6 +117,7 @@ export function TaskBoard({
           router.refresh();
         }
         form.reset();
+        newFiles.forEach(dropThumb);
         setNewFiles([]);
         toast.success(
           spilled.file
@@ -278,6 +284,27 @@ export function TaskBoard({
         className="space-y-2"
       >
         <Input name="title" placeholder="New task…" required />
+        {/* Images picked, pasted or dropped: thumbnails, before they're uploaded with the task. */}
+        {newFiles.some(isThumbable) && (
+          <div className="flex flex-wrap gap-2">
+            {newFiles.map((f, i) =>
+              isThumbable(f) ? (
+                <figure key={`${f.name}-${i}`} className="group/thumb relative" title={`${f.name} · ${formatBytes(f.size)}`}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- a local blob: preview, not a static asset */}
+                  <img src={thumbUrl(f)} alt={f.name} className="h-20 max-w-40 rounded-md border bg-muted object-cover" />
+                  <button
+                    type="button"
+                    aria-label={`Remove ${f.name}`}
+                    onClick={() => removeNewFile(i)}
+                    className="absolute -top-1.5 -right-1.5 rounded-full border bg-background p-0.5 text-muted-foreground shadow-sm hover:text-destructive"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </figure>
+              ) : null,
+            )}
+          </div>
+        )}
         <Textarea
           name="description"
           placeholder="Description (optional)… paste or drop files to attach them"
@@ -305,7 +332,7 @@ export function TaskBoard({
             <Paperclip className="size-3.5" />
             Attach files
           </Button>
-          {newFiles.map((f, i) => (
+          {newFiles.map((f, i) => isThumbable(f) ? null : (
             <span
               key={`${f.name}-${i}`}
               className="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs"
@@ -315,7 +342,7 @@ export function TaskBoard({
               <button
                 type="button"
                 aria-label={`Remove ${f.name}`}
-                onClick={() => setNewFiles((all) => all.filter((_, j) => j !== i))}
+                onClick={() => removeNewFile(i)}
                 className="text-muted-foreground hover:text-destructive"
               >
                 <X className="size-3" />
@@ -552,6 +579,23 @@ function TaskCard({
       </div>
     </div>
   );
+}
+
+/** Images previewed in the new-task form (no SVG: it would run on the admin's origin). */
+const isThumbable = (f: File) => f.type.startsWith("image/") && f.type !== "image/svg+xml";
+// One blob: URL per pending file, made on first render and freed when the file
+// is removed or uploaded (not in an effect: strict mode would free it early).
+const thumbs = new WeakMap<File, string>();
+function thumbUrl(f: File): string {
+  let url = thumbs.get(f);
+  if (!url) thumbs.set(f, (url = URL.createObjectURL(f)));
+  return url;
+}
+function dropThumb(f: File | undefined) {
+  const url = f && thumbs.get(f);
+  if (!url) return;
+  URL.revokeObjectURL(url);
+  thumbs.delete(f);
 }
 
 /** An assignee terminal's live state: a TermStatus, or "gone" (no such terminal any more). */

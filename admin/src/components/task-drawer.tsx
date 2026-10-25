@@ -1,11 +1,12 @@
 "use client";
 
-import { Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { updateTaskAction } from "@/app/actions";
+import { Markdown } from "@/components/markdown";
 import { TaskAttachments, filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { TaskComments } from "@/components/task-comments";
 import { TaskDelegate } from "@/components/task-delegate";
@@ -66,6 +67,8 @@ export function TaskDrawer({
   const [open, setOpen] = useState(true);
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
+  // The description reads as rendered markdown; Edit (or a double-click) shows the text.
+  const [editing, setEditing] = useState(!task.description);
   const [status, setStatus] = useState<TaskStatus>(task.status as TaskStatus);
   const [commitSha, setCommitSha] = useState(task.commitSha ?? "");
   const [isPending, startTransition] = useTransition();
@@ -104,6 +107,7 @@ export function TaskDrawer({
         } else {
           toast.success("Task updated");
         }
+        if (spilled.text) setEditing(false);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : String(err));
       }
@@ -156,14 +160,36 @@ export function TaskDrawer({
               placeholder="Title"
               aria-label="Title"
             />
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Description (optional)…"
-              aria-label="Description"
-              rows={4}
-              className="max-h-80 resize-y text-sm"
-            />
+            {editing ? (
+              <Textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Description (optional)… markdown"
+                aria-label="Description"
+                rows={Math.min(14, Math.max(4, description.split("\n").length + 1))}
+                autoFocus={!!task.description}
+                className="max-h-[60vh] resize-y font-mono text-xs md:text-xs"
+              />
+            ) : (
+              <div className="group/desc relative rounded-md border">
+                <div
+                  onDoubleClick={() => setEditing(true)}
+                  className="max-h-[60vh] overflow-y-auto px-3 py-2 text-sm break-words [&>div>*:first-child]:mt-0 [&>div>*:last-child]:mb-0"
+                  title="Double-click to edit"
+                >
+                  <Markdown source={description} breaks />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setEditing(true)}
+                  className="absolute top-1.5 right-1.5 h-7 bg-background px-2 text-xs opacity-0 transition-opacity group-hover/desc:opacity-100 focus-visible:opacity-100"
+                >
+                  <Pencil className="size-3" /> Edit
+                </Button>
+              </div>
+            )}
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Status</Label>

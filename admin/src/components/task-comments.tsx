@@ -6,6 +6,7 @@ import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 
 import { addTaskCommentAction, deleteTaskCommentAction, notifyCommentAction, type CommentNotice } from "@/app/actions";
+import { Markdown } from "@/components/markdown";
 import { attachmentUrl, filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -123,9 +124,12 @@ export function TaskComments({
                   </button>
                 </div>
                 {c.body !== "(files)" && (
-                  <p className="mt-0.5 whitespace-pre-wrap text-foreground/90">
-                    {c.body}
-                  </p>
+                  // markdown, compact: Claude's replies use lists, code and links
+                  <Markdown
+                    source={c.body}
+                    breaks
+                    className="mt-0.5 break-words [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_ol]:text-xs [&_p]:my-1 [&_p]:text-xs [&_pre]:my-1.5 [&_ul]:text-xs [&>*:first-child]:mt-0"
+                  />
                 )}
                 {mine.length > 0 && (
                   <div className="mt-1 flex flex-wrap items-start gap-1.5">
