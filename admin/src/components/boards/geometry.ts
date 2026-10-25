@@ -185,7 +185,7 @@ export function bounds(doc: BoardDoc, o: BoardObject): Rect {
   }
   // A folded section is only as tall as its bar, so selecting it, and the ring
   // around it, match what you can actually see.
-  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: o.w, h: sectionBarH(o) };
+  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: sectionBarW(o), h: sectionBarH(o) };
   return { x: o.x, y: o.y, w: o.w, h: o.h };
 }
 
@@ -230,6 +230,18 @@ export function sectionTitleH(o: { fontSize?: number }) {
 }
 /** A folded section is just this bar, where the top of its frame was. */
 export const SECTION_BAR_H = 44;
+/**
+ * A folded bar is sized by its title rather than by the frame it stands for, so
+ * a short name doesn't leave a long empty strip. Estimated from the character
+ * count — hit-testing needs this without touching the DOM — and generous enough
+ * that the text isn't clipped.
+ */
+export function sectionBarW(o: { title?: string; fontSize?: number; collapsed?: true }) {
+  const fs = o.fontSize ?? 13;
+  const chars = (o.title || "Section").length;
+  return Math.max(140, Math.min(680, Math.round(chars * fs * 0.62 + fs * 2 + 76)));
+}
+
 /** …taller when its title is set large. */
 export function sectionBarH(o: { fontSize?: number }) {
   return Math.max(SECTION_BAR_H, Math.round((o.fontSize ?? 13) * 2.2));
@@ -258,7 +270,7 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
       case "section": {
         if (o.collapsed) {
           // Folded: the bar is the whole of it, and grabbing it moves it.
-          if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + sectionBarH(o)) return o;
+          if (p.x >= o.x && p.x <= o.x + sectionBarW(o) && p.y >= o.y && p.y <= o.y + sectionBarH(o)) return o;
           break;
         }
         const inX = p.x >= o.x - slop && p.x <= o.x + o.w + slop;

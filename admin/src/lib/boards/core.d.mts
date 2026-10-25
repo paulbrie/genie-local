@@ -40,8 +40,10 @@ export type Connector = Base & {
 export type Pen = Base & { type: "pen"; points: [number, number][]; color: string; width: number };
 export type ImageObj = Base & { type: "image"; src: string; alt: string };
 export type CommentObj = Base & { type: "comment"; thread: Message[]; resolved: boolean };
+export type LinkObj = Base & { type: "link"; url: string; title: string; desc: string };
+export type TableObj = Base & { type: "table"; rows: string[][]; headerCol?: true };
 
-export type BoardObject = Sticky | TextBox | Shape | Section | Connector | Pen | ImageObj | CommentObj;
+export type BoardObject = Sticky | TextBox | Shape | Section | Connector | Pen | ImageObj | CommentObj | LinkObj | TableObj;
 export type ObjectType = BoardObject["type"];
 
 export type Timer = { durationMs: number; endsAt: number | null; remainingMs: number | null };
@@ -67,7 +69,9 @@ export type ObjectFields = Partial<
     Omit<Connector, "type"> &
     Omit<Pen, "type"> &
     Omit<ImageObj, "type"> &
-    Omit<CommentObj, "type">
+    Omit<CommentObj, "type"> &
+    Omit<LinkObj, "type"> &
+    Omit<TableObj, "type">
 >;
 
 export type Op =

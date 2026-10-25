@@ -14,18 +14,22 @@ import {
   Hand,
   History,
   LayoutGrid,
+  Link2,
   ImagePlus,
   Maximize,
   MessageCircle,
   MousePointer2,
   MoveUpRight,
+  Minus,
   Pencil,
+  Plus,
   Redo2,
   SendToBack,
   Shrink,
   Sparkles,
   Square,
   StickyNote,
+  Table,
   Trash2,
   Triangle,
   Type,
@@ -70,6 +74,7 @@ import { cn } from "@/lib/utils";
 
 import { BoardCanvas, cloneObjects, DEFAULT_TOOL_OPTIONS, isTyping, type Tool, type ToolOptions } from "./board-canvas";
 import { HistoryPanel, type HistoryEntry } from "./board-history";
+import type { EditingCell } from "./objects";
 import { Avatar, ClaudePanel, CommentPopover, TimerControl, VotingControl } from "./board-panels";
 import { bounds, fitView, unionRect, zoomAt, type Pt, type View } from "./geometry";
 import { identity, loadIdentity, randomColor, saveIdentity } from "./identity";
@@ -136,6 +141,8 @@ const TOOLS: { tool: Tool; icon: typeof Hand; label: string; key: string }[] = [
   { tool: "pen", icon: Pencil, label: "Pen", key: "P" },
   { tool: "eraser", icon: Eraser, label: "Eraser (pen strokes)", key: "E" },
   { tool: "comment", icon: MessageCircle, label: "Comment", key: "C" },
+  { tool: "link", icon: Link2, label: "Link", key: "K" },
+  { tool: "table", icon: Table, label: "Table", key: "B" },
 ];
 
 const SHAPE_ICONS: Record<ShapeKind, typeof Square> = {
@@ -300,6 +307,22 @@ function fitTextOps(id: string, currentW: number) {
   }
 }
 
+/**
+ * Add or drop the last row or column. Reads the table as it stands rather than
+ * as it was when the toolbar rendered, so two quick clicks both count.
+ */
+function tableOps(sync: BoardSync, id: string, what: "addRow" | "delRow" | "addCol" | "delCol") {
+  const o = sync.doc.getValue().objects[id];
+  if (o?.type !== "table") return [];
+  const rows = o.rows.map((r) => [...r]);
+  const cols = rows[0].length;
+  if (what === "addRow") rows.push(Array.from({ length: cols }, () => ""));
+  if (what === "delRow" && rows.length > 1) rows.pop();
+  if (what === "addCol") for (const r of rows) r.push("");
+  if (what === "delCol" && cols > 1) for (const r of rows) r.pop();
+  return [{ k: "patch" as const, id: o.id, set: { rows } }];
+}
+
 function SelectionBar({
   sync,
   objs,
@@ -377,6 +400,44 @@ function SelectionBar({
               </Button>
             );
           })}
+        </div>
+      )}
+      {only === "table" && objs.length === 1 && (
+        <div className="ml-1 flex items-center gap-0.5 border-l pl-1">
+          <span className="px-1 text-[11px] text-muted-foreground">Rows</span>
+          <Button size="icon-xs" variant="ghost" title="Add a row" onClick={() => sync.apply(tableOps(sync, objs[0].id, "addRow"))}>
+            <Plus />
+          </Button>
+          <Button size="icon-xs" variant="ghost" title="Remove the last row" onClick={() => sync.apply(tableOps(sync, objs[0].id, "delRow"))}>
+            <Minus />
+          </Button>
+          <span className="px-1 text-[11px] text-muted-foreground">Cols</span>
+          <Button size="icon-xs" variant="ghost" title="Add a column" onClick={() => sync.apply(tableOps(sync, objs[0].id, "addCol"))}>
+            <Plus />
+          </Button>
+          <Button size="icon-xs" variant="ghost" title="Remove the last column" onClick={() => sync.apply(tableOps(sync, objs[0].id, "delCol"))}>
+            <Minus />
+          </Button>
+        </div>
+      )}
+      {only === "link" && objs.length === 1 && (
+        <div className="ml-1 flex gap-0.5 border-l pl-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Change the address or what it says"
+            onClick={() => {
+              const o = objs[0] as typeof objs[0] & { url: string; title: string };
+              const url = window.prompt("Link address", o.url);
+              if (url === null) return;
+              const title = window.prompt("What it should say (blank for the site's name)", o.title);
+              if (title === null) return;
+              sync.apply([{ k: "patch", id: o.id, set: { url: url.trim(), title: title.trim() } }]);
+            }}
+            data-testid="link-edit"
+          >
+            <Pencil /> Edit
+          </Button>
         </div>
       )}
       {only === "text" && objs.length === 1 && (
@@ -605,6 +666,8 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
   const [toolOptions, setToolOptions] = useState<ToolOptions>(DEFAULT_TOOL_OPTIONS);
   const [rawSelection, setSelectionState] = useState<string[]>([]);
   const [editing, setEditingState] = useState<string | null>(null);
+  // The table cell open for typing; it travels with Tab and Enter.
+  const [cell, setCell] = useState<EditingCell>(null);
   const [claudeOpen, setClaudeOpen] = useState(false);
   // Looking back: the board shown is a point from its history, not the live one.
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -633,6 +696,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
   const setEditing = useCallback(
     (id: string | null) => {
       setEditingState(id);
+      if (!id) setCell(null);
       sync.presence({ editing: id });
     },
     [sync],
@@ -999,6 +1063,8 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         onUserPan={stopFollowing}
         onPointerWorld={onPointerWorld}
         readOnly={!!past}
+        cell={past ? null : cell}
+        setCell={setCell}
         area={area}
         onFollowPeer={setFollowing}
         insets={insets}

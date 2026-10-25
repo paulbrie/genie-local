@@ -139,7 +139,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is a `Promise` — `await` it.
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
-  reactions, live cursors, follow mode). Text boxes have a **Fit** that sizes the box to its words (measured from an
+  reactions, live cursors, follow mode). Two more object types: a **link** (its own card with address, title and note —
+  the toolbar's Link tool asks for the address, and only http(s) is kept) and a
+  **table** (first row the header; double-click a cell to type, Tab and Enter walk
+  on, and the toolbar adds or drops rows and columns). Both are in the agent op
+  language. Text boxes have a **Fit** that sizes the box to its words (measured from an
   offscreen copy of what's drawn, so markdown and wrapping count); a frame's title
   has its own size. Markdown on a board is sized relative to each object's own
   font size (`BOARD_TEXT`), since the shared renderer fixes its blocks at document
@@ -157,7 +161,8 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   and size the frame to match) and **Fit** (size the frame around what it holds);
   both are pure helpers in core (`arrangeSectionOps`, `fitSectionOps`) that agents
   can call as the `arrange` / `fit` ops. Sections fold: the chevron on the title
-  collapses the frame to a bar with a count, and what's inside drops out of sight,
+  collapses the frame to a bar sized by its title (`sectionBarW` estimates it, so
+  hit-testing needs no DOM) with a count, and what's inside drops out of sight,
   of hit-testing and of the selection (`hiddenByCollapsed`). Drawing a connector
   highlights the ends it would attach to, and dropping an end on one of the four
   dots on a shape pins the line to that side (`side` on a connector end; Unpin in

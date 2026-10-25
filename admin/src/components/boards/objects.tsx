@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronRight, ExternalLink, Sparkles, X } from "lucide-react";
 
 import { Markdown } from "@/components/markdown";
@@ -8,12 +8,17 @@ import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
-import { arrivalFrom, connectorPath, connectorPoints, penPath, sectionBarH } from "./geometry";
+import { arrivalFrom, connectorPath, connectorPoints, penPath, sectionBarH, sectionBarW } from "./geometry";
 import { initials } from "./identity";
+
+/** Which cell of a table is open for typing. */
+export type EditingCell = { id: string; r: number; c: number } | null;
 
 export type ObjectHandlers = {
   onText: (id: string, text: string, h?: number) => void;
   onToggleCollapse: (id: string) => void;
+  /** A table cell's new text; `move` steps on to the next cell afterwards. */
+  onCell: (id: string, r: number, c: number, text: string, move?: "next" | "prev" | "down") => void;
   onEditEnd: () => void;
   onAccept: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -85,6 +90,48 @@ function EditableText({
       className={cn("block w-full resize-none border-0 bg-transparent p-0 outline-none", className)}
       style={style}
       data-fit={dataFit}
+    />
+  );
+}
+
+/** One table cell being typed in: Tab and Enter walk on to the next. */
+function CellInput({
+  value,
+  onCommit,
+  onDone,
+}: {
+  value: string;
+  onCommit: (v: string, move?: "next" | "prev" | "down") => void;
+  onDone: () => void;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState(value);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  return (
+    <input
+      ref={ref}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => onCommit(text)}
+      onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Tab") {
+          e.preventDefault();
+          onCommit(text, e.shiftKey ? "prev" : "next");
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          onCommit(text, "down");
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCommit(text);
+          onDone();
+        }
+      }}
+      className="w-full border-0 bg-transparent p-0 text-xs outline-none"
     />
   );
 }
@@ -200,6 +247,8 @@ type Props = {
   hiddenCount?: number;
   /** Selected: its links become clickable (otherwise a click just picks it up). */
   selected?: boolean;
+  /** The cell being typed in, when this is the table it belongs to. */
+  cell?: EditingCell;
   /** Someone else is typing in it (their colour). */
   lockedBy?: string;
 };
@@ -292,7 +341,7 @@ function Body({ text, className, selected }: { text: string; className?: string;
   );
 }
 
-export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0, selected }: Props) {
+export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0, selected, cell }: Props) {
   const box: React.CSSProperties = { left: o.x, top: o.y, width: o.w, height: o.h, zIndex: o.z };
   const ring = lockedBy ? { boxShadow: `0 0 0 2px ${lockedBy}` } : undefined;
   const suggestion = o.suggestion ? <SuggestionBar id={o.id} h={handlers} /> : null;
@@ -401,7 +450,7 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
 
       if (o.collapsed) {
         return (
-          <div className="absolute select-none" style={{ ...box, height: sectionBarH(o), ...ring }}>
+          <div className="absolute select-none" style={{ ...box, width: sectionBarW(o), height: sectionBarH(o), ...ring }}>
             {suggestion}
             <div
               className="flex h-full w-full items-center gap-1.5 rounded-md border border-black/10 px-2 font-semibold text-zinc-800"
@@ -459,6 +508,87 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
           <VoteBadge votes={o.votes} me={me} />
         </div>
       );
+    case "link": {
+      let host = o.url;
+      let path = "";
+      try {
+        const u = new URL(o.url);
+        host = u.host.replace(/^www\./, "");
+        path = `${u.pathname}${u.search}`.replace(/\/$/, "");
+      } catch {
+        /* sanitised on the way in, so this shouldn't happen */
+      }
+      return (
+        <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
+          {suggestion}
+          <a
+            href={o.url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              "flex h-full w-full flex-col gap-1 overflow-hidden rounded-lg border bg-card p-3 no-underline shadow-sm",
+              selected ? "pointer-events-auto hover:bg-muted/50" : "pointer-events-none",
+            )}
+            title={o.url}
+          >
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <ExternalLink className="size-3 shrink-0" />
+              <span className="truncate">
+                {host}
+                {path && path !== "/" && <span className="opacity-70">{path}</span>}
+              </span>
+            </span>
+            <span className="line-clamp-2 text-sm font-semibold leading-snug text-foreground">{o.title || host}</span>
+            {o.desc && <span className="line-clamp-2 text-xs text-muted-foreground">{o.desc}</span>}
+          </a>
+          <VoteBadge votes={o.votes} me={me} />
+        </div>
+      );
+    }
+    case "table": {
+      const cols = o.rows[0]?.length ?? 1;
+      return (
+        <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
+          {suggestion}
+          <div className="h-full w-full overflow-hidden rounded-md border bg-card shadow-sm">
+            <table className="h-full w-full table-fixed border-collapse text-xs">
+              <tbody>
+                {o.rows.map((row, r) => (
+                  <tr key={r}>
+                    {row.map((text, c) => {
+                      const head = r === 0 || (o.headerCol && c === 0);
+                      const open = cell?.id === o.id && cell.r === r && cell.c === c;
+                      return (
+                        <td
+                          key={c}
+                          className={cn(
+                            "truncate border px-1.5 py-1 align-top",
+                            head && "bg-muted/60 font-semibold",
+                            open && "bg-blue-500/10 ring-2 ring-inset ring-blue-500",
+                          )}
+                          style={{ width: `${100 / cols}%` }}
+                        >
+                          {open ? (
+                            <CellInput
+                              value={text}
+                              onCommit={(v, move) => handlers.onCell(o.id, r, c, v, move)}
+                              onDone={handlers.onEditEnd}
+                            />
+                          ) : (
+                            <span className="block truncate">{text}</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <VoteBadge votes={o.votes} me={me} />
+        </div>
+      );
+    }
     case "comment": {
       const first = o.thread[0];
       const who = first?.author;

@@ -42,7 +42,7 @@ import {
   type View,
 } from "./geometry";
 import { initials } from "./identity";
-import { ConnectorView, ObjectView, type ObjectHandlers } from "./objects";
+import { ConnectorView, ObjectView, type EditingCell, type ObjectHandlers } from "./objects";
 import type { BoardSync, Gesture, Peer, Reaction } from "./sync";
 
 export type Tool =
@@ -55,7 +55,9 @@ export type Tool =
   | "connector"
   | "pen"
   | "eraser"
-  | "comment";
+  | "comment"
+  | "link"
+  | "table";
 
 export type ToolOptions = {
   stickyColor: string;
@@ -120,6 +122,9 @@ type Props = {
   insets: Insets;
   /** Looking at the past: you can move around it, but not change it. */
   readOnly?: boolean;
+  /** The table cell open for typing, and how to move between them. */
+  cell: EditingCell;
+  setCell: (cell: EditingCell) => void;
   /** The world point under the pointer, null when it leaves (for paste and reactions). */
   onPointerWorld: (p: Pt | null) => void;
 };
@@ -152,6 +157,8 @@ export function BoardCanvas(props: Props) {
     onFollowPeer,
     insets,
     readOnly = false,
+    cell,
+    setCell,
   } = props;
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -229,6 +236,21 @@ export function BoardCanvas(props: Props) {
         editGesture.current = null;
         setEditing(null);
       },
+      onCell: (id, r, c, text, move) => {
+        const o = live.current.doc.objects[id];
+        if (o?.type !== "table") return;
+        if (o.rows[r]?.[c] !== text) {
+          const rows = o.rows.map((row, i) => (i === r ? row.map((v, j) => (j === c ? text : v)) : row));
+          sync.apply([{ k: "patch", id, set: { rows } }]);
+        }
+        if (!move) return;
+        // Walk on, wrapping at the ends of a row and stopping at the table's.
+        const cols = o.rows[0].length;
+        const flat = move === "down" ? (r + 1) * cols + c : r * cols + c + (move === "next" ? 1 : -1);
+        const nr = move === "down" ? r + 1 : Math.floor(flat / cols);
+        const nc = move === "down" ? c : ((flat % cols) + cols) % cols;
+        if (nr >= 0 && nr < o.rows.length) setCell({ id, r: nr, c: nc });
+      },
       onToggleCollapse: (id) => {
         const o = live.current.doc.objects[id];
         if (o?.type === "section") sync.apply([{ k: "patch", id, set: { collapsed: o.collapsed ? null : true } as never }]);
@@ -236,7 +258,7 @@ export function BoardCanvas(props: Props) {
       onAccept: (id) => sync.apply([{ k: "patch", id, set: { suggestion: null } as never }]),
       onDismiss: (id) => sync.apply([{ k: "del", id }]),
     }),
-    [sync, setEditing],
+    [sync, setEditing, setCell],
   );
 
   // Close an edit session if the object vanished (someone deleted it).
@@ -397,6 +419,36 @@ export function BoardCanvas(props: Props) {
         setDrag({ kind: "erase", g: sync.gesture(), erased: new Set() });
         eraseAt(p);
         return;
+      case "link": {
+        // Nothing to show without an address, so ask for it first.
+        const raw = window.prompt("Link address");
+        setTool("select");
+        const url = raw?.trim();
+        if (!url) return;
+        const s = DEFAULT_SIZES.link;
+        const id = create({ type: "link", x: p.x - s.w / 2, y: p.y - s.h / 2, w: s.w, h: s.h, url: /^https?:\/\//i.test(url) ? url : `https://${url}` } as Partial<BoardObject> & { type: "link" });
+        setSelection([id]);
+        return;
+      }
+      case "table": {
+        const s = DEFAULT_SIZES.table;
+        const id = create({
+          type: "table",
+          x: p.x - s.w / 2,
+          y: p.y - s.h / 2,
+          w: s.w,
+          h: s.h,
+          rows: [
+            ["Column", "Column", "Column"],
+            ["", "", ""],
+            ["", "", ""],
+          ],
+        } as Partial<BoardObject> & { type: "table" });
+        setSelection([id]);
+        setCell({ id, r: 0, c: 0 });
+        setTool("select");
+        return;
+      }
       case "comment": {
         const hit = hitTest(d, sortedRef.current, p, v.zoom);
         if (hit?.type === "comment") onOpenComment({ id: hit.id });
@@ -679,6 +731,14 @@ export function BoardCanvas(props: Props) {
       setEditing(id);
       return;
     }
+    if (hit.type === "table") {
+      const cols = hit.rows[0].length;
+      const c = Math.min(cols - 1, Math.max(0, Math.floor(((p.x - hit.x) / hit.w) * cols)));
+      const r = Math.min(hit.rows.length - 1, Math.max(0, Math.floor(((p.y - hit.y) / hit.h) * hit.rows.length)));
+      setSelection([hit.id]);
+      setCell({ id: hit.id, r, c });
+      return;
+    }
     if (hit.type === "sticky" || hit.type === "text" || hit.type === "shape" || hit.type === "section") {
       setSelection([hit.id]);
       setEditing(hit.id);
@@ -777,6 +837,7 @@ export function BoardCanvas(props: Props) {
               handlers={handlers}
               hiddenCount={foldedCounts.get(o.id)}
               selected={selected.has(o.id)}
+              cell={cell?.id === o.id ? cell : null}
               lockedBy={remoteEditing.get(o.id)}
             />
           ),

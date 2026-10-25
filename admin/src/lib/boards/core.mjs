@@ -28,6 +28,9 @@ export const LIMITS = {
   penPoints: 4000,
   thread: 200,
   chat: 200,
+  cell: 2000,
+  cols: 20,
+  rows: 200,
   coord: 1_000_000,
   size: 100_000,
   votesPerUser: 10,
@@ -82,6 +85,8 @@ export const OBJECT_TYPES = [
   "pen",
   "image",
   "comment",
+  "link",
+  "table",
 ];
 export const SHAPES = ["rect", "roundrect", "ellipse", "diamond", "triangle"];
 export const ARROWS = ["end", "both", "none"];
@@ -98,7 +103,28 @@ export const DEFAULT_SIZES = {
   section: { w: 640, h: 420 },
   image: { w: 320, h: 240 },
   comment: { w: 32, h: 32 },
+  link: { w: 340, h: 104 },
+  table: { w: 480, h: 132 },
 };
+
+/** A table's cells: the first row is its header. Ragged input is squared off. */
+function sanitizeRows(raw) {
+  const rows = (Array.isArray(raw) ? raw : []).slice(0, LIMITS.rows).map((r) => (Array.isArray(r) ? r : [r]));
+  if (!rows.length) return [["", "", ""], ["", "", ""]];
+  const cols = Math.min(LIMITS.cols, Math.max(1, ...rows.map((r) => r.length)));
+  return rows.map((r) => Array.from({ length: cols }, (_, c) => str(r[c] ?? "", LIMITS.cell)));
+}
+
+/** A link's address, or null for anything that isn't a plain http(s) one. */
+function sanitizeUrl(v) {
+  if (typeof v !== "string") return null;
+  try {
+    const u = new URL(v.trim());
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href.slice(0, 2000) : null;
+  } catch {
+    return null;
+  }
+}
 
 export function emptyDoc() {
   return {
@@ -277,6 +303,19 @@ export function sanitizeObject(o) {
       out.alt = str(o.alt, LIMITS.title);
       break;
     }
+    case "link": {
+      const url = sanitizeUrl(o.url);
+      if (!url) return null;
+      out.url = url;
+      out.title = str(o.title, LIMITS.title);
+      out.desc = str(o.desc, 400);
+      break;
+    }
+    case "table":
+      out.rows = sanitizeRows(o.rows);
+      // Fixed first column, for a table read as a list of labelled things.
+      if (o.headerCol === true) out.headerCol = true;
+      break;
     case "comment":
       out.thread = (Array.isArray(o.thread) ? o.thread : [])
         .map(sanitizeMessage)
@@ -507,7 +546,7 @@ export function findFreeSpot(doc, w, h, near) {
   return { x: origin.x, y: origin.y };
 }
 
-const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed", "curved"];
+const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed", "curved", "url", "desc", "rows", "headerCol"];
 
 /**
  * The small, forgiving op language Claude and outside agents write
@@ -699,6 +738,14 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
         break;
       case "image":
         if (o.alt) d.alt = o.alt;
+        break;
+      case "link":
+        d.url = o.url;
+        if (o.title) d.title = o.title;
+        if (o.desc) d.desc = clip(o.desc, maxText);
+        break;
+      case "table":
+        d.rows = o.rows.map((r) => r.map((cell) => clip(cell, 80)));
         break;
       case "comment":
         d.resolved = o.resolved;
