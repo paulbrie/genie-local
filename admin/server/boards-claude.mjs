@@ -7,15 +7,20 @@
  * Same CLI rules as src/lib/claude-cli.ts (which raw Node can't import): stdin
  * must be /dev/null, it runs from /tmp so no project CLAUDE.md leaks into
  * context, and every tool is disallowed except, when asked for (`web`),
- * WebFetch and WebSearch so it can read a link someone puts on the board.
- * Never a shell or a browser: a board's text is effectively the prompt.
+ * WebFetch, WebSearch and a real browser (boards-browser-mcp.mjs: browser
+ * actions only, public addresses only) so it can read what a link points to.
+ * Never a shell: a board's text is effectively the prompt. Only that MCP server
+ * is loaded (--strict-mcp-config), none of the account's others.
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { describeBoard } from "../src/lib/boards/core.mjs";
 
 const DISALLOWED = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "Task", "NotebookEdit", "TodoWrite"];
 const WEB = ["WebFetch", "WebSearch"];
+const BROWSER_MCP = fileURLToPath(new URL("./boards-browser-mcp.mjs", import.meta.url));
+let browserRuns = 0;
 
 const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "RAILWAY_API_TOKEN"];
 
@@ -26,11 +31,16 @@ export function claudeBusy() {
   return running >= MAX_CONCURRENT;
 }
 
-export function runClaudeCli(prompt, { timeoutMs = 180_000, web = false } = {}) {
+export function runClaudeCli(prompt, { timeoutMs, web = false } = {}) {
+  timeoutMs ??= web ? 300_000 : 180_000;
+  // Each web run gets its own throwaway browser, closed when the run ends.
+  const session = `board-claude-${process.pid}-${++browserRuns}`;
+  const mcp = { mcpServers: { browser: { command: process.execPath, args: [BROWSER_MCP], env: { BOARDS_BROWSER_SESSION: session, PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "/home/genie" } } } };
   return new Promise((resolve, reject) => {
     running++;
     const done = (fn, v) => {
       running--;
+      if (web) execFile("agent-browser", ["--session", session, "close"], { timeout: 10_000 }, () => {});
       fn(v);
     };
     const env = { ...process.env, HOME: process.env.HOME ?? "/home/genie" };
@@ -45,7 +55,8 @@ export function runClaudeCli(prompt, { timeoutMs = 180_000, web = false } = {}) 
         prompt,
         "--output-format",
         "json",
-        ...(web ? ["--allowed-tools", ...WEB] : []),
+        "--strict-mcp-config",
+        ...(web ? ["--mcp-config", JSON.stringify(mcp), "--allowed-tools", ...WEB, "mcp__browser"] : []),
         "--disallowed-tools",
         ...DISALLOWED,
         ...(web ? [] : WEB),
@@ -126,7 +137,7 @@ function viewportLine(vp) {
   return `Their screen shows the area x=${Math.round(vp.x)}..${Math.round(vp.x + vp.w)}, y=${Math.round(vp.y)}..${Math.round(vp.y + vp.h)}; put new things there unless told otherwise.\n`;
 }
 
-const WEB_HELP = `You can read web pages with WebFetch (and search with WebSearch): when someone gives a link or asks about something online, open it rather than guessing, and put what you found on the board.`;
+const WEB_HELP = `You can read the web: WebFetch for ordinary pages, WebSearch to search, and a real browser (browser_open, browser_text, browser_snapshot, browser_click, browser_type, browser_scroll, browser_back) for pages that need JavaScript or clicking through. When someone gives a link or asks about something online, look it up rather than guessing, and put what you found on the board.`;
 
 const ANSWER = `Answer with ONLY a JSON object, no prose around it:
 {"reply": "a short, friendly message to the group (plain text, under 600 characters)", "ops": [ … ]}

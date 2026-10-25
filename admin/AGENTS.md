@@ -156,8 +156,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   · Claude is a participant: asked in the board's Claude panel, `@claude` in a
     comment, or the opt-in facilitator (after 45 s of quiet, at most every 4 min,
     adds up to 3 suggestions people keep or dismiss). `server/boards-claude.mjs`
-    runs the logged-in `claude` CLI (default model, every tool disallowed, admin
-    secrets stripped from its env) and gets back `{ reply, ops }` in the agent op
+    runs the logged-in `claude` CLI (default model, admin secrets stripped from its
+    env, no shell or file tools; asks and @mentions also get WebFetch, WebSearch and
+    a real browser via `server/boards-browser-mcp.mjs`, an MCP over `agent-browser`
+    that only reaches public http(s) addresses, one throwaway session per run;
+    `--strict-mcp-config` keeps the account's other MCP servers out) and gets back `{ reply, ops }` in the agent op
     language (`translateAgentOps`), which the hub plays back with Claude's cursor.
   · Agents: `/api/boards` (list/create), `/api/boards/<id>` (GET doc + one JSON line
     per item, `?format=text`; PATCH title/archived; DELETE archived), `POST
