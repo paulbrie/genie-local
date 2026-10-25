@@ -358,8 +358,36 @@ function SelectionBar({
               {a === "end" ? "→" : a === "both" ? "↔" : "—"}
             </Button>
           ))}
-          <Button size="xs" variant={first.dashed ? "secondary" : "ghost"} onClick={() => patchAll({ dashed: first.dashed ? null : true })}>
+          <Button size="xs" variant={first.dashed ? "secondary" : "ghost"} title="Dashed" onClick={() => patchAll({ dashed: first.dashed ? null : true })}>
             ┄
+          </Button>
+          <Button
+            size="xs"
+            variant={first.curved ? "secondary" : "ghost"}
+            title={first.curved ? "Make it straight" : "Curve it"}
+            onClick={() => patchAll({ curved: first.curved ? null : true })}
+            data-testid="connector-curved"
+          >
+            {first.curved ? "〜" : "／"}
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Let both ends find their own place again"
+            onClick={() =>
+              sync.apply(
+                objs
+                  .filter((o): o is typeof o & { type: "connector" } => o.type === "connector")
+                  .map((o) => ({
+                    k: "patch" as const,
+                    id: o.id,
+                    set: { from: { ...o.from, side: null }, to: { ...o.to, side: null } } as never,
+                  })),
+              )
+            }
+            data-testid="connector-unpin"
+          >
+            Unpin
           </Button>
           <Button
             size="xs"

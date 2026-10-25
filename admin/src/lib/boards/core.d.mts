@@ -17,7 +17,8 @@ type Base = {
   votes?: Record<string, number>;
 };
 
-export type ConnectorEnd = { id?: string; x: number; y: number };
+export type Side = "top" | "right" | "bottom" | "left";
+export type ConnectorEnd = { id?: string; x: number; y: number; side?: Side };
 export type Message = { id: string; author: Author; text: string; at: number };
 export type ChatMessage = Message & { role: "user" | "claude"; pending?: true };
 
@@ -34,6 +35,7 @@ export type Connector = Base & {
   arrow: "end" | "both" | "none";
   color: string;
   dashed?: true;
+  curved?: true;
 };
 export type Pen = Base & { type: "pen"; points: [number, number][]; color: string; width: number };
 export type ImageObj = Base & { type: "image"; src: string; alt: string };
@@ -109,6 +111,7 @@ export const CLAUDE_COLOR: string;
 export const OBJECT_TYPES: ObjectType[];
 export const SHAPES: ShapeKind[];
 export const ARROWS: Connector["arrow"][];
+export const SIDES: ("auto" | Side)[];
 export const ASSET_PREFIX: string;
 export const DEFAULT_SIZES: Record<string, { w: number; h: number }>;
 

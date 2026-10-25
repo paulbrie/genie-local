@@ -7,7 +7,7 @@ import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
-import { connectorPoints, penPath, SECTION_BAR_H } from "./geometry";
+import { arrivalFrom, connectorPath, connectorPoints, penPath, SECTION_BAR_H } from "./geometry";
 import { initials } from "./identity";
 
 export type ObjectHandlers = {
@@ -119,23 +119,25 @@ function arrowHead(tip: { x: number; y: number }, from: { x: number; y: number }
 }
 
 export function ConnectorView({ doc, o, preview }: { doc: BoardDoc; o: Connector; preview?: boolean }) {
-  const { a, b } = connectorPoints(doc, o);
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const { a, b, da, db } = connectorPoints(doc, o);
+  // A curve's label rides its middle, which is not the midpoint of the ends.
+  const { atB, atA } = arrivalFrom(a, b, da, db, o.curved);
+  const mid = o.curved
+    ? { x: (a.x + b.x) / 2 * 0.5 + (atA.x + atB.x) / 2 * 0.5, y: (a.y + b.y) / 2 * 0.5 + (atA.y + atB.y) / 2 * 0.5 }
+    : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   return (
     <>
       <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1} style={{ zIndex: o.z }}>
-        <line
-          x1={a.x}
-          y1={a.y}
-          x2={b.x}
-          y2={b.y}
+        <path
+          d={connectorPath(a, b, da, db, o.curved)}
+          fill="none"
           stroke={o.color}
           strokeWidth={2}
           strokeDasharray={o.dashed || preview ? "8 6" : undefined}
           strokeLinecap="round"
         />
-        {(o.arrow === "end" || o.arrow === "both") && <polygon points={arrowHead(b, a, 12)} fill={o.color} />}
-        {o.arrow === "both" && <polygon points={arrowHead(a, b, 12)} fill={o.color} />}
+        {(o.arrow === "end" || o.arrow === "both") && <polygon points={arrowHead(b, atB, 12)} fill={o.color} />}
+        {o.arrow === "both" && <polygon points={arrowHead(a, atA, 12)} fill={o.color} />}
       </svg>
       {o.label && (
         <div

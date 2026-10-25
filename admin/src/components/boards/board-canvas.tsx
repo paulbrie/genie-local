@@ -15,6 +15,7 @@ import {
   type Connector,
   type ConnectorEnd,
   type ShapeKind,
+  type Side,
 } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ import {
   intersects,
   normRect,
   offScreen,
+  sideHandles,
   penHit,
   penPath,
   simplify,
@@ -311,6 +313,16 @@ export function BoardCanvas(props: Props) {
     setDrag({ kind: "move", start: p, ids: [...all], origins, g: sync.gesture(), moved: false, clickId, additive });
   };
 
+  /** The side dot under `p` on `target`, if the pointer is close enough to one. */
+  const sideAt = (target: BoardObject | null, p: Pt): Side | undefined => {
+    if (!target) return undefined;
+    const r = 14 / live.current.view.zoom;
+    for (const h of sideHandles(target)) {
+      if (Math.hypot(p.x - h.p.x, p.y - h.p.y) <= r) return h.side;
+    }
+    return undefined;
+  };
+
   const create = (obj: Partial<BoardObject> & { type: BoardObject["type"] }, g?: Gesture) => {
     const d = live.current.doc;
     const id = newId(obj.type[0]);
@@ -563,7 +575,8 @@ export function BoardCanvas(props: Props) {
         return;
       case "endpoint": {
         const target = attachTarget(sortedRef.current, p, (d.objects[dg.id] as Connector | undefined)?.[dg.which === "from" ? "to" : "from"]?.id);
-        dg.g.apply([{ k: "patch", id: dg.id, set: { [dg.which]: target ? { id: target.id, x: p.x, y: p.y } : { x: p.x, y: p.y } } }]);
+        const end: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, side: sideAt(target, p) } : { x: p.x, y: p.y };
+        dg.g.apply([{ k: "patch", id: dg.id, set: { [dg.which]: end } }]);
         return;
       }
       case "pen":
@@ -612,7 +625,7 @@ export function BoardCanvas(props: Props) {
       }
       case "connect": {
         const target = attachTarget(sortedRef.current, p, dg.from.id);
-        const to: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y } : { x: p.x, y: p.y };
+        const to: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, side: sideAt(target, p) } : { x: p.x, y: p.y };
         const len = Math.hypot(p.x - dg.from.x, p.y - dg.from.y);
         if (len * live.current.view.zoom > 8 || (target && dg.from.id)) {
           const id = create({ type: "connector", from: dg.from, to, label: "", arrow: "end", color: INKS.black } as Partial<Connector> & { type: "connector" });
@@ -868,6 +881,23 @@ export function BoardCanvas(props: Props) {
             />
           );
         })}
+
+        {/* Where a line can be pinned on the thing it's meeting */}
+        {(drag?.kind === "connect" || drag?.kind === "endpoint") && snap && doc.objects[snap] &&
+          sideHandles(doc.objects[snap]).map((h) => (
+            <div
+              key={`side-${h.side}`}
+              className="pointer-events-none absolute rounded-full border-white bg-blue-500"
+              style={{
+                left: h.p.x - 5 / z,
+                top: h.p.y - 5 / z,
+                width: 10 / z,
+                height: 10 / z,
+                borderWidth: 2 / z,
+                zIndex: 1e9,
+              }}
+            />
+          ))}
 
         {/* In-progress drawing */}
         {drag?.kind === "pen" && (

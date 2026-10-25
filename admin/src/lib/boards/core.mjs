@@ -85,6 +85,8 @@ export const OBJECT_TYPES = [
 ];
 export const SHAPES = ["rect", "roundrect", "ellipse", "diamond", "triangle"];
 export const ARROWS = ["end", "both", "none"];
+/** Where a line meets a shape: a named side, or "auto" to follow the other end. */
+export const SIDES = ["auto", "top", "right", "bottom", "left"];
 
 /** Where uploaded board images are served from (relative to the basePath). */
 export const ASSET_PREFIX = "/api/boards/assets/";
@@ -165,6 +167,8 @@ function sanitizeEnd(e) {
     y: num(e.y, -LIMITS.coord, LIMITS.coord, 0),
   };
   if (isId(e.id)) out.id = e.id;
+  const side = oneOf(e.side, SIDES, "auto");
+  if (side !== "auto") out.side = side;
   return out;
 }
 
@@ -249,6 +253,7 @@ export function sanitizeObject(o) {
       out.arrow = oneOf(o.arrow, ARROWS, "end");
       out.color = color(o.color, INKS.black);
       if (o.dashed === true) out.dashed = true;
+      if (o.curved === true) out.curved = true;
       break;
     }
     case "pen": {
@@ -501,7 +506,7 @@ export function findFreeSpot(doc, w, h, near) {
   return { x: origin.x, y: origin.y };
 }
 
-const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed"];
+const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed", "curved"];
 
 /**
  * The small, forgiving op language Claude and outside agents write
@@ -545,8 +550,8 @@ export function translateAgentOps(doc, agentOps, actor, now) {
           errors.push(`#${i}: connector needs from/to ids that exist`);
           return;
         }
-        obj.from = { id: from, x: 0, y: 0 };
-        obj.to = { id: to, x: 0, y: 0 };
+        obj.from = { id: from, x: 0, y: 0, side: a.fromSide };
+        obj.to = { id: to, x: 0, y: 0, side: a.toSide };
         if (a.text && !a.label) obj.label = a.text;
       } else if (type === "comment") {
         const text = str(a.text, LIMITS.text).trim();
@@ -682,6 +687,9 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
       case "connector":
         d.from = o.from.id ?? `(${r(o.from.x)},${r(o.from.y)})`;
         d.to = o.to.id ?? `(${r(o.to.x)},${r(o.to.y)})`;
+        if (o.from.side) d.fromSide = o.from.side;
+        if (o.to.side) d.toSide = o.to.side;
+        if (o.curved) d.curved = true;
         if (o.label) d.label = o.label;
         break;
       case "pen":

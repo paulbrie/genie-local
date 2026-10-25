@@ -145,7 +145,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   can call as the `arrange` / `fit` ops. Sections fold: the chevron on the title
   collapses the frame to a bar with a count, and what's inside drops out of sight,
   of hit-testing and of the selection (`hiddenByCollapsed`). Drawing a connector
-  highlights the ends it would attach to; someone working outside your view shows as a marker on the edge
+  highlights the ends it would attach to, and dropping an end on one of the four
+  dots on a shape pins the line to that side (`side` on a connector end; Unpin in
+  the toolbar lets it find its own place again). Lines can be curved (`curved`),
+  drawn as a bezier leaving each end head-on, with hit-testing and arrowheads
+  following the curve; someone working outside your view shows as a marker on the edge
   of it, pointing their way — click it to follow them. Pieces:
   · `src/lib/boards/core.mjs` (+ `core.d.mts`) — the doc model and `applyOps`, plain
     JS so both the browser and the raw-Node hub import it. A board is one jsonb doc
