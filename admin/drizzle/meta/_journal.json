@@ -120,6 +120,13 @@
       "when": 1792890128228,
       "tag": "0016_boards",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792936921813,
+      "tag": "0017_board_snapshots",
+      "breakpoints": true
     }
   ]
 }

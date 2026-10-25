@@ -1,6 +1,7 @@
 import {
   bigint,
   boolean,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -308,10 +309,34 @@ export const boards = pgTable("boards", {
     .defaultNow(),
 });
 
+/**
+ * A board as it stood at one moment. The hub writes one every so often while
+ * people work, and always just before Claude or an agent changes anything, so a
+ * run that reshuffles the board can be rewound.
+ */
+export const boardSnapshots = pgTable(
+  "board_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    boardId: integer("board_id")
+      .notNull()
+      .references(() => boards.id, { onDelete: "cascade" }),
+    doc: jsonb("doc").notNull(),
+    // Why it was taken, when that's worth saying ("before Claude's changes").
+    label: text("label"),
+    // Who changed anything since the previous one, and how many changes.
+    authors: text("authors"),
+    changes: integer("changes").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("board_snapshots_board_time").on(t.boardId, t.createdAt)],
+);
+
 export type Connection = typeof connections.$inferSelect;
 export type SavedQuery = typeof savedQueries.$inferSelect;
 export type Diagram = typeof diagrams.$inferSelect;
 export type Board = typeof boards.$inferSelect;
+export type BoardSnapshot = typeof boardSnapshots.$inferSelect;
 
 export type Project = typeof projects.$inferSelect;
 export type App = typeof apps.$inferSelect;

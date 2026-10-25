@@ -42,6 +42,11 @@ import {
 } from "./boards-claude.mjs";
 
 const SAVE_DEBOUNCE_MS = 1200;
+// History: a point you can rewind to. Taken at most this often while people
+// work, always before Claude or an agent touches anything, and trimmed to the
+// most recent per board.
+const SNAPSHOT_EVERY_MS = 45_000;
+const SNAPSHOT_KEEP = 60;
 const EVICT_AFTER_MS = 2 * 60_000;
 const MAX_OPS_PER_BATCH = 500;
 const AGENT_PRESENCE_MS = 20_000;
@@ -88,6 +93,37 @@ class Room {
     this.stoppedBy = null;
     /** API agents mid-playback; like Claude runs, they keep the room loaded. */
     this.holds = 0;
+    /** Who has changed anything since the last snapshot, and how much. */
+    this.sinceSnapshot = { authors: new Set(), changes: 0, at: Date.now() };
+  }
+
+  /**
+   * Keep the board as it stands as a point you can come back to. `label` says
+   * why, when that is worth recording. Call it BEFORE whatever is about to
+   * happen. Quiet about failures: losing a history point must not break an edit.
+   */
+  async snapshot(label = null) {
+    const { authors, changes } = this.sinceSnapshot;
+    if (!label && !changes) return;
+    this.sinceSnapshot = { authors: new Set(), changes: 0, at: Date.now() };
+    try {
+      await db().query(
+        "insert into board_snapshots (board_id, doc, label, authors, changes) values ($1, $2, $3, $4, $5)",
+        [this.id, this.doc, label, [...authors].slice(0, 6).join(", ") || null, changes],
+      );
+      await db().query(
+        `delete from board_snapshots where board_id = $1 and id not in (
+           select id from board_snapshots where board_id = $1 order by created_at desc, id desc limit $2)`,
+        [this.id, SNAPSHOT_KEEP],
+      );
+    } catch (e) {
+      console.error(`[boards] snapshot ${this.id}:`, e.message);
+    }
+  }
+
+  /** A moment worth keeping, once enough has happened since the last one. */
+  maybeSnapshot() {
+    if (this.sinceSnapshot.changes && Date.now() - this.sinceSnapshot.at >= SNAPSHOT_EVERY_MS) this.snapshot();
   }
 
   humans() {
@@ -114,6 +150,12 @@ class Room {
     this.seq++;
     this.doc = next;
     this.broadcast({ t: "ops", seq: this.seq, opId, actor, at: now, ops });
+    // Chat isn't a board change, so it doesn't make a history point on its own.
+    const counted = ops.filter((op) => op.k !== "chat").length;
+    if (counted && actor) {
+      this.sinceSnapshot.authors.add(actor.name);
+      this.sinceSnapshot.changes += counted;
+    }
     if (human) {
       this.lastHumanEditAt = now;
       this.editsSinceFacilitator += ops.length;
@@ -132,6 +174,7 @@ class Room {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.save().catch((e) => console.error(`[boards] save ${this.id}:`, e.message));
+      this.maybeSnapshot();
     }, SAVE_DEBOUNCE_MS);
   }
 
@@ -446,6 +489,8 @@ function parseAnswer(raw) {
 }
 
 async function withClaude(room, cursorNear, fn) {
+  // Somewhere to come back to if the run isn't what the board wanted.
+  await room.snapshot("before Claude's changes");
   room.claudeRuns++;
   // One run at a time per board, so this is the one a Stop applies to.
   room.claudeAbort = new AbortController();
@@ -611,6 +656,7 @@ const hub = {
     const room = await loadRoom(id);
     if (!room) return null;
     room.touch();
+    await room.snapshot(`before ${agentName}'s changes`);
     room.holds++;
     try {
       const user = agentUser(agentName);
@@ -639,6 +685,11 @@ const hub = {
     clearTimeout(room.saveTimer);
     await room.save().catch((e) => console.error(`[boards] save ${id}:`, e.message));
     for (const c of room.clients) c.ws.close(4410, "board closed");
+  },
+  /** Keep a point in a board's history before something big happens to it. */
+  async snapshotBoard(id, label) {
+    const room = await loadRoom(id);
+    if (room) await room.snapshot(label);
   },
   /** Replace a board's doc wholesale (restore from JSON); everyone reloads it. */
   async replaceDoc(id, doc) {

@@ -167,6 +167,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     sender's copy is its ack), relays presence, saves `doc` 1.2 s after an edit, on
     the last disconnect and on SIGTERM (an abrupt crash can lose that last second).
     Next route handlers reach it through `globalThis.__boardsHub` (same process).
+  · History: the hub keeps a point you can rewind to (`board_snapshots`) every
+    45 s of work and always before Claude or an agent changes anything, trimmed to
+    the last 60 per board. The History panel slides over them, showing the board as
+    it stood (read-only, only you see it); restoring puts everyone back and is
+    itself recorded, so it can be undone. `/api/boards/<id>/history` lists them,
+    `?at=<id>` returns that doc, POST restores.
   · Identity: the admin has one shared login, so each browser picks a display name
     and colour, kept in localStorage (`src/components/boards/identity.ts`).
   · Claude is a participant: asked in the board's Claude panel, `@claude` in a

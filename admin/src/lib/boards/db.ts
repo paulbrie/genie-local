@@ -24,6 +24,7 @@ type Hub = {
   renamed(id: number, title: string): void;
   closed(id: number): Promise<void>;
   replaceDoc(id: number, doc: unknown): Promise<boolean>;
+  snapshotBoard(id: number, label: string): Promise<void>;
 };
 
 /** Null when Next runs without the custom server (e.g. a bare `next dev`). */

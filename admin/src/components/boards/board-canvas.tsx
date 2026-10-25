@@ -118,6 +118,8 @@ type Props = {
   onFollowPeer: (pid: string) => void;
   /** Where the toolbars and panels cover the canvas, so markers stay visible. */
   insets: Insets;
+  /** Looking at the past: you can move around it, but not change it. */
+  readOnly?: boolean;
   /** The world point under the pointer, null when it leaves (for paste and reactions). */
   onPointerWorld: (p: Pt | null) => void;
 };
@@ -149,6 +151,7 @@ export function BoardCanvas(props: Props) {
     area,
     onFollowPeer,
     insets,
+    readOnly = false,
   } = props;
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -348,7 +351,8 @@ export function BoardCanvas(props: Props) {
     // board ends text editing (blur does the rest) and frees shortcut keys.
     (document.activeElement as HTMLElement | null)?.blur?.();
 
-    if (e.button === 1 || t === "hand" || space) {
+    // The past is read-only: you can still move around it.
+    if (e.button === 1 || t === "hand" || space || readOnly) {
       onUserPan();
       setDrag({ kind: "pan", sx, sy, view: v });
       return;
@@ -662,6 +666,7 @@ export function BoardCanvas(props: Props) {
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    if (readOnly) return;
     const { doc: d, view: v } = live.current;
     const p = worldPt(e);
     const hit = hitTest(d, sortedRef.current, p, v.zoom);
@@ -692,6 +697,7 @@ export function BoardCanvas(props: Props) {
   // ---------------------------------------------------------- drop images
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (readOnly) return;
     const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
     if (files.length) onDropFiles(files, worldPt(e));
   };
@@ -706,7 +712,7 @@ export function BoardCanvas(props: Props) {
   }
 
   const cursorClass =
-    space || tool === "hand"
+    space || tool === "hand" || readOnly
       ? drag?.kind === "pan"
         ? "cursor-grabbing"
         : "cursor-grab"

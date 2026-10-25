@@ -12,6 +12,7 @@ import {
   Eraser,
   Frame,
   Hand,
+  History,
   LayoutGrid,
   ImagePlus,
   Maximize,
@@ -60,6 +61,7 @@ import {
   PARTICIPANT_COLORS,
   SHAPES,
   type Author,
+  type BoardDoc,
   type BoardObject,
   type CommentObj,
   type ShapeKind,
@@ -67,6 +69,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { BoardCanvas, cloneObjects, DEFAULT_TOOL_OPTIONS, isTyping, type Tool, type ToolOptions } from "./board-canvas";
+import { HistoryPanel, type HistoryEntry } from "./board-history";
 import { Avatar, ClaudePanel, CommentPopover, TimerControl, VotingControl } from "./board-panels";
 import { bounds, fitView, unionRect, zoomAt, type Pt, type View } from "./geometry";
 import { identity, loadIdentity, randomColor, saveIdentity } from "./identity";
@@ -528,6 +531,13 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
   const [rawSelection, setSelectionState] = useState<string[]>([]);
   const [editing, setEditingState] = useState<string | null>(null);
   const [claudeOpen, setClaudeOpen] = useState(false);
+  // Looking back: the board shown is a point from its history, not the live one.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [past, setPast] = useState<{ doc: BoardDoc; at: HistoryEntry } | null>(null);
+  const onPreview = useCallback(
+    (d: BoardDoc | null, at: HistoryEntry | null) => setPast(d && at ? { doc: d, at } : null),
+    [],
+  );
   // Clicking "Ask" on a selection opens the panel ready to type; opening it any
   // other way leaves the keyboard on the canvas, where the shortcuts live.
   const [askNonce, setAskNonce] = useState(0);
@@ -696,6 +706,14 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     };
     const onKey = (e: KeyboardEvent) => {
       if (isTyping(e)) return;
+      // While looking at the past, only let Escape out of it.
+      if (past) {
+        if (e.key === "Escape") {
+          setPast(null);
+          setHistoryOpen(false);
+        }
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === "z") {
@@ -887,7 +905,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     <div ref={wrapRef} className="relative h-full w-full overflow-hidden" data-testid="board">
       <BoardCanvas
         sync={sync}
-        doc={doc}
+        doc={past?.doc ?? doc}
         me={me.id}
         myColor={me.color}
         peers={peers}
@@ -905,6 +923,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         onDropFiles={uploadImages}
         onUserPan={stopFollowing}
         onPointerWorld={onPointerWorld}
+        readOnly={!!past}
         area={area}
         onFollowPeer={setFollowing}
         insets={insets}
@@ -950,6 +969,18 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           <div className="mx-1 h-5 w-px bg-border" />
           <Button
             size="sm"
+            variant={historyOpen ? "default" : "ghost"}
+            title="The board's history"
+            onClick={() => {
+              setHistoryOpen((o) => !o);
+              setPast(null);
+            }}
+            data-testid="history-toggle"
+          >
+            <History /> History
+          </Button>
+          <Button
+            size="sm"
             variant={claudeOpen ? "default" : "outline"}
             className={cn(!claudeOpen && "border-[#d97757]/50 text-[#d97757]")}
             onClick={() => {
@@ -974,7 +1005,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         </div>
       )}
 
-      <ToolRail tool={tool} setTool={setTool} options={toolOptions} setOptions={setToolOptions} onImage={() => fileRef.current?.click()} sync={sync} />
+      {!past && <ToolRail tool={tool} setTool={setTool} options={toolOptions} setOptions={setToolOptions} onImage={() => fileRef.current?.click()} sync={sync} />}
       <input
         ref={fileRef}
         type="file"
@@ -988,7 +1019,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         }}
       />
 
-      {selScreen && selectedObjs.some((o) => o.type !== "comment") && !editing && tool === "select" && (
+      {selScreen && !past && selectedObjs.some((o) => o.type !== "comment") && !editing && tool === "select" && (
         <SelectionBar
           sync={sync}
           objs={selectedObjs}
@@ -1028,6 +1059,25 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           onToggleFacilitator={() => sync.send1([{ k: "meta", set: { facilitator: !doc.meta.facilitator } }])}
           focusAt={askNonce}
         />
+      )}
+
+      {historyOpen && (
+        <HistoryPanel
+          boardId={boardId}
+          onPreview={onPreview}
+          onClose={() => {
+            setHistoryOpen(false);
+            setPast(null);
+          }}
+        />
+      )}
+
+      {past && (
+        <div className="pointer-events-none absolute inset-x-0 top-16 z-30 flex justify-center">
+          <div className="rounded-full bg-amber-500 px-3 py-1 text-xs font-medium text-white shadow">
+            The board as it was · {past.at.label ?? `${past.at.authors ?? "someone"}, ${past.at.changes} changes`}
+          </div>
+        </div>
       )}
 
       {/* Bottom: reactions + zoom */}
