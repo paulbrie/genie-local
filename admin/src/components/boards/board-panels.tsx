@@ -61,6 +61,7 @@ export function ClaudePanel({
   viewport,
   onClose,
   onToggleFacilitator,
+  focusAt,
 }: {
   sync: BoardSync;
   doc: BoardDoc;
@@ -69,9 +70,15 @@ export function ClaudePanel({
   viewport: () => { x: number; y: number; w: number; h: number };
   onClose: () => void;
   onToggleFacilitator: () => void;
+  /** Bumped when "Ask" is clicked on a selection, to put the cursor in the box. */
+  focusAt?: number;
 }) {
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (focusAt) inputRef.current?.focus();
+  }, [focusAt]);
   const lastText = doc.chat.at(-1)?.text;
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -154,6 +161,7 @@ export function ClaudePanel({
         )}
         <div className="flex items-end gap-1.5">
           <textarea
+            ref={inputRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {

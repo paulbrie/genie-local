@@ -473,6 +473,9 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
   const [rawSelection, setSelectionState] = useState<string[]>([]);
   const [editing, setEditingState] = useState<string | null>(null);
   const [claudeOpen, setClaudeOpen] = useState(false);
+  // Clicking "Ask" on a selection opens the panel ready to type; opening it any
+  // other way leaves the keyboard on the canvas, where the shortcuts live.
+  const [askNonce, setAskNonce] = useState(0);
   const [comment, setComment] = useState<{ id: string } | { at: Pt } | null>(null);
   const [following, setFollowing] = useState<string | null>(null);
   const pointer = useRef<Pt | null>(null);
@@ -880,7 +883,10 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
             size="sm"
             variant={claudeOpen ? "default" : "outline"}
             className={cn(!claudeOpen && "border-[#d97757]/50 text-[#d97757]")}
-            onClick={() => setClaudeOpen((o) => !o)}
+            onClick={() => {
+              setClaudeOpen((o) => !o);
+              setAskNonce(0);
+            }}
             data-testid="claude-toggle"
           >
             <Sparkles /> Claude
@@ -920,7 +926,10 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           screen={selScreen}
           area={area}
           onDuplicate={() => duplicate(selectedObjs)}
-          onAskClaude={() => setClaudeOpen(true)}
+          onAskClaude={() => {
+            setClaudeOpen(true);
+            setAskNonce((n) => n + 1);
+          }}
         />
       )}
 
@@ -943,8 +952,12 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           busy={claudeBusy}
           selection={selection}
           viewport={worldViewport}
-          onClose={() => setClaudeOpen(false)}
+          onClose={() => {
+            setClaudeOpen(false);
+            setAskNonce(0);
+          }}
           onToggleFacilitator={() => sync.send1([{ k: "meta", set: { facilitator: !doc.meta.facilitator } }])}
+          focusAt={askNonce}
         />
       )}
 
