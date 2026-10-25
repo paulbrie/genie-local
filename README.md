@@ -332,8 +332,8 @@ Both are granted through `/etc/sudoers.d/admin-supervisor`.
 | Component | Version | Needed for |
 |-----------|---------|------------|
 | Ubuntu | 24.04 (the installer warns on others but continues) | everything (apt-based installer) |
-| Node.js | 20.x (installer pins the NodeSource 20.x line) | admin, tools, MCP server, stats daemon |
-| npm | 10.x (ships with Node 20) | |
+| Node.js | 24.x, at least 24.22.1 (installer pins the NodeSource 24.x line; a lower node is upgraded on re-run) | admin, tools, MCP server, stats daemon |
+| npm | ships with Node 24 | |
 | PostgreSQL | 17 from the PGDG repo (falls back to distro 16) | dashboard DB |
 | nginx | distro package (1.24 on 24.04) | public entry point |
 | tmux | distro package (3.4 on 24.04) | Terminals |
@@ -456,7 +456,7 @@ What it does, in order (section numbers match the script):
 |---|------|
 | 0 | Preflight (root, OS check) |
 | 1 | apt: `ca-certificates curl gnupg git tmux openssl sudo lsb-release nginx build-essential`. PostgreSQL `$PG_MAJOR` from PGDG (distro fallback) |
-| 2 | Node.js 20 from NodeSource |
+| 2 | Node.js 24 (>= `NODE_MIN`, 24.22.1, the October 2026 security release) from NodeSource |
 | 2b | Setup wizard (only if `PUBLIC_HOST` is unset) |
 | 3 | Create user `genie` (`--disabled-password`, added to the `sudo` group) |
 | 4 | Global npm: `@anthropic-ai/claude-code`, `agent-browser`. Copies the vendored `@genie/vps-stats` into the global `node_modules` |
@@ -502,8 +502,8 @@ sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
 echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
   | sudo tee /etc/apt/sources.list.d/pgdg.list
 sudo apt update && sudo apt install -y postgresql-17 postgresql-contrib-17
-# Node 20
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs
+# Node 24 (>= 24.22.1)
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt install -y nodejs
 # Global CLIs
 sudo npm install -g @anthropic-ai/claude-code agent-browser
 ```
@@ -914,7 +914,7 @@ There is no test suite.
 ### Local development
 
 The app is written to run on a Genie box (paths under `/opt/project`, tmux,
-systemd, `/proc`), but it boots anywhere Node 20 and Postgres are available:
+systemd, `/proc`), but it boots anywhere Node 24 (22.23.4+ also works) and Postgres are available:
 
 ```bash
 cd admin

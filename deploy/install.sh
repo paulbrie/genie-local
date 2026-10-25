@@ -3,7 +3,7 @@
 # install.sh — Replicate the Genie server setup on a fresh Ubuntu 24.04 machine.
 #
 # Provisions a Genie Local server as documented in README.md:
-#   Node 20 · PostgreSQL 17 · nginx · tmux · Claude Code CLI · the admin
+#   Node 24 · PostgreSQL 17 · nginx · tmux · Claude Code CLI · the admin
 #   Next.js dashboard (systemd: PROD `next start` at /admin on :3002 and an
 #   on-demand DEV `next dev` at /admin-dev on :3003, both behind nginx :3000),
 #   the genie-stats publisher, and (optional) code-server.
@@ -79,7 +79,11 @@ CODE_SERVER_PORT="${CODE_SERVER_PORT:-13337}"   # localhost-only; nginx serves i
 START_SERVICES="${START_SERVICES:-1}"
 RUN_MIGRATIONS="${RUN_MIGRATIONS:-1}"
 
-NODE_MAJOR=20
+NODE_MAJOR=24
+# First patched 24.x of the Node.js October 2026 security releases
+# (https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
+# A node below it, or on another line (EOL 20.x), is replaced on (re-)run.
+NODE_MIN=24.22.1
 
 # Directory this script lives in (so we can find vendor/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -165,15 +169,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 2. Node.js 20 (NodeSource)
+# 2. Node.js 24 (NodeSource), at least $NODE_MIN
 # ---------------------------------------------------------------------------
-log "Installing Node.js ${NODE_MAJOR}.x"
-if command -v node >/dev/null && [[ "$(node -v)" == v${NODE_MAJOR}.* ]]; then
+log "Installing Node.js ${NODE_MAJOR}.x (>= ${NODE_MIN})"
+node_ok() {
+  local v; v="$(node -v 2>/dev/null)"; v="${v#v}"
+  [[ "$v" == ${NODE_MAJOR}.* ]] && command -v npm >/dev/null \
+    && [[ "$(printf '%s\n%s\n' "$NODE_MIN" "$v" | sort -V | head -n1)" == "$NODE_MIN" ]]
+}
+if node_ok; then
   ok "Node $(node -v) already present"
 else
+  command -v node >/dev/null && warn "Node $(node -v) is below the patched ${NODE_MIN} (or another line); upgrading."
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - >/dev/null 2>&1
   apt-get install -y -qq nodejs >/dev/null
   ok "Node $(node -v), npm $(npm -v)"
+  node_ok || warn "Node $(node -v) is still below ${NODE_MIN}: NodeSource may lag the security release; re-run later."
 fi
 
 # ---------------------------------------------------------------------------
