@@ -139,7 +139,9 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is a `Promise` — `await` it.
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
-  reactions, live cursors, follow mode). Pieces:
+  reactions, live cursors, follow mode). Drawing a connector highlights the ends it
+  would attach to; someone working outside your view shows as a marker on the edge
+  of it, pointing their way — click it to follow them. Pieces:
   · `src/lib/boards/core.mjs` (+ `core.d.mts`) — the doc model and `applyOps`, plain
     JS so both the browser and the raw-Node hub import it. A board is one jsonb doc
     (`boards.doc`); edits are small ops (put/patch/del/vote/reply/meta/chat), a patch

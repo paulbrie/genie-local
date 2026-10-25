@@ -515,6 +515,13 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     const r = wrapRef.current?.getBoundingClientRect();
     return { w: r?.width ?? 1200, h: r?.height ?? 800 };
   };
+  // Keeps the off-screen peer markers clear of the top bar, the tool rail, the
+  // reaction and zoom bars, and the Claude panel when it's open.
+  const insets = useMemo(
+    () => ({ top: 68, right: claudeOpen ? 360 : 60, bottom: 68, left: 60 }),
+    [claudeOpen],
+  );
+
   const worldViewport = useCallback(() => {
     const { w, h } = size();
     const v = viewRef.current;
@@ -839,6 +846,9 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         onDropFiles={uploadImages}
         onUserPan={stopFollowing}
         onPointerWorld={onPointerWorld}
+        area={area}
+        onFollowPeer={setFollowing}
+        insets={insets}
       />
 
       {/* Top bar */}

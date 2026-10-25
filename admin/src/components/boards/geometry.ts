@@ -192,3 +192,36 @@ export function simplify(points: [number, number][], min: number): [number, numb
   if (last && out[out.length - 1] !== last) out.push(last);
   return out;
 }
+
+/**
+ * The part of the view not covered by the toolbars (and the Claude panel when
+ * it's open) — where someone's cursor is actually visible.
+ */
+export type Insets = { top: number; right: number; bottom: number; left: number };
+
+function clear(w: number, h: number, i: Insets) {
+  const x1 = i.left;
+  const y1 = i.top;
+  const x2 = Math.max(x1 + 2, w - i.right);
+  const y2 = Math.max(y1 + 2, h - i.bottom);
+  return { x1, y1, x2, y2, cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, hw: (x2 - x1) / 2, hh: (y2 - y1) / 2 };
+}
+
+/**
+ * Where a point outside the view meets the edge of it, for the markers that
+ * show someone working off-screen: the spot on the clear border that the line
+ * from the middle of the view to `p` crosses, plus the angle to point an arrow.
+ */
+export function edgePoint(w: number, h: number, p: Pt, i: Insets): { x: number; y: number; angle: number } {
+  const c = clear(w, h, i);
+  const dx = p.x - c.cx;
+  const dy = p.y - c.cy;
+  const t = Math.min(c.hw / Math.max(Math.abs(dx), 1e-9), c.hh / Math.max(Math.abs(dy), 1e-9));
+  return { x: c.cx + dx * t, y: c.cy + dy * t, angle: Math.atan2(dy, dx) };
+}
+
+/** Is this screen point outside the part of the view you can actually see? */
+export function offScreen(w: number, h: number, p: Pt, i: Insets) {
+  const c = clear(w, h, i);
+  return p.x < c.x1 || p.y < c.y1 || p.x > c.x2 || p.y > c.y2;
+}

@@ -20,21 +20,25 @@ import { cn } from "@/lib/utils";
 import {
   attachTarget,
   bounds,
+  edgePoint,
   connectorPoints,
   contains,
   hitTest,
   intersects,
   normRect,
+  offScreen,
   penHit,
   penPath,
   simplify,
   toWorld,
   unionRect,
   zoomAt,
+  type Insets,
   type Pt,
   type Rect,
   type View,
 } from "./geometry";
+import { initials } from "./identity";
 import { ConnectorView, ObjectView, type ObjectHandlers } from "./objects";
 import type { BoardSync, Gesture, Peer, Reaction } from "./sync";
 
@@ -105,11 +109,18 @@ type Props = {
   onOpenComment: (target: { id: string } | { at: Pt }) => void;
   onDropFiles: (files: File[], at: Pt) => void;
   onUserPan: () => void;
+  /** The canvas's size on screen, for the off-screen peer markers. */
+  area: { w: number; h: number };
+  /** Click an off-screen marker to follow that person. */
+  onFollowPeer: (pid: string) => void;
+  /** Where the toolbars and panels cover the canvas, so markers stay visible. */
+  insets: Insets;
   /** The world point under the pointer, null when it leaves (for paste and reactions). */
   onPointerWorld: (p: Pt | null) => void;
 };
 
 const HANDLE_PX = 10;
+
 
 export function BoardCanvas(props: Props) {
   const {
@@ -132,6 +143,9 @@ export function BoardCanvas(props: Props) {
     onDropFiles,
     onUserPan,
     onPointerWorld,
+    area,
+    onFollowPeer,
+    insets,
   } = props;
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -142,6 +156,16 @@ export function BoardCanvas(props: Props) {
     setDragState(d);
   };
   const [space, setSpace] = useState(false);
+  // What a connector would attach to right now, so you can see where it lands
+  // before letting go. Kept in a ref too: the pointer moves far more often than
+  // this changes, and only a change is worth a re-render.
+  const [snap, setSnapState] = useState<string | null>(null);
+  const snapRef = useRef<string | null>(null);
+  const setSnap = (id: string | null) => {
+    if (snapRef.current === id) return;
+    snapRef.current = id;
+    setSnapState(id);
+  };
 
   // Handlers read the latest values through refs (they're attached once).
   const live = useRef({ doc, view, selection, tool, toolOptions, editing });
@@ -422,11 +446,26 @@ export function BoardCanvas(props: Props) {
     }
   };
 
+  /** The object a connector would attach to at `p`, given what's happening. */
+  const snapTargetAt = (p: Pt, dg: Drag | null): string | null => {
+    const d = live.current.doc;
+    if (dg?.kind === "connect") return attachTarget(sortedRef.current, p, dg.from.id)?.id ?? null;
+    if (dg?.kind === "endpoint") {
+      const c = d.objects[dg.id] as Connector | undefined;
+      const far = c?.[dg.which === "from" ? "to" : "from"]?.id;
+      return attachTarget(sortedRef.current, p, far)?.id ?? null;
+    }
+    // Hovering with the connector tool: show what a line would start from.
+    if (!dg && live.current.tool === "connector") return attachTarget(sortedRef.current, p)?.id ?? null;
+    return null;
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
     const p = worldPt(e);
     onPointerWorld(p);
     sync.presence({ cursor: p });
     const dg = dragRef.current;
+    setSnap(snapTargetAt(p, dg));
     if (!dg) return;
     const d = live.current.doc;
     switch (dg.kind) {
@@ -516,6 +555,7 @@ export function BoardCanvas(props: Props) {
   const onPointerUp = (e: React.PointerEvent) => {
     const dg = dragRef.current;
     setDrag(null);
+    setSnap(null);
     if (!dg) return;
     const d = live.current.doc;
     const p = worldPt(e);
@@ -608,6 +648,7 @@ export function BoardCanvas(props: Props) {
   };
 
   const onPointerLeave = () => {
+    setSnap(null);
     onPointerWorld(null);
     sync.presence({ cursor: null });
   };
@@ -636,6 +677,22 @@ export function BoardCanvas(props: Props) {
       : tool === "select"
         ? "cursor-default"
         : "cursor-crosshair";
+
+  // The ends a connector is (or would be) attached to: the fixed end plus
+  // whatever is under the pointer. Deriving it here means a stale snap target
+  // can't outlive the tool or the drag that produced it.
+  const highlighted = new Set<string>();
+  if (drag?.kind === "connect") {
+    if (drag.from.id) highlighted.add(drag.from.id);
+    if (snap) highlighted.add(snap);
+  } else if (drag?.kind === "endpoint") {
+    const c = doc.objects[drag.id] as Connector | undefined;
+    const far = c?.[drag.which === "from" ? "to" : "from"]?.id;
+    if (far) highlighted.add(far);
+    if (snap) highlighted.add(snap);
+  } else if (tool === "connector" && snap) {
+    highlighted.add(snap);
+  }
 
   const z = view.zoom;
   const single = selection.length === 1 ? doc.objects[selection[0]] : null;
@@ -766,6 +823,28 @@ export function BoardCanvas(props: Props) {
             ));
           })()}
 
+        {/* What a connector is about to attach to */}
+        {[...highlighted].map((id) => {
+          const o = doc.objects[id];
+          if (!o) return null;
+          const b = bounds(doc, o);
+          return (
+            <div
+              key={`snap-${id}`}
+              className="pointer-events-none absolute bg-blue-500/10"
+              style={{
+                left: b.x - 4 / z,
+                top: b.y - 4 / z,
+                width: b.w + 8 / z,
+                height: b.h + 8 / z,
+                border: `${2.5 / z}px solid #3b82f6`,
+                borderRadius: o.type === "comment" ? "9999px" : 6 / z,
+                zIndex: 1e9 - 2,
+              }}
+            />
+          );
+        })}
+
         {/* In-progress drawing */}
         {drag?.kind === "pen" && (
           <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1} style={{ zIndex: 1e9 }}>
@@ -817,13 +896,37 @@ export function BoardCanvas(props: Props) {
           );
         })()}
 
-      {Object.values(peers).map((peer) =>
-        peer.cursor ? (
+      {Object.values(peers).map((peer) => {
+        if (!peer.cursor) return null;
+        const at = { x: peer.cursor.x * z + view.tx, y: peer.cursor.y * z + view.ty };
+
+        // Working somewhere you can't see: a marker on the edge of the view,
+        // pointing their way. Click it to go to them.
+        if (offScreen(area.w, area.h, at, insets)) {
+          const e = edgePoint(area.w, area.h, at, insets);
+          return (
+            <button
+              key={peer.pid}
+              className="absolute z-30 flex size-7 items-center justify-center rounded-full text-[11px] font-semibold text-white shadow-md ring-2 ring-background transition-transform hover:scale-110"
+              style={{ left: e.x, top: e.y, transform: "translate(-50%, -50%)", background: peer.user.color }}
+              title={`${peer.user.name} is working over here${peer.note ? ` · ${peer.note}` : ""} — click to follow`}
+              onClick={() => onFollowPeer(peer.pid)}
+            >
+              {peer.kind === "human" ? initials(peer.user.name) : "AI"}
+              <span
+                className="pointer-events-none absolute left-1/2 top-1/2 size-0 border-y-[5px] border-l-[7px] border-y-transparent"
+                style={{ borderLeftColor: peer.user.color, transform: `rotate(${e.angle}rad) translateX(18px) translateY(-5px)` }}
+              />
+            </button>
+          );
+        }
+
+        return (
           <div
             key={peer.pid}
             className="pointer-events-none absolute left-0 top-0 transition-transform duration-75 ease-linear"
             style={{
-              transform: `translate(${peer.cursor.x * z + view.tx}px, ${peer.cursor.y * z + view.ty}px)`,
+              transform: `translate(${at.x}px, ${at.y}px)`,
               zIndex: 30,
               transitionDuration: peer.kind === "human" ? "60ms" : "260ms",
             }}
@@ -841,8 +944,8 @@ export function BoardCanvas(props: Props) {
               )}
             </div>
           </div>
-        ) : null,
-      )}
+        );
+      })}
 
       {reactions.map((r) => (
         <div
