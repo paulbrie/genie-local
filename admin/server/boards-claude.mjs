@@ -5,26 +5,17 @@
  * language of `translateAgentOps` in src/lib/boards/core.mjs.
  *
  * Same CLI rules as src/lib/claude-cli.ts (which raw Node can't import): stdin
- * must be /dev/null, every tool is disallowed so a prompt can only produce
- * text, and it runs from /tmp so no project CLAUDE.md leaks into context.
+ * must be /dev/null, it runs from /tmp so no project CLAUDE.md leaks into
+ * context, and every tool is disallowed except, when asked for (`web`),
+ * WebFetch and WebSearch so it can read a link someone puts on the board.
+ * Never a shell or a browser: a board's text is effectively the prompt.
  */
 import { spawn } from "node:child_process";
 
 import { describeBoard } from "../src/lib/boards/core.mjs";
 
-const DISALLOWED = [
-  "Bash",
-  "Edit",
-  "Write",
-  "Read",
-  "Glob",
-  "Grep",
-  "WebFetch",
-  "WebSearch",
-  "Task",
-  "NotebookEdit",
-  "TodoWrite",
-];
+const DISALLOWED = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "Task", "NotebookEdit", "TodoWrite"];
+const WEB = ["WebFetch", "WebSearch"];
 
 const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "RAILWAY_API_TOKEN"];
 
@@ -35,7 +26,7 @@ export function claudeBusy() {
   return running >= MAX_CONCURRENT;
 }
 
-export function runClaudeCli(prompt, timeoutMs = 180_000) {
+export function runClaudeCli(prompt, { timeoutMs = 180_000, web = false } = {}) {
   return new Promise((resolve, reject) => {
     running++;
     const done = (fn, v) => {
@@ -49,7 +40,16 @@ export function runClaudeCli(prompt, timeoutMs = 180_000) {
     for (const k of SECRET_ENV) delete env[k];
     const child = spawn(
       "claude",
-      ["-p", prompt, "--output-format", "json", "--disallowed-tools", ...DISALLOWED],
+      [
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+        ...(web ? ["--allowed-tools", ...WEB] : []),
+        "--disallowed-tools",
+        ...DISALLOWED,
+        ...(web ? [] : WEB),
+      ],
       { cwd: "/tmp", env, stdio: ["ignore", "pipe", "pipe"] },
     );
     let out = "";
@@ -126,6 +126,8 @@ function viewportLine(vp) {
   return `Their screen shows the area x=${Math.round(vp.x)}..${Math.round(vp.x + vp.w)}, y=${Math.round(vp.y)}..${Math.round(vp.y + vp.h)}; put new things there unless told otherwise.\n`;
 }
 
+const WEB_HELP = `You can read web pages with WebFetch (and search with WebSearch): when someone gives a link or asks about something online, open it rather than guessing, and put what you found on the board.`;
+
 const ANSWER = `Answer with ONLY a JSON object, no prose around it:
 {"reply": "a short, friendly message to the group (plain text, under 600 characters)", "ops": [ … ]}
 Use "ops": [] when the request needs no board changes.`;
@@ -139,6 +141,7 @@ ${sel}${viewportLine(viewport)}
 ${boardBlock(doc, title, new Set(selection ?? []))}
 ${chatBlock(doc)}
 ${OPS_HELP}
+${WEB_HELP}
 
 ${ANSWER}`;
 }
@@ -162,6 +165,7 @@ ${comment.thread.map((m) => `${m.author.name}: ${m.text}`).join("\n")}
 ${boardBlock(doc, title, new Set([comment.id, ...near]))}
 
 ${OPS_HELP}
+${WEB_HELP}
 
 Your "reply" is posted in that comment thread.
 ${ANSWER}`;

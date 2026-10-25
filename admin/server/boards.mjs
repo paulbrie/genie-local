@@ -453,7 +453,7 @@ async function runAsk(room, client, text, selection, viewport) {
         selection: Array.isArray(selection) ? selection.filter((id) => isId(id) && room.doc.objects[id]) : [],
         viewport: vp,
       });
-      const answer = parseAnswer(await runClaudeCli(prompt));
+      const answer = parseAnswer(await runClaudeCli(prompt, { web: true }));
       const { ops, errors } = translateAgentOps(room.doc, answer.ops, CLAUDE, Date.now());
       if (errors.length) console.warn(`[boards] claude op errors on ${room.id}:`, errors.slice(0, 5));
       claudeChat(room, replyId, answer.reply || (ops.length ? "Done." : "Hmm, nothing to change there."), ops.length > 0);
@@ -475,7 +475,7 @@ async function runCommentMention(room, commentId) {
   await withClaude(room, { x: comment.x, y: comment.y }, async () => {
     try {
       const answer = parseAnswer(
-        await runClaudeCli(commentPrompt({ doc: room.doc, title: room.title, people: room.humans(), comment })),
+        await runClaudeCli(commentPrompt({ doc: room.doc, title: room.title, people: room.humans(), comment }), { web: true }),
       );
       const { ops } = translateAgentOps(room.doc, answer.ops, CLAUDE, Date.now());
       if (answer.reply && room.doc.objects[commentId]) {
