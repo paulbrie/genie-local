@@ -5,24 +5,74 @@
  * language of `translateAgentOps` in src/lib/boards/core.mjs.
  *
  * Same CLI rules as src/lib/claude-cli.ts (which raw Node can't import): stdin
- * must be /dev/null, it runs from /tmp so no project CLAUDE.md leaks into
- * context, and every tool is disallowed except, when asked for (`web`),
- * WebFetch, WebSearch and a real browser (boards-browser-mcp.mjs: browser
- * actions only, public addresses only) so it can read what a link points to.
- * Never a shell: a board's text is effectively the prompt. Only that MCP server
- * is loaded (--strict-mcp-config), none of the account's others.
+ * must be /dev/null. How much a run can do is set by `tools`:
+ *   none — text only, from /tmp with no project context. The facilitator uses
+ *          this: nobody asked it for anything, so it only ever suggests.
+ *   full — the same CLI the team's terminals get (shell, files, web) plus the
+ *          real browser from boards-browser-mcp.mjs, working from the repo so
+ *          the project's own guides are in context. Anyone signed in to the
+ *          admin already has a shell there, so this hands a person nothing new;
+ *          what it does mean is that a board's text — and any page Claude reads
+ *          on it — reaches a prompt that can run commands. Only our MCP server
+ *          is loaded (--strict-mcp-config), none of the account's others.
+ * Runs stream, and a run can be stopped from the board (pass an AbortSignal).
  */
 import { execFile, spawn } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { describeBoard } from "../src/lib/boards/core.mjs";
 
-const DISALLOWED = ["Bash", "Edit", "Write", "Read", "Glob", "Grep", "Task", "NotebookEdit", "TodoWrite"];
-const WEB = ["WebFetch", "WebSearch"];
+const DISALLOWED = [
+  "Bash",
+  "Edit",
+  "Write",
+  "Read",
+  "Glob",
+  "Grep",
+  "Task",
+  "NotebookEdit",
+  "TodoWrite",
+  "WebFetch",
+  "WebSearch",
+];
+/** Where a full run works from, so the repo's CLAUDE.md / AGENTS.md apply. */
+const FULL_CWD = process.env.BOARDS_CLAUDE_CWD || "/opt/project";
 const BROWSER_MCP = fileURLToPath(new URL("./boards-browser-mcp.mjs", import.meta.url));
 let browserRuns = 0;
 
 const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "RAILWAY_API_TOKEN"];
+
+/** Every process below `root`, deepest included. Linux /proc only; [] elsewhere. */
+function descendantPids(root) {
+  let pids;
+  try {
+    pids = readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch {
+    return [];
+  }
+  const children = new Map();
+  for (const pid of pids) {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      // The command name sits in brackets and may contain spaces: read past it.
+      const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid).push(Number(pid));
+    } catch {
+      /* exited while we looked */
+    }
+  }
+  const out = [];
+  const walk = (pid) => {
+    for (const kid of children.get(pid) ?? []) {
+      out.push(kid);
+      walk(kid);
+    }
+  };
+  walk(root);
+  return out;
+}
 
 let running = 0;
 const MAX_CONCURRENT = 2;
@@ -67,6 +117,22 @@ export function describeStep(block) {
       return "Scrolling for more…";
     case "mcp__browser__browser_back":
       return "Going back…";
+    case "Bash": {
+      const cmd = String(a.command ?? "").replace(/\s+/g, " ").trim();
+      return cmd ? `Running ${cmd.slice(0, 90)}` : "Running a command…";
+    }
+    case "Read":
+      return `Reading ${String(a.file_path ?? "a file").split("/").pop()}…`;
+    case "Write":
+      return `Writing ${String(a.file_path ?? "a file").split("/").pop()}…`;
+    case "Edit":
+      return `Editing ${String(a.file_path ?? "a file").split("/").pop()}…`;
+    case "Grep":
+      return `Searching the code for ${JSON.stringify(String(a.pattern ?? "").slice(0, 40))}…`;
+    case "Glob":
+      return `Looking for files matching ${JSON.stringify(String(a.pattern ?? "").slice(0, 40))}…`;
+    case "Task":
+      return "Handing part of this to a subagent…";
     case "WebFetch":
       return `Fetching ${host(a.url)}…`;
     case "WebSearch":
@@ -81,21 +147,28 @@ export function describeStep(block) {
  * Run the CLI. `onStep(text)` is called as the work happens (see
  * describeStep); the promise still resolves with the final answer text.
  */
-export function runClaudeCli(prompt, { timeoutMs, web = false, onStep } = {}) {
-  timeoutMs ??= web ? 300_000 : 180_000;
-  // Each web run gets its own throwaway browser, closed when the run ends.
+export function runClaudeCli(prompt, { timeoutMs, tools = "none", onStep, signal } = {}) {
+  const full = tools === "full";
+  // Long enough for real work; whoever is on the board can stop it sooner.
+  timeoutMs ??= full ? 900_000 : 180_000;
+  // Each run that can browse gets its own throwaway browser, closed at the end.
   const session = `board-claude-${process.pid}-${++browserRuns}`;
   const mcp = { mcpServers: { browser: { command: process.execPath, args: [BROWSER_MCP], env: { BOARDS_BROWSER_SESSION: session, PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "/home/genie" } } } };
   return new Promise((resolve, reject) => {
     running++;
+    let settled = false;
     const done = (fn, v) => {
+      if (settled) return;
+      settled = true;
       running--;
-      if (web) execFile("agent-browser", ["--session", session, "close"], { timeout: 10_000 }, () => {});
+      signal?.removeEventListener("abort", onAbort);
+      if (full) execFile("agent-browser", ["--session", session, "close"], { timeout: 10_000 }, () => {});
       fn(v);
     };
     const env = { ...process.env, HOME: process.env.HOME ?? "/home/genie" };
-    // The admin's own Next/dev vars mean nothing to the CLI, and its secrets
-    // stay out of reach of whatever a board's content asks for.
+    // The admin's own Next/dev vars mean nothing to the CLI. Its secrets are
+    // dropped so they can't fall into a prompt or a log by accident — with a
+    // shell in hand this is tidiness, not a boundary: .env.local is readable.
     for (const k of Object.keys(env)) if (k.startsWith("__NEXT") || k === "TURBOPACK") delete env[k];
     for (const k of SECRET_ENV) delete env[k];
     const child = spawn(
@@ -109,13 +182,41 @@ export function runClaudeCli(prompt, { timeoutMs, web = false, onStep } = {}) {
         "stream-json",
         "--verbose",
         "--strict-mcp-config",
-        ...(web ? ["--mcp-config", JSON.stringify(mcp), "--allowed-tools", ...WEB, "mcp__browser"] : []),
-        "--disallowed-tools",
-        ...DISALLOWED,
-        ...(web ? [] : WEB),
+        // Full: the CLI's own tools, unprompted, as in a terminal here — there
+        // is no one at a keyboard to approve each one. Otherwise: no tools.
+        ...(full
+          ? ["--mcp-config", JSON.stringify(mcp), "--dangerously-skip-permissions"]
+          : ["--disallowed-tools", ...DISALLOWED]),
       ],
-      { cwd: "/tmp", env, stdio: ["ignore", "pipe", "pipe"] },
+      // Its own process group: a full run spawns shell commands of its own, and
+      // stopping it has to take those with it rather than orphan them.
+      { cwd: full ? FULL_CWD : "/tmp", env, stdio: ["ignore", "pipe", "pipe"], detached: true },
     );
+
+    // Stopping has to reach the commands Claude started, and the CLI puts those
+    // in process groups of their own — so take the group, and every descendant
+    // we can still see. Collected across passes: once the parent dies its
+    // children are reparented to init and can't be found from it any more.
+    const doomed = new Set();
+    const killRun = (sig) => {
+      for (const pid of descendantPids(child.pid)) doomed.add(pid);
+      try {
+        process.kill(-child.pid, sig);
+      } catch {
+        try {
+          child.kill(sig);
+        } catch {
+          /* already gone */
+        }
+      }
+      for (const pid of doomed) {
+        try {
+          process.kill(pid, sig);
+        } catch {
+          /* already gone */
+        }
+      }
+    };
     let err = "";
     let pending = "";
     let answer = null;
@@ -148,9 +249,19 @@ export function runClaudeCli(prompt, { timeoutMs, web = false, onStep } = {}) {
       }
     };
     const timer = setTimeout(() => {
-      child.kill("SIGKILL");
+      killRun("SIGKILL");
       done(reject, new Error("Claude took too long"));
     }, timeoutMs);
+
+    // Stopped from the board: ask the CLI to wind up, then insist.
+    let stopped = false;
+    function onAbort() {
+      stopped = true;
+      killRun("SIGTERM");
+      setTimeout(() => killRun("SIGKILL"), 2000).unref();
+    }
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (d) => {
       pending += d;
       const lines = pending.split("\n");
@@ -165,6 +276,8 @@ export function runClaudeCli(prompt, { timeoutMs, web = false, onStep } = {}) {
     child.on("close", (code) => {
       clearTimeout(timer);
       onLine(pending);
+      // Killed from the board: say so plainly rather than as a failure.
+      if (stopped) return done(reject, Object.assign(new Error("stopped"), { stopped: true }));
       if (code !== 0) return done(reject, new Error(err.trim().slice(0, 300) || `claude exited ${code}`));
       if (failed) return done(reject, failed);
       if (answer === null) return done(reject, new Error("Claude returned no answer"));

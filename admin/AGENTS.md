@@ -158,11 +158,18 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   · Claude is a participant: asked in the board's Claude panel, `@claude` in a
     comment, or the opt-in facilitator (after 45 s of quiet, at most every 4 min,
     adds up to 3 suggestions people keep or dismiss). `server/boards-claude.mjs`
-    runs the logged-in `claude` CLI (default model, admin secrets stripped from its
-    env, no shell or file tools; asks and @mentions also get WebFetch, WebSearch and
-    a real browser via `server/boards-browser-mcp.mjs`, an MCP over `agent-browser`
-    that only reaches public http(s) addresses, one throwaway session per run;
-    `--strict-mcp-config` keeps the account's other MCP servers out). Runs stream
+    runs the logged-in `claude` CLI (default model, admin secrets dropped from its
+    env). An ask or an @mention gets the **whole CLI** — shell, files, web, plus the
+    real browser from `server/boards-browser-mcp.mjs` (an MCP over `agent-browser`,
+    public http(s) only, a throwaway session per run) — working from `/opt/project`
+    with `--dangerously-skip-permissions`, since no one is at a keyboard to approve
+    each tool. Anyone signed in already has a shell through the admin's terminals,
+    so this gives a person nothing new; what it does mean is that board text, and
+    any page Claude reads, reaches a prompt that can run commands. The facilitator
+    gets no tools at all — nobody asked it for anything. `--strict-mcp-config` keeps
+    the account's other MCP servers out. Anyone on the board can **Stop** a run: the
+    hub aborts it and kills the process group plus every descendant
+    (`descendantPids`), since the CLI's own shell commands sit in groups of their own. Runs stream
     (`--output-format stream-json`), so what Claude is doing — the page it opened,
     the click, its own asides — shows live on its cursor and, for a panel ask, in
     the message that becomes its reply (`describeStep`, `stepReporter`) and gets back `{ reply, ops }` in the agent op

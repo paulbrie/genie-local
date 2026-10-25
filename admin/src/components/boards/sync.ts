@@ -292,6 +292,11 @@ export class BoardSync {
     this.send({ t: "claude", text, selection, viewport });
   }
 
+  /** Call Claude off whatever it's doing (for everyone on the board). */
+  stopClaude() {
+    this.send({ t: "claude-stop" });
+  }
+
   react(emoji: string, at: { x: number; y: number }) {
     this.send({ t: "reaction", emoji, at });
     this.onMessage({ t: "reaction", pid: "me", emoji, at, user: this.user });

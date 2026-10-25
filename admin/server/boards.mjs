@@ -83,6 +83,9 @@ class Room {
     this.recentlyEdited = [];
     this.lastFacilitatorAt = Date.now();
     this.claudeRuns = 0;
+    /** Stops the run in progress (the board's Stop button). */
+    this.claudeAbort = null;
+    this.stoppedBy = null;
     /** API agents mid-playback; like Claude runs, they keep the room loaded. */
     this.holds = 0;
   }
@@ -379,6 +382,15 @@ export async function handleBoardConnection(ws, boardId) {
         if (text) runAsk(room, client, text, msg.selection, msg.viewport);
         break;
       }
+      case "claude-stop": {
+        // Anyone on the board can call Claude off; it works for the whole room.
+        if (room.claudeAbort) {
+          room.stoppedBy = client.user.name;
+          room.botPresence(CLAUDE, "claude", { status: "thinking", note: "stopping…" }, 0);
+          room.claudeAbort.abort();
+        }
+        break;
+      }
       case "reaction": {
         // Ephemeral emoji bursts: relayed, never stored.
         const p = finitePoint(msg.at);
@@ -435,16 +447,25 @@ function parseAnswer(raw) {
 
 async function withClaude(room, cursorNear, fn) {
   room.claudeRuns++;
+  // One run at a time per board, so this is the one a Stop applies to.
+  room.claudeAbort = new AbortController();
+  room.stoppedBy = null;
   room.broadcast({ t: "claude", busy: true });
   room.botPresence(CLAUDE, "claude", { cursor: cursorNear, status: "thinking" }, 0);
   try {
-    return await fn();
+    return await fn(room.claudeAbort.signal);
   } finally {
     room.claudeRuns--;
+    room.claudeAbort = null;
     room.broadcast({ t: "claude", busy: room.claudeRuns > 0 });
     room.botPresence(CLAUDE, "claude", { status: "idle", note: null }, 15_000);
     room.maybeEvict();
   }
+}
+
+/** True when the run ended because someone pressed Stop. */
+function wasStopped(room, e) {
+  return e?.stopped === true || (!!room.stoppedBy && /SIGTERM|SIGKILL|stopped/i.test(e?.message ?? ""));
 }
 
 function centre(vp) {
@@ -461,7 +482,7 @@ async function runAsk(room, client, text, selection, viewport) {
   }
   const vp = finiteRect(viewport);
   claudeChat(room, replyId, "Thinking…", true);
-  await withClaude(room, centre(vp), async () => {
+  await withClaude(room, centre(vp), async (signal) => {
     try {
       const prompt = askPrompt({
         doc: room.doc,
@@ -472,13 +493,19 @@ async function runAsk(room, client, text, selection, viewport) {
         selection: Array.isArray(selection) ? selection.filter((id) => isId(id) && room.doc.objects[id]) : [],
         viewport: vp,
       });
-      const answer = parseAnswer(await runClaudeCli(prompt, { web: true, onStep: stepReporter(room, { chatId: replyId }) }));
+      const answer = parseAnswer(
+        await runClaudeCli(prompt, { tools: "full", signal, onStep: stepReporter(room, { chatId: replyId }) }),
+      );
       const { ops, errors } = translateAgentOps(room.doc, answer.ops, CLAUDE, Date.now());
       if (errors.length) console.warn(`[boards] claude op errors on ${room.id}:`, errors.slice(0, 5));
       claudeChat(room, replyId, answer.reply || (ops.length ? "Done." : "Hmm, nothing to change there."), ops.length > 0);
       await room.playback(CLAUDE, "claude", ops, { ttlMs: 0 });
       if (ops.length) claudeChat(room, replyId, answer.reply || "Done.");
     } catch (e) {
+      if (wasStopped(room, e)) {
+        claudeChat(room, replyId, `Stopped by ${room.stoppedBy ?? "someone"}.`);
+        return;
+      }
       console.error(`[boards] claude ask on ${room.id}:`, e.message);
       claudeChat(room, replyId, `Sorry, that didn't work (${e.message.slice(0, 120)}).`);
     }
@@ -491,11 +518,12 @@ async function runCommentMention(room, commentId) {
     return;
   }
   const comment = room.doc.objects[commentId];
-  await withClaude(room, { x: comment.x, y: comment.y }, async () => {
+  await withClaude(room, { x: comment.x, y: comment.y }, async (signal) => {
     try {
       const answer = parseAnswer(
         await runClaudeCli(commentPrompt({ doc: room.doc, title: room.title, people: room.humans(), comment }), {
-          web: true,
+          tools: "full",
+          signal,
           onStep: stepReporter(room),
         }),
       );
@@ -505,9 +533,11 @@ async function runCommentMention(room, commentId) {
       }
       await room.playback(CLAUDE, "claude", ops, { ttlMs: 0 });
     } catch (e) {
-      console.error(`[boards] claude mention on ${room.id}:`, e.message);
+      const stopped = wasStopped(room, e);
+      if (!stopped) console.error(`[boards] claude mention on ${room.id}:`, e.message);
       if (room.doc.objects[commentId]) {
-        room.apply(CLAUDE, [{ k: "reply", id: commentId, msg: { id: newId("m"), text: "Sorry, I couldn't answer that just now." } }]);
+        const text = stopped ? `Stopped by ${room.stoppedBy ?? "someone"}.` : "Sorry, I couldn't answer that just now.";
+        room.apply(CLAUDE, [{ k: "reply", id: commentId, msg: { id: newId("m"), text } }]);
       }
     }
   });
@@ -517,10 +547,15 @@ async function runFacilitator(room) {
   room.lastFacilitatorAt = Date.now();
   room.editsSinceFacilitator = 0;
   const recent = room.recentlyEdited.filter((id) => room.doc.objects[id]).slice(0, 15);
-  await withClaude(room, null, async () => {
+  await withClaude(room, null, async (signal) => {
     try {
+      // No tools here on purpose: nobody asked the facilitator for anything, so
+      // it reads the board and suggests. Asking Claude yourself gets the lot.
       const answer = parseAnswer(
-        await runClaudeCli(facilitatorPrompt({ doc: room.doc, title: room.title, people: room.humans(), recent })),
+        await runClaudeCli(facilitatorPrompt({ doc: room.doc, title: room.title, people: room.humans(), recent }), {
+          tools: "none",
+          signal,
+        }),
       );
       // The facilitator only adds, and only stickies and comments, as suggestions.
       const creates = answer.ops

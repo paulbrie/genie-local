@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Pause, Play, Plus, RotateCcw, Send, Sparkles, Timer as TimerIcon, Trash2, Vote, X } from "lucide-react";
+import { Check, Pause, Play, Plus, RotateCcw, Send, Sparkles, Square, Timer as TimerIcon, Trash2, Vote, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -175,9 +175,15 @@ export function ClaudePanel({
             className="flex-1 resize-none rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring/40"
             data-testid="claude-input"
           />
-          <Button type="submit" size="icon" disabled={busy || !text.trim()} title="Send">
-            <Send />
-          </Button>
+          {busy ? (
+            <Button type="button" size="icon" variant="destructive" title="Stop Claude" onClick={() => sync.stopClaude()} data-testid="claude-stop">
+              <Square />
+            </Button>
+          ) : (
+            <Button type="submit" size="icon" disabled={!text.trim()} title="Send">
+              <Send />
+            </Button>
+          )}
         </div>
       </form>
     </aside>
