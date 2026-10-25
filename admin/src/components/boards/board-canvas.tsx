@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   COLORS,
   DEFAULT_SIZES,
+  hiddenByCollapsed,
   INKS,
   maxZ,
   minZ,
@@ -173,10 +174,28 @@ export function BoardCanvas(props: Props) {
     live.current = { doc, view, selection, tool, toolOptions, editing };
   });
 
-  const sorted = useMemo(
-    () => Object.values(doc.objects).sort((a, b) => a.z - b.z),
-    [doc.objects],
-  );
+  const { sorted, foldedCounts } = useMemo(() => {
+    const hidden = hiddenByCollapsed(doc);
+    const counts = new Map();
+    for (const id of hidden) {
+      const o = doc.objects[id];
+      if (!o || o.type === "connector") continue;
+      const cx = o.x + o.w / 2;
+      const cy = o.y + o.h / 2;
+      for (const s of Object.values(doc.objects)) {
+        if (s.type === "section" && s.collapsed && cx >= s.x && cx <= s.x + s.w && cy >= s.y && cy <= s.y + s.h) {
+          counts.set(s.id, (counts.get(s.id) ?? 0) + 1);
+          break;
+        }
+      }
+    }
+    return {
+      sorted: Object.values(doc.objects)
+        .filter((o) => !hidden.has(o.id))
+        .sort((a, b) => a.z - b.z),
+      foldedCounts: counts,
+    };
+  }, [doc]);
   const sortedRef = useRef(sorted);
   useLayoutEffect(() => {
     sortedRef.current = sorted;
@@ -204,6 +223,10 @@ export function BoardCanvas(props: Props) {
         editGesture.current?.g.end();
         editGesture.current = null;
         setEditing(null);
+      },
+      onToggleCollapse: (id) => {
+        const o = live.current.doc.objects[id];
+        if (o?.type === "section") sync.apply([{ k: "patch", id, set: { collapsed: o.collapsed ? null : true } as never }]);
       },
       onAccept: (id) => sync.apply([{ k: "patch", id, set: { suggestion: null } as never }]),
       onDismiss: (id) => sync.apply([{ k: "del", id }]),
@@ -733,6 +756,7 @@ export function BoardCanvas(props: Props) {
               editing={editing === o.id}
               me={me}
               handlers={handlers}
+              hiddenCount={foldedCounts.get(o.id)}
               lockedBy={remoteEditing.get(o.id)}
             />
           ),

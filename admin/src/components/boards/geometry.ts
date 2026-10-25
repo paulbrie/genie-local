@@ -80,6 +80,9 @@ export function bounds(doc: BoardDoc, o: BoardObject): Rect {
     const { a, b } = connectorPoints(doc, o);
     return normRect(a, b);
   }
+  // A folded section is only as tall as its bar, so selecting it, and the ring
+  // around it, match what you can actually see.
+  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: o.w, h: SECTION_BAR_H };
   return { x: o.x, y: o.y, w: o.w, h: o.h };
 }
 
@@ -119,6 +122,8 @@ export function penHit(o: BoardObject & { type: "pen" }, p: Pt, slop: number) {
 }
 
 const SECTION_TITLE_H = 28;
+/** A folded section is just this bar, where the top of its frame was. */
+export const SECTION_BAR_H = 44;
 
 /**
  * The topmost object under a world point. Sections are only grabbed by their
@@ -138,6 +143,11 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
         if (penHit(o, p, slop)) return o;
         break;
       case "section": {
+        if (o.collapsed) {
+          // Folded: the bar is the whole of it, and grabbing it moves it.
+          if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + SECTION_BAR_H) return o;
+          break;
+        }
         const inX = p.x >= o.x - slop && p.x <= o.x + o.w + slop;
         const inY = p.y >= o.y - slop && p.y <= o.y + o.h + slop;
         const title = p.x >= o.x && p.x <= o.x + Math.min(o.w, 260) && p.y >= o.y - SECTION_TITLE_H / Math.max(zoom, 0.5) && p.y <= o.y;

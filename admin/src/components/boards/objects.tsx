@@ -1,17 +1,18 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useRef } from "react";
-import { Check, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Sparkles, X } from "lucide-react";
 
 import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
-import { connectorPoints, penPath } from "./geometry";
+import { connectorPoints, penPath, SECTION_BAR_H } from "./geometry";
 import { initials } from "./identity";
 
 export type ObjectHandlers = {
   onText: (id: string, text: string, h?: number) => void;
+  onToggleCollapse: (id: string) => void;
   onEditEnd: () => void;
   onAccept: (id: string) => void;
   onDismiss: (id: string) => void;
@@ -188,12 +189,14 @@ type Props = {
   editing: boolean;
   me: string;
   handlers: ObjectHandlers;
+  /** How many things a folded section is hiding. */
+  hiddenCount?: number;
   /** Someone else is typing in it (their colour). */
   lockedBy?: string;
 };
 
 /** One board object in world coordinates (connectors render via ConnectorView). */
-export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy }: Props) {
+export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0 }: Props) {
   const box: React.CSSProperties = { left: o.x, top: o.y, width: o.w, height: o.h, zIndex: o.z };
   const ring = lockedBy ? { boxShadow: `0 0 0 2px ${lockedBy}` } : undefined;
   const suggestion = o.suggestion ? <SuggestionBar id={o.id} h={handlers} /> : null;
@@ -276,28 +279,64 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
           <VoteBadge votes={o.votes} me={me} />
         </div>
       );
-    case "section":
+    case "section": {
+      const Chevron = o.collapsed ? ChevronRight : ChevronDown;
+      const fold = (
+        <button
+          className="shrink-0 rounded p-0.5 hover:bg-black/10"
+          title={o.collapsed ? "Unfold this section" : "Fold this section"}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => handlers.onToggleCollapse(o.id)}
+        >
+          <Chevron className="size-4" />
+        </button>
+      );
+      const titleText = editing ? (
+        <EditableText
+          value={o.title}
+          onChange={(t) => handlers.onText(o.id, t)}
+          onDone={handlers.onEditEnd}
+          style={{ fontSize: 12, height: 16 }}
+        />
+      ) : (
+        <span className="truncate">{o.title || "Section"}</span>
+      );
+
+      if (o.collapsed) {
+        return (
+          <div className="absolute select-none" style={{ ...box, height: SECTION_BAR_H, ...ring }}>
+            {suggestion}
+            <div
+              className="flex h-full w-full items-center gap-1.5 rounded-md border border-black/10 px-2 text-sm font-semibold text-zinc-800"
+              style={{ background: o.color }}
+            >
+              {fold}
+              {titleText}
+              {hiddenCount > 0 && (
+                <span className="ml-auto shrink-0 rounded-full bg-black/10 px-1.5 text-[11px] font-medium">
+                  {hiddenCount}
+                </span>
+              )}
+            </div>
+            <VoteBadge votes={o.votes} me={me} />
+          </div>
+        );
+      }
+
       return (
         <div className="absolute" style={{ ...box, ...ring }}>
           <div
-            className="absolute -top-7 left-0 max-w-[260px] truncate rounded-t-md px-2 py-1 text-xs font-semibold text-zinc-800"
+            className="absolute -top-7 left-0 flex max-w-[260px] items-center gap-1 truncate rounded-t-md px-1.5 py-1 text-xs font-semibold text-zinc-800"
             style={{ background: o.color, minWidth: 60 }}
           >
-            {editing ? (
-              <EditableText
-                value={o.title}
-                onChange={(t) => handlers.onText(o.id, t)}
-                onDone={handlers.onEditEnd}
-                style={{ fontSize: 12, height: 16 }}
-              />
-            ) : (
-              o.title || "Section"
-            )}
+            {fold}
+            {titleText}
           </div>
           <div className="h-full w-full rounded-md rounded-tl-none border border-black/10" style={{ background: o.color }} />
           <VoteBadge votes={o.votes} me={me} />
         </div>
       );
+    }
     case "pen":
       return (
         <svg

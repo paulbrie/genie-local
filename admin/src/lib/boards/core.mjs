@@ -239,6 +239,8 @@ export function sanitizeObject(o) {
     case "section":
       out.title = str(o.title, LIMITS.title, "Section");
       out.color = color(o.color, "#f4f4f5");
+      // Folded: the frame shows as a bar and what's inside it is hidden.
+      if (o.collapsed === true) out.collapsed = true;
       break;
     case "connector": {
       out.from = sanitizeEnd(o.from) ?? { x: out.x, y: out.y };
@@ -499,7 +501,7 @@ export function findFreeSpot(doc, w, h, near) {
   return { x: origin.x, y: origin.y };
 }
 
-const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke"];
+const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed"];
 
 /**
  * The small, forgiving op language Claude and outside agents write
@@ -666,6 +668,7 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
         break;
       case "section":
         d.title = o.title;
+        if (o.collapsed) d.collapsed = true;
         break;
       case "connector":
         d.from = o.from.id ?? `(${r(o.from.x)},${r(o.from.y)})`;
@@ -691,4 +694,32 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
     lines.push(JSON.stringify(d));
   }
   return lines.join("\n");
+}
+
+/**
+ * What a collapsed section hides: everything whose middle sits inside it, and
+ * the connectors with an end on any of them. Sections don't nest in practice,
+ * but one inside another folds away with it.
+ */
+export function hiddenByCollapsed(doc) {
+  const hidden = new Set();
+  const folded = Object.values(doc.objects).filter((o) => o.type === "section" && o.collapsed);
+  if (!folded.length) return hidden;
+  for (const o of Object.values(doc.objects)) {
+    if (o.type === "connector") continue;
+    const cx = o.x + o.w / 2;
+    const cy = o.y + o.h / 2;
+    for (const s of folded) {
+      if (o.id !== s.id && cx >= s.x && cx <= s.x + s.w && cy >= s.y && cy <= s.y + s.h) {
+        hidden.add(o.id);
+        break;
+      }
+    }
+  }
+  for (const o of Object.values(doc.objects)) {
+    if (o.type === "connector" && ((o.from.id && hidden.has(o.from.id)) || (o.to.id && hidden.has(o.to.id)))) {
+      hidden.add(o.id);
+    }
+  }
+  return hidden;
 }

@@ -25,7 +25,7 @@ export type Sticky = Base & { type: "sticky"; text: string; color: string };
 export type TextBox = Base & { type: "text"; text: string; color: string; fontSize: number };
 export type ShapeKind = "rect" | "roundrect" | "ellipse" | "diamond" | "triangle";
 export type Shape = Base & { type: "shape"; shape: ShapeKind; text: string; color: string; stroke: string };
-export type Section = Base & { type: "section"; title: string; color: string };
+export type Section = Base & { type: "section"; title: string; color: string; collapsed?: true };
 export type Connector = Base & {
   type: "connector";
   from: ConnectorEnd;
@@ -143,3 +143,4 @@ export function describeBoard(
   doc: BoardDoc,
   opts?: { only?: Set<string>; maxText?: number; names?: boolean },
 ): string;
+export function hiddenByCollapsed(doc: BoardDoc): Set<string>;

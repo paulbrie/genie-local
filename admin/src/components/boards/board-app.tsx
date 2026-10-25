@@ -48,6 +48,7 @@ import {
   CLAUDE_ID,
   COLORS,
   contentBounds,
+  hiddenByCollapsed,
   INKS,
   maxZ,
   minZ,
@@ -498,8 +499,12 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     [sync],
   );
 
-  // What someone else deleted drops out of the selection.
-  const selection = useMemo(() => rawSelection.filter((id) => doc.objects[id]), [rawSelection, doc.objects]);
+  // What someone else deleted — or folded away inside a section — drops out of
+  // the selection, so a keystroke can't act on something you can't see.
+  const selection = useMemo(() => {
+    const hidden = hiddenByCollapsed(doc);
+    return rawSelection.filter((id) => doc.objects[id] && !hidden.has(id));
+  }, [rawSelection, doc]);
 
   // The board's on-screen size, for placing popovers during render.
   const [area, setArea] = useState({ w: 1200, h: 800 });
