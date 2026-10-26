@@ -301,7 +301,7 @@ const OPS_HELP = `Ops you can use (a JSON array, applied in order):
   types: link ({"type":"link","url":"https://…","title":"optional","desc":"optional"}), table ({"type":"table","rows":[["Header","Header"],["cell","cell"]]} — the first row is the header), sticky (200x200 by default), text (a free text label; "fontSize"), shape ("shape": rect|roundrect|ellipse|diamond|triangle, with "text"; good for flowcharts), section (a titled frame, "title", "w", "h"; it sits behind the items it groups, so make it big enough to contain them with 40px padding), comment ("text"; a comment pin).
   "ref" is your own name for the new item, so later ops in the same list can point at it.
   Leave out x and y to let the board find free space.
-- {"op":"connect","from":"<id or ref>","to":"<id or ref>","label":"optional"}   an arrow between two items
+- {"op":"connect","from":"<id or ref>","to":"<id or ref>","label":"optional"}   an arrow between two items; it curves, meeting each shape square-on, unless you pass "straight":true
 - {"op":"update","id":"<id or ref>", …only the fields to change: x, y, w, h, text, title, color, shape, label}
 - {"op":"delete","id":"<id>"}   only when asked to remove something
 - {"op":"arrange","id":"<section id>"}  tidy that section's contents onto a grid and size the section to match

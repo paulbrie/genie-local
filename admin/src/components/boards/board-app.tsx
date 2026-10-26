@@ -474,17 +474,17 @@ function SelectionBar({
           </Button>
           <Button
             size="xs"
-            variant={first.curved ? "secondary" : "ghost"}
-            title={first.curved ? "Make it straight" : "Curve it"}
-            onClick={() => patchAll({ curved: first.curved ? null : true })}
+            variant={first.straight ? "ghost" : "secondary"}
+            title={first.straight ? "Curve it" : "Make it straight"}
+            onClick={() => patchAll({ straight: first.straight ? null : true, bend: null })}
             data-testid="connector-curved"
           >
-            {first.curved ? "〜" : "／"}
+            {first.straight ? "／" : "〜"}
           </Button>
           <Button
             size="xs"
             variant="ghost"
-            title="Let both ends find their own place again"
+            title="Let both ends find their own place again, and undo the bend"
             onClick={() =>
               sync.apply(
                 objs
@@ -492,7 +492,7 @@ function SelectionBar({
                   .map((o) => ({
                     k: "patch" as const,
                     id: o.id,
-                    set: { from: { ...o.from, side: null }, to: { ...o.to, side: null } } as never,
+                    set: { from: { ...o.from, at: null }, to: { ...o.to, at: null }, bend: null } as never,
                   })),
               )
             }

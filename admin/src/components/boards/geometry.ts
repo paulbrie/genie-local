@@ -1,4 +1,4 @@
-import type { BoardDoc, BoardObject, Connector, ConnectorEnd, Side } from "@/lib/boards/core.mjs";
+import type { BoardDoc, BoardObject, Connector, ConnectorEnd } from "@/lib/boards/core.mjs";
 
 /** Screen = world * zoom + (tx, ty). */
 export type View = { tx: number; ty: number; zoom: number };
@@ -41,62 +41,58 @@ export function normRect(a: Pt, b: Pt): Rect {
   return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
 }
 
-/** Where a line from the box centre toward `p` leaves the box (ellipses too). */
-function boundaryPoint(o: BoardObject, p: Pt, gap = 4): Pt {
-  const c = center(o);
-  const dx = p.x - c.x;
-  const dy = p.y - c.y;
-  if (dx === 0 && dy === 0) return c;
-  const hw = o.w / 2 + gap;
-  const hh = o.h / 2 + gap;
-  let t: number;
-  if (o.type === "shape" && o.shape === "ellipse") {
-    t = 1 / Math.sqrt((dx * dx) / (hw * hw) + (dy * dy) / (hh * hh));
-  } else if (o.type === "shape" && o.shape === "diamond") {
-    t = 1 / (Math.abs(dx) / hw + Math.abs(dy) / hh);
-  } else {
-    t = Math.min(hw / Math.abs(dx || 1e-9), hh / Math.abs(dy || 1e-9));
+/** A point on a box's border from a 0..1 position, with the way out of it. */
+export function anchorPoint(o: BoardObject, at: Pt, gap = 4): { p: Pt; dir: Pt } {
+  const x = o.x + at.x * o.w;
+  const y = o.y + at.y * o.h;
+  // Which edge it sits on decides the way out; a corner leans both ways.
+  let dx = 0;
+  let dy = 0;
+  if (at.x <= 0.001) dx = -1;
+  else if (at.x >= 0.999) dx = 1;
+  if (at.y <= 0.001) dy = -1;
+  else if (at.y >= 0.999) dy = 1;
+  if (!dx && !dy) {
+    // Not on an edge: head away from the middle.
+    dx = at.x - 0.5;
+    dy = at.y - 0.5;
   }
-  return { x: c.x + dx * t, y: c.y + dy * t };
+  const len = Math.hypot(dx, dy) || 1;
+  const dir = { x: dx / len, y: dy / len };
+  return { p: { x: x + dir.x * gap, y: y + dir.y * gap }, dir };
 }
 
-/** The middle of one side of a box, and the direction pointing out of it. */
-export function sidePoint(o: BoardObject, side: Side, gap = 4): { p: Pt; dir: Pt } {
-  const cx = o.x + o.w / 2;
-  const cy = o.y + o.h / 2;
-  switch (side) {
-    case "top":
-      return { p: { x: cx, y: o.y - gap }, dir: { x: 0, y: -1 } };
-    case "bottom":
-      return { p: { x: cx, y: o.y + o.h + gap }, dir: { x: 0, y: 1 } };
-    case "left":
-      return { p: { x: o.x - gap, y: cy }, dir: { x: -1, y: 0 } };
-    default:
-      return { p: { x: o.x + o.w + gap, y: cy }, dir: { x: 1, y: 0 } };
-  }
+/** The place on a box's border nearest `p`, as a 0..1 position. */
+export function nearestAnchor(o: BoardObject, p: Pt): Pt {
+  const fx = Math.min(1, Math.max(0, (p.x - o.x) / Math.max(o.w, 1)));
+  const fy = Math.min(1, Math.max(0, (p.y - o.y) / Math.max(o.h, 1)));
+  // Push whichever edge is closest out to it, so the point lands on the border.
+  const d = [fx, 1 - fx, fy, 1 - fy];
+  const min = Math.min(...d);
+  if (min === d[0]) return { x: 0, y: fy };
+  if (min === d[1]) return { x: 1, y: fy };
+  if (min === d[2]) return { x: fx, y: 0 };
+  return { x: fx, y: 1 };
 }
 
-/**
- * The side a line should leave by when nobody pinned one: whichever the other
- * end lies off, measured against the box's own proportions so a wide box isn't
- * always left-and-right.
- */
-export function autoSide(o: BoardObject, towards: Pt): Side {
+/** How far from a border a drop still counts as pinning to it, in board units. */
+export const ANCHOR_BAND = 26;
+
+/** Is `p` close enough to this box's border to mean a specific spot on it? */
+export function nearBorder(o: BoardObject, p: Pt) {
+  const inside = p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h;
+  if (!inside) return false;
+  return Math.min(p.x - o.x, o.x + o.w - p.x, p.y - o.y, o.y + o.h - p.y) <= ANCHOR_BAND;
+}
+
+/** Where a line should meet a shape when nobody has said: the side it heads for. */
+function autoAt(o: BoardObject, towards: Pt): Pt {
   const c = center(o);
   const dx = towards.x - c.x;
   const dy = towards.y - c.y;
   return Math.abs(dx) / Math.max(o.w / 2, 1) >= Math.abs(dy) / Math.max(o.h / 2, 1)
-    ? dx >= 0
-      ? "right"
-      : "left"
-    : dy >= 0
-      ? "bottom"
-      : "top";
-}
-
-/** The four places a line can be pinned on a box. */
-export function sideHandles(o: BoardObject): { side: Side; p: Pt }[] {
-  return (["top", "right", "bottom", "left"] as Side[]).map((side) => ({ side, p: sidePoint(o, side, 0).p }));
+    ? { x: dx >= 0 ? 1 : 0, y: 0.5 }
+    : { x: 0.5, y: dy >= 0 ? 1 : 0 };
 }
 
 function endTarget(doc: BoardDoc, e: ConnectorEnd): BoardObject | null {
@@ -104,84 +100,78 @@ function endTarget(doc: BoardDoc, e: ConnectorEnd): BoardObject | null {
   return o && o.type !== "connector" ? o : null;
 }
 
+export type ConnectorCurve = {
+  a: Pt;
+  b: Pt;
+  /** The middle of the drawn line, where the handle that shapes it sits. */
+  mid: Pt;
+  /** Points along it, for hit-testing, bounds and pointing the arrowheads. */
+  points: Pt[];
+  path: string;
+};
+
 /**
- * The two drawn ends of a connector. An end attached to a box meets it where a
- * line to the other end leaves it, or — if a side was chosen — at the middle of
- * that side. `da`/`db` point out of each end, which is what curves follow.
+ * Everything about how a connector is drawn, in one place so the picture, the
+ * hit-test and the arrowheads can never disagree. A line is curved unless it
+ * says otherwise; a curve leaves each shape square-on, and once someone drags
+ * its middle it bows through wherever they put it.
  */
-export function connectorPoints(doc: BoardDoc, c: Connector): { a: Pt; b: Pt; da: Pt; db: Pt } {
+export function connectorCurve(doc: BoardDoc, c: Connector): ConnectorCurve {
   const A = endTarget(doc, c.from);
   const B = endTarget(doc, c.to);
-  const ca = A ? center(A) : { x: c.from.x, y: c.from.y };
-  const cb = B ? center(B) : { x: c.to.x, y: c.to.y };
-  const end = (o: BoardObject | null, side: Side | undefined, towards: Pt, fallback: Pt) => {
-    if (!o) return { p: fallback, dir: null };
-    if (side) return sidePoint(o, side);
-    // A curve always meets a shape square-on — that right angle is what gives it
-    // its shape — so an unpinned end takes the side it is heading for.
-    if (c.curved) return sidePoint(o, autoSide(o, towards));
-    return { p: boundaryPoint(o, towards), dir: null };
-  };
-  const from = end(A, c.from.side, cb, ca);
-  const to = end(B, c.to.side, ca, cb);
-  // With no pinned side, a curve leaves along the line between the two ends.
+  const rawA = A ? center(A) : { x: c.from.x, y: c.from.y };
+  const rawB = B ? center(B) : { x: c.to.x, y: c.to.y };
+  const endOf = (o: BoardObject | null, at: Pt | undefined, towards: Pt, loose: Pt) =>
+    o ? anchorPoint(o, at ?? autoAt(o, towards)) : { p: loose, dir: { x: 0, y: 0 } };
+  const from = endOf(A, c.from.at, rawB, rawA);
+  const to = endOf(B, c.to.at, rawA, rawB);
+  const a = from.p;
+  const b = to.p;
+  const chord = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+
+  if (c.straight) {
+    return { a, b, mid: chord, points: [a, b], path: `M${a.x} ${a.y}L${b.x} ${b.y}` };
+  }
+
+  // Bowed by hand: a quadratic whose middle passes through the handle.
+  if (c.bend) {
+    const h = { x: chord.x + c.bend.x, y: chord.y + c.bend.y };
+    const ctrl = { x: 2 * h.x - (a.x + b.x) / 2, y: 2 * h.y - (a.y + b.y) / 2 };
+    const at = (t: number) => {
+      const u = 1 - t;
+      return { x: u * u * a.x + 2 * u * t * ctrl.x + t * t * b.x, y: u * u * a.y + 2 * u * t * ctrl.y + t * t * b.y };
+    };
+    const points = Array.from({ length: 17 }, (_, i) => at(i / 16));
+    return { a, b, mid: h, points, path: `M${a.x} ${a.y}Q${ctrl.x} ${ctrl.y} ${b.x} ${b.y}` };
+  }
+
+  // Otherwise a gentle S, leaving and arriving at right angles to each shape.
   const away = (p: Pt, other: Pt): Pt => {
     const dx = other.x - p.x;
     const dy = other.y - p.y;
     const len = Math.hypot(dx, dy) || 1;
     return { x: dx / len, y: dy / len };
   };
-  return {
-    a: from.p,
-    b: to.p,
-    da: from.dir ?? away(from.p, to.p),
-    db: to.dir ?? away(to.p, from.p),
-  };
-}
-
-/** A connector's path: a straight line, or a curve leaving each end head-on. */
-export function connectorPath(a: Pt, b: Pt, da: Pt, db: Pt, curved: boolean | undefined): string {
-  if (!curved) return `M${a.x} ${a.y}L${b.x} ${b.y}`;
-  // Control points reach out along each end's direction, by a share of the gap.
+  const da = from.dir.x || from.dir.y ? from.dir : away(a, b);
+  const db = to.dir.x || to.dir.y ? to.dir : away(b, a);
   const pull = Math.max(40, Math.min(220, Math.hypot(b.x - a.x, b.y - a.y) * 0.45));
   const c1 = { x: a.x + da.x * pull, y: a.y + da.y * pull };
   const c2 = { x: b.x + db.x * pull, y: b.y + db.y * pull };
-  return `M${a.x} ${a.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}`;
-}
-
-/** Points along a connector, for hit-testing a curve as well as a line. */
-export function connectorSamples(a: Pt, b: Pt, da: Pt, db: Pt, curved: boolean | undefined): Pt[] {
-  if (!curved) return [a, b];
-  const pull = Math.max(40, Math.min(220, Math.hypot(b.x - a.x, b.y - a.y) * 0.45));
-  const c1 = { x: a.x + da.x * pull, y: a.y + da.y * pull };
-  const c2 = { x: b.x + db.x * pull, y: b.y + db.y * pull };
-  const out: Pt[] = [];
-  for (let i = 0; i <= 12; i++) {
-    const t = i / 12;
+  const at = (t: number) => {
     const u = 1 - t;
-    out.push({
+    return {
       x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x,
       y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y,
-    });
-  }
-  return out;
-}
-
-/** Where the line actually arrives, so an arrowhead can point along it. */
-export function arrivalFrom(a: Pt, b: Pt, da: Pt, db: Pt, curved: boolean | undefined): { atB: Pt; atA: Pt } {
-  if (!curved) return { atB: a, atA: b };
-  const pull = Math.max(40, Math.min(220, Math.hypot(b.x - a.x, b.y - a.y) * 0.45));
-  return {
-    atB: { x: b.x + db.x * pull, y: b.y + db.y * pull },
-    atA: { x: a.x + da.x * pull, y: a.y + da.y * pull },
+    };
   };
+  const points = Array.from({ length: 17 }, (_, i) => at(i / 16));
+  return { a, b, mid: at(0.5), points, path: `M${a.x} ${a.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${b.x} ${b.y}` };
 }
 
 /** An object's box; a connector's is the box around its two ends. */
 export function bounds(doc: BoardDoc, o: BoardObject): Rect {
   if (o.type === "connector") {
-    const { a, b, da, db } = connectorPoints(doc, o);
-    return unionRect(connectorSamples(a, b, da, db, o.curved).map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })))!;
+    return unionRect(connectorCurve(doc, o).points.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })))!;
   }
   // A folded section is only as tall as its bar, so selecting it, and the ring
   // around it, match what you can actually see.
@@ -257,8 +247,7 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
     const o = sorted[i];
     switch (o.type) {
       case "connector": {
-        const { a, b, da, db } = connectorPoints(doc, o);
-        const pts = connectorSamples(a, b, da, db, o.curved);
+        const pts = connectorCurve(doc, o).points;
         for (let s = 0; s < pts.length - 1; s++) {
           if (distToSegment(p, pts[s], pts[s + 1]) <= slop + 2) return o;
         }

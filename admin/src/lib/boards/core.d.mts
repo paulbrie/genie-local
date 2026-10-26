@@ -17,8 +17,8 @@ type Base = {
   votes?: Record<string, number>;
 };
 
-export type Side = "top" | "right" | "bottom" | "left";
-export type ConnectorEnd = { id?: string; x: number; y: number; side?: Side };
+/** Where on a shape a line lands: a fraction of its box, 0..1 each way. */
+export type ConnectorEnd = { id?: string; x: number; y: number; at?: { x: number; y: number } };
 export type Message = { id: string; author: Author; text: string; at: number };
 export type ChatMessage = Message & { role: "user" | "claude"; pending?: true };
 
@@ -35,7 +35,10 @@ export type Connector = Base & {
   arrow: "end" | "both" | "none";
   color: string;
   dashed?: true;
-  curved?: true;
+  /** Lines curve by default; this records the exception. */
+  straight?: true;
+  /** How far the middle is pulled off the straight line between the ends. */
+  bend?: { x: number; y: number };
 };
 export type Pen = Base & { type: "pen"; points: [number, number][]; color: string; width: number };
 export type ImageObj = Base & { type: "image"; src: string; alt: string };
@@ -115,7 +118,6 @@ export const CLAUDE_COLOR: string;
 export const OBJECT_TYPES: ObjectType[];
 export const SHAPES: ShapeKind[];
 export const ARROWS: Connector["arrow"][];
-export const SIDES: ("auto" | Side)[];
 export const ASSET_PREFIX: string;
 export const DEFAULT_SIZES: Record<string, { w: number; h: number }>;
 

@@ -8,7 +8,7 @@ import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc, BoardObject, Connector, ShapeKind } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
-import { arrivalFrom, connectorPath, connectorPoints, penPath, sectionBarH, sectionBarW } from "./geometry";
+import { connectorCurve, penPath, sectionBarH, sectionBarW } from "./geometry";
 import { initials } from "./identity";
 
 /** Which cell of a table is open for typing. */
@@ -171,25 +171,23 @@ function arrowHead(tip: { x: number; y: number }, from: { x: number; y: number }
 }
 
 export function ConnectorView({ doc, o, preview }: { doc: BoardDoc; o: Connector; preview?: boolean }) {
-  const { a, b, da, db } = connectorPoints(doc, o);
-  // A curve's label rides its middle, which is not the midpoint of the ends.
-  const { atB, atA } = arrivalFrom(a, b, da, db, o.curved);
-  const mid = o.curved
-    ? { x: (a.x + b.x) / 2 * 0.5 + (atA.x + atB.x) / 2 * 0.5, y: (a.y + b.y) / 2 * 0.5 + (atA.y + atB.y) / 2 * 0.5 }
-    : { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const { a, b, mid, points, path } = connectorCurve(doc, o);
+  // Arrowheads follow the line in, which on a curve is not the way the chord points.
+  const inAtB = points[points.length - 2] ?? a;
+  const inAtA = points[1] ?? b;
   return (
     <>
       <svg className="pointer-events-none absolute left-0 top-0 overflow-visible" width={1} height={1} style={{ zIndex: o.z }}>
         <path
-          d={connectorPath(a, b, da, db, o.curved)}
+          d={path}
           fill="none"
           stroke={o.color}
           strokeWidth={2}
           strokeDasharray={o.dashed || preview ? "8 6" : undefined}
           strokeLinecap="round"
         />
-        {(o.arrow === "end" || o.arrow === "both") && <polygon points={arrowHead(b, atB, 12)} fill={o.color} />}
-        {o.arrow === "both" && <polygon points={arrowHead(a, atA, 12)} fill={o.color} />}
+        {(o.arrow === "end" || o.arrow === "both") && <polygon points={arrowHead(b, inAtB, 12)} fill={o.color} />}
+        {o.arrow === "both" && <polygon points={arrowHead(a, inAtA, 12)} fill={o.color} />}
       </svg>
       {o.label && (
         <div
@@ -561,6 +559,7 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
                       return (
                         <td
                           key={c}
+                          data-cell={`${r},${c}`}
                           className={cn(
                             "truncate border px-1.5 py-1 align-top",
                             head && "bg-muted/60 font-semibold",

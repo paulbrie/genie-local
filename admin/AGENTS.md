@@ -173,11 +173,14 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   collapses the frame to a bar sized by its title (`sectionBarW` estimates it, so
   hit-testing needs no DOM) with a count, and what's inside drops out of sight,
   of hit-testing and of the selection (`hiddenByCollapsed`). Drawing a connector
-  highlights the ends it would attach to, and dropping an end on one of the four
-  dots on a shape pins the line to that side (`side` on a connector end; Unpin in
-  the toolbar lets it find its own place again). Lines can be curved (`curved`),
-  drawn as a bezier that always meets a shape square-on — an unpinned end takes
-  the side it heads for (`autoSide`), which is what gives the curve its shape, with hit-testing and arrowheads
+  highlights the ends it would attach to. Dropping an end near a shape's border
+  pins it to that exact spot (`at`, a 0..1 position on the box); dropping it well
+  inside leaves it free to pick its own side as things move, which Unpin also
+  restores. Lines **curve by default** (`straight` records the exception), leaving
+  and arriving square-on, and dragging the handle at a curve's middle bows it
+  through that point (`bend`, held relative to the two ends). `connectorCurve` in
+  geometry.ts is the single source for the path, the points it's hit-tested and
+  bounded by, and the way the arrowheads face, with hit-testing and arrowheads
   following the curve; someone working outside your view shows as a marker on the edge
   of it, pointing their way — click it to follow them. Pieces:
   · `src/lib/boards/core.mjs` (+ `core.d.mts`) — the doc model and `applyOps`, plain

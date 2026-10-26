@@ -15,7 +15,6 @@ import {
   type Connector,
   type ConnectorEnd,
   type ShapeKind,
-  type Side,
 } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
@@ -23,13 +22,14 @@ import {
   attachTarget,
   bounds,
   edgePoint,
-  connectorPoints,
+  connectorCurve,
   contains,
   hitTest,
   intersects,
   normRect,
   offScreen,
-  sideHandles,
+  nearBorder,
+  nearestAnchor,
   penHit,
   penPath,
   simplify,
@@ -93,7 +93,8 @@ type Drag =
   | { kind: "connect"; from: ConnectorEnd; cur: Pt }
   | { kind: "endpoint"; id: string; which: "from" | "to"; g: Gesture }
   | { kind: "pen"; points: [number, number][] }
-  | { kind: "erase"; g: Gesture; erased: Set<string> };
+  | { kind: "erase"; g: Gesture; erased: Set<string> }
+  | { kind: "bend"; id: string; g: Gesture };
 
 type Props = {
   sync: BoardSync;
@@ -173,6 +174,8 @@ export function BoardCanvas(props: Props) {
   // before letting go. Kept in a ref too: the pointer moves far more often than
   // this changes, and only a change is worth a re-render.
   const [snap, setSnapState] = useState<string | null>(null);
+  // Exactly where a dragged end would land, when it's near a border.
+  const [anchorDot, setAnchorDot] = useState<Pt | null>(null);
   const snapRef = useRef<string | null>(null);
   const setSnap = (id: string | null) => {
     if (snapRef.current === id) return;
@@ -338,15 +341,13 @@ export function BoardCanvas(props: Props) {
     setDrag({ kind: "move", start: p, ids: [...all], origins, g: sync.gesture(), moved: false, clickId, additive });
   };
 
-  /** The side dot under `p` on `target`, if the pointer is close enough to one. */
-  const sideAt = (target: BoardObject | null, p: Pt): Side | undefined => {
-    if (!target) return undefined;
-    const r = 14 / live.current.view.zoom;
-    for (const h of sideHandles(target)) {
-      if (Math.hypot(p.x - h.p.x, p.y - h.p.y) <= r) return h.side;
-    }
-    return undefined;
-  };
+  /**
+   * Where on `target` an end dropped at `p` should land: the exact spot on the
+   * border when the pointer is near one, nothing when it's dropped well inside,
+   * which leaves the line free to pick its own side as things move.
+   */
+  const anchorAt = (target: BoardObject | null, p: Pt) =>
+    target && nearBorder(target, p) ? nearestAnchor(target, p) : undefined;
 
   const create = (obj: Partial<BoardObject> & { type: BoardObject["type"] }, g?: Gesture) => {
     const d = live.current.doc;
@@ -464,7 +465,12 @@ export function BoardCanvas(props: Props) {
       if (o) {
         const tol = HANDLE_PX / v.zoom;
         if (o.type === "connector") {
-          const { a, b } = connectorPoints(d, o);
+          const { a, b, mid } = connectorCurve(d, o);
+          // The middle handle shapes the curve; grab it before the ends.
+          if (!o.straight && Math.hypot(p.x - mid.x, p.y - mid.y) <= tol) {
+            setDrag({ kind: "bend", id: o.id, g: sync.gesture() });
+            return;
+          }
           for (const [which, q] of [
             ["from", a],
             ["to", b],
@@ -556,7 +562,11 @@ export function BoardCanvas(props: Props) {
     onPointerWorld(p);
     sync.presence({ cursor: p });
     const dg = dragRef.current;
-    setSnap(snapTargetAt(p, dg));
+    const target = snapTargetAt(p, dg);
+    setSnap(target);
+    const over = target ? live.current.doc.objects[target] : null;
+    const landing = over && nearBorder(over, p) ? nearestAnchor(over, p) : null;
+    setAnchorDot(landing ? { x: over!.x + landing.x * over!.w, y: over!.y + landing.y * over!.h } : null);
     if (!dg) return;
     const d = live.current.doc;
     switch (dg.kind) {
@@ -631,7 +641,7 @@ export function BoardCanvas(props: Props) {
         return;
       case "endpoint": {
         const target = attachTarget(sortedRef.current, p, (d.objects[dg.id] as Connector | undefined)?.[dg.which === "from" ? "to" : "from"]?.id);
-        const end: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, side: sideAt(target, p) } : { x: p.x, y: p.y };
+        const end: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, at: anchorAt(target, p) } : { x: p.x, y: p.y };
         dg.g.apply([{ k: "patch", id: dg.id, set: { [dg.which]: end } }]);
         return;
       }
@@ -641,6 +651,19 @@ export function BoardCanvas(props: Props) {
       case "erase":
         eraseAt(p);
         return;
+      case "bend": {
+        const c = d.objects[dg.id];
+        if (c?.type !== "connector") return;
+        const { a, b } = connectorCurve(d, c);
+        dg.g.apply([
+          {
+            k: "patch",
+            id: dg.id,
+            set: { bend: { x: Math.round(p.x - (a.x + b.x) / 2), y: Math.round(p.y - (a.y + b.y) / 2) } },
+          },
+        ]);
+        return;
+      }
     }
   };
 
@@ -648,6 +671,7 @@ export function BoardCanvas(props: Props) {
     const dg = dragRef.current;
     setDrag(null);
     setSnap(null);
+    setAnchorDot(null);
     if (!dg) return;
     const d = live.current.doc;
     const p = worldPt(e);
@@ -681,7 +705,7 @@ export function BoardCanvas(props: Props) {
       }
       case "connect": {
         const target = attachTarget(sortedRef.current, p, dg.from.id);
-        const to: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, side: sideAt(target, p) } : { x: p.x, y: p.y };
+        const to: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, at: anchorAt(target, p) } : { x: p.x, y: p.y };
         const len = Math.hypot(p.x - dg.from.x, p.y - dg.from.y);
         if (len * live.current.view.zoom > 8 || (target && dg.from.id)) {
           const id = create({ type: "connector", from: dg.from, to, label: "", arrow: "end", color: INKS.black } as Partial<Connector> & { type: "connector" });
@@ -690,6 +714,7 @@ export function BoardCanvas(props: Props) {
         return;
       }
       case "endpoint":
+      case "bend":
         dg.g.end();
         return;
       case "pen": {
@@ -732,11 +757,13 @@ export function BoardCanvas(props: Props) {
       return;
     }
     if (hit.type === "table") {
-      const cols = hit.rows[0].length;
-      const c = Math.min(cols - 1, Math.max(0, Math.floor(((p.x - hit.x) / hit.w) * cols)));
-      const r = Math.min(hit.rows.length - 1, Math.max(0, Math.floor(((p.y - hit.y) / hit.h) * hit.rows.length)));
+      // Ask the page which cell is under the pointer rather than working it out
+      // from the box: rows take the height their content needs, so dividing the
+      // box evenly lands on the wrong one.
+      const td = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>("td[data-cell]");
+      const [r, c] = (td?.dataset.cell ?? "0,0").split(",").map(Number);
       setSelection([hit.id]);
-      setCell({ id: hit.id, r, c });
+      setCell({ id: hit.id, r: Math.min(r, hit.rows.length - 1), c: Math.min(c, hit.rows[0].length - 1) });
       return;
     }
     if (hit.type === "sticky" || hit.type === "text" || hit.type === "shape" || hit.type === "section") {
@@ -911,8 +938,9 @@ export function BoardCanvas(props: Props) {
           ))}
         {single?.type === "connector" &&
           (() => {
-            const { a, b } = connectorPoints(doc, single);
-            return [a, b].map((q, i) => (
+            const { a, b, mid } = connectorCurve(doc, single);
+            const handles = single.straight ? [a, b] : [a, b, mid];
+            return handles.map((q, i) => (
               <div
                 key={i}
                 className="pointer-events-none absolute rounded-full border-blue-500 bg-white"
@@ -950,22 +978,20 @@ export function BoardCanvas(props: Props) {
           );
         })}
 
-        {/* Where a line can be pinned on the thing it's meeting */}
-        {(drag?.kind === "connect" || drag?.kind === "endpoint") && snap && doc.objects[snap] &&
-          sideHandles(doc.objects[snap]).map((h) => (
-            <div
-              key={`side-${h.side}`}
-              className="pointer-events-none absolute rounded-full border-white bg-blue-500"
-              style={{
-                left: h.p.x - 5 / z,
-                top: h.p.y - 5 / z,
-                width: 10 / z,
-                height: 10 / z,
-                borderWidth: 2 / z,
-                zIndex: 1e9,
-              }}
-            />
-          ))}
+        {/* Exactly where this end would land on the thing it's meeting */}
+        {(drag?.kind === "connect" || drag?.kind === "endpoint") && anchorDot && (
+          <div
+            className="pointer-events-none absolute rounded-full border-white bg-blue-500"
+            style={{
+              left: anchorDot.x - 6 / z,
+              top: anchorDot.y - 6 / z,
+              width: 12 / z,
+              height: 12 / z,
+              borderWidth: 2 / z,
+              zIndex: 1e9,
+            }}
+          />
+        )}
 
         {/* In-progress drawing */}
         {drag?.kind === "pen" && (
