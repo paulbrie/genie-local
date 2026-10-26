@@ -1,0 +1,107 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { ArrowDownToLine, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+
+import { Button } from "@/components/ui/button";
+import { BASE_PATH } from "@/lib/config";
+import { cn } from "@/lib/utils";
+
+type Status = {
+  branch: string;
+  behind: number;
+  ahead: number;
+  incoming: string[];
+  dirty: number;
+  blocked: string | null;
+};
+
+type Result = { ok: boolean; steps: string[]; error?: string; log: string };
+
+/** How often to ask GitHub whether there's anything new. */
+const POLL_MS = 3 * 60_000;
+
+/**
+ * Shows up in the toolbar only when GitHub is ahead of this checkout, and
+ * updates the admin to match: pull, reinstall if the lockfile moved, then
+ * build, migrate and restart. The restart takes this page with it for a moment,
+ * which the confirmation says plainly.
+ */
+export function AdminUpdateButton() {
+  const [status, setStatus] = useState<Status | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const check = useCallback(async () => {
+    try {
+      const res = await fetch(`${BASE_PATH}/api/admin-update`, { cache: "no-store" });
+      if (res.ok) setStatus(await res.json());
+    } catch {
+      /* the box is busy or the admin is restarting; the next poll will tell */
+    }
+  }, []);
+
+  useEffect(() => {
+    // Off the mount tick: the first look talks to GitHub and shouldn't hold up
+    // the page the toolbar sits on.
+    const first = setTimeout(check, 0);
+    const t = setInterval(check, POLL_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [check]);
+
+  if (!status || status.behind < 1) return null;
+
+  const what = `${status.behind} update${status.behind === 1 ? "" : "s"}`;
+  const listed = status.incoming.slice(0, 8).map((s) => `· ${s}`).join("\n");
+  const more = status.incoming.length > 8 ? `\n…and ${status.incoming.length - 8} more` : "";
+
+  const update = async () => {
+    if (status.blocked) {
+      toast.error(status.blocked);
+      return;
+    }
+    if (
+      !window.confirm(
+        `Update the admin to the latest on GitHub?\n\n${listed}${more}\n\nIt will build, migrate and restart, so this page will blink.`,
+      )
+    ) {
+      return;
+    }
+    setRunning(true);
+    const note = toast.loading("Updating the admin…");
+    try {
+      const res = await fetch(`${BASE_PATH}/api/admin-update`, { method: "POST" });
+      const body: Result = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.error ?? res.statusText);
+      toast.success(body.steps.join(" "), { id: note, duration: 10_000 });
+      // The restart lands within a few seconds; come back to a fresh build.
+      setTimeout(() => window.location.reload(), 25_000);
+    } catch (e) {
+      toast.error((e as Error).message, { id: note, duration: 12_000 });
+      setRunning(false);
+      check();
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant={status.blocked ? "outline" : "default"}
+      className={cn("h-7 gap-1.5", status.blocked && "border-amber-500/60 text-amber-600")}
+      disabled={running}
+      onClick={update}
+      title={
+        status.blocked
+          ? `${what} waiting, but: ${status.blocked}`
+          : `Update the admin to the latest on GitHub:\n${listed}${more}`
+      }
+      data-testid="admin-update"
+    >
+      {running ? <Loader2 className="animate-spin" /> : <ArrowDownToLine />}
+      {running ? "Updating…" : what}
+    </Button>
+  );
+}

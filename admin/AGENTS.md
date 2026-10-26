@@ -70,6 +70,15 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   Origin/Referer; reproduce with a real browser. Prod (`next start` on `/admin`)
   has no such dev-origin restriction.
 
+- **Updating from GitHub.** The toolbar shows a button only when `origin` is ahead
+  of this checkout (`src/lib/admin-update.ts`, polled every 3 min via
+  `/api/admin-update`). It fast-forwards, reinstalls if `admin/package-lock.json`
+  moved (with NODE_ENV dropped, or npm skips the dev packages the build needs),
+  then runs the same `admin-ctl deploy --migrate` the Services page uses. Nothing
+  is forced: local commits or uncommitted edits block it with a message instead of
+  being overwritten. `ADMIN_REPO` overrides the repo path, which is how the git
+  half gets tested without touching the real one.
+
 ## Data & config
 
 - Postgres: role `admin_app`, db `admin_dashboard`. `DATABASE_URL` and
