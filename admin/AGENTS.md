@@ -229,7 +229,9 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     cursor). Auth: the session cookie, or `x-api-key: $BOARDS_API_KEY` (proxy.ts,
     like `DIAGRAMS_API_KEY`; kept out of terminals and agent runs).
     `scripts/boards-mcp.mjs` wraps it as an MCP server (`boards_list`,
-    `board_read`, `board_edit`, `board_create`); setup in its header.
+    `board_read`, `board_edit`, `board_history`, `board_create`), registered for
+    this box in `/opt/project/.mcp.json` (gitignored). It reads `BOARDS_API_KEY`
+    from the admin's own `.env.local`, so the key isn't copied into a second file.
   · Images: `POST /api/boards/<id>/assets` saves to `BOARD_ASSETS_DIR`
     (`/opt/project/.board-assets/<id>/`), served by `/api/boards/assets/<id>/<file>`;
     raster types only.

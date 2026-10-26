@@ -6,18 +6,32 @@
  * A thin client of the HTTP API in src/app/api/boards; no dependencies.
  *
  *   claude mcp add boards \
- *     -e BOARDS_URL=http://127.0.0.1:3002/admin \
- *     -e BOARDS_API_KEY=<the admin's BOARDS_API_KEY> \
  *     -e BOARDS_AGENT=<the name on your cursor> \
  *     -- node /opt/project/admin/scripts/boards-mcp.mjs
+ *
+ * The key is read from the admin's own .env.local, so it stays in one place
+ * rather than being copied into an MCP config; BOARDS_API_KEY in the
+ * environment overrides it.
  *
  * BOARDS_URL is the admin's own origin + basePath, straight to the app (prod
  * listens on 127.0.0.1:3002; going through nginx works too).
  */
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const BASE = (process.env.BOARDS_URL ?? "http://127.0.0.1:3002/admin").replace(/\/$/, "");
-const KEY = process.env.BOARDS_API_KEY ?? "";
+
+/** The admin's own key, read from its .env.local unless the environment says. */
+function apiKey() {
+  if (process.env.BOARDS_API_KEY) return process.env.BOARDS_API_KEY;
+  try {
+    const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
+    return env.match(/^BOARDS_API_KEY=(.*)$/m)?.[1].trim().replace(/^["']|["']$/g, "") ?? "";
+  } catch {
+    return "";
+  }
+}
+const KEY = apiKey();
 const AGENT = process.env.BOARDS_AGENT ?? "agent";
 
 async function api(path, init = {}) {
@@ -31,13 +45,23 @@ async function api(path, init = {}) {
 }
 
 const OPS_DOC = `Ops, applied in order (all fields optional unless shown):
-- {"op":"create","ref":"n1","type":"sticky|text|shape|section|comment","x":0,"y":0,"w":200,"h":200,"text":"…","title":"…(section)","color":"yellow|orange|red|pink|purple|blue|teal|green|gray|white","shape":"rect|roundrect|ellipse|diamond|triangle"}
+- {"op":"create","ref":"n1","type":"sticky|text|shape|section|link|table|comment", …}
+  · sticky / text — "text" (markdown: **bold**, lists, tables, [links](url)); text takes "fontSize"
+  · shape — "shape":"rect|roundrect|ellipse|diamond|triangle" with "text"
+  · section — a titled frame: "title", "w", "h"; it sits behind what it groups, so leave ~40px round them. "collapsed":true folds it to a bar
+  · link — "url" (http(s)), and optionally "title" and "desc"; draws as a card
+  · table — "rows":[["Header","Header"],["cell","cell"]]; the first row is the header
+  · comment — "text" starts the thread
   "ref" names the new item for later ops in the same call; omit x/y to let the board find free space.
+  Colours: yellow, orange, red, pink, purple, blue, teal, green, gray, white.
 - {"op":"connect","from":"<id or ref>","to":"<id or ref>","label":"…"}
+  Lines curve and meet each shape square-on; pass "straight":true for a plain one.
 - {"op":"update","id":"<id or ref>", …fields to change}
 - {"op":"delete","id":"<id>"}
 - {"op":"reply","id":"<comment id>","text":"…"}
-Coordinates are board pixels, x right, y down, x/y = top-left. Sections sit behind what they group.`;
+- {"op":"arrange","id":"<section id>"}  tidy a frame's contents onto a grid and size the frame to match
+- {"op":"fit","id":"<section id>"}      size a frame around what it already holds
+Coordinates are board pixels, x right, y down, x/y = top-left.`;
 
 const TOOLS = [
   {
@@ -88,6 +112,21 @@ const TOOLS = [
         `\nBoard now:\n${r.text}`,
       ]
         .filter(Boolean)
+        .join("\n");
+    },
+  },
+  {
+    name: "board_history",
+    description:
+      "The points a board can be rewound to — taken as people work, and before Claude or an agent changes anything. Useful for seeing what has been happening, or for telling someone which point to restore in the board's History panel.",
+    inputSchema: { type: "object", properties: { board_id: { type: "integer" } }, required: ["board_id"] },
+    run: async ({ board_id }) => {
+      const rows = JSON.parse(await api(`/${board_id}/history`));
+      if (!rows.length) return "Nothing kept yet for this board.";
+      return rows
+        .slice()
+        .reverse()
+        .map((e) => `#${e.id} ${e.createdAt} — ${e.label ?? `${e.authors ?? "someone"}, ${e.changes} change(s)`}`)
         .join("\n");
     },
   },
