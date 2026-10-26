@@ -4,7 +4,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import Link from "next/link";
 import { useSubject } from "subjecto/react";
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   BringToFront,
   Circle,
   Copy,
@@ -323,6 +326,31 @@ function tableOps(sync: BoardSync, id: string, what: "addRow" | "delRow" | "addC
   return [{ k: "patch" as const, id: o.id, set: { rows } }];
 }
 
+/**
+ * Shift a row up or down, or a column left or right, keeping whichever cell was
+ * last clicked with it. Returns the ops and where that cell ends up.
+ */
+function moveTablePart(
+  sync: BoardSync,
+  id: string,
+  where: "up" | "down" | "left" | "right",
+  cell: { r: number; c: number },
+) {
+  const o = sync.doc.getValue().objects[id];
+  if (o?.type !== "table") return null;
+  const rows = o.rows.map((r) => [...r]);
+  if (where === "up" || where === "down") {
+    const to = cell.r + (where === "up" ? -1 : 1);
+    if (to < 0 || to >= rows.length) return null;
+    [rows[cell.r], rows[to]] = [rows[to], rows[cell.r]];
+    return { ops: [{ k: "patch" as const, id, set: { rows } }], cell: { r: to, c: cell.c } };
+  }
+  const to = cell.c + (where === "left" ? -1 : 1);
+  if (to < 0 || to >= rows[0].length) return null;
+  for (const row of rows) [row[cell.c], row[to]] = [row[to], row[cell.c]];
+  return { ops: [{ k: "patch" as const, id, set: { rows } }], cell: { r: cell.r, c: to } };
+}
+
 function SelectionBar({
   sync,
   objs,
@@ -331,6 +359,8 @@ function SelectionBar({
   onAskClaude,
   onAskClaudeFor,
   onDuplicate,
+  cell,
+  setCell,
 }: {
   sync: BoardSync;
   objs: BoardObject[];
@@ -339,6 +369,9 @@ function SelectionBar({
   onAskClaude: () => void;
   onAskClaudeFor: (request: string) => void;
   onDuplicate: () => void;
+  /** The cell last clicked in, which the move controls act on. */
+  cell: EditingCell;
+  setCell: (cell: EditingCell) => void;
 }) {
   const doc = sync.doc.getValue();
   const types = new Set(objs.map((o) => o.type));
@@ -411,6 +444,35 @@ function SelectionBar({
           <Button size="icon-xs" variant="ghost" title="Remove the last row" onClick={() => sync.apply(tableOps(sync, objs[0].id, "delRow"))}>
             <Minus />
           </Button>
+          {cell?.id === objs[0].id && (
+            <>
+              <span className="px-1 text-[11px] text-muted-foreground">Move</span>
+              {(
+                [
+                  ["up", ArrowUp, `Move row ${cell.r + 1} up`],
+                  ["down", ArrowDown, `Move row ${cell.r + 1} down`],
+                  ["left", ArrowLeft, `Move column ${cell.c + 1} left`],
+                  ["right", ArrowRight, `Move column ${cell.c + 1} right`],
+                ] as const
+              ).map(([where, Icon, label]) => (
+                <Button
+                  key={where}
+                  size="icon-xs"
+                  variant="ghost"
+                  title={label}
+                  onClick={() => {
+                    const moved = moveTablePart(sync, objs[0].id, where, cell);
+                    if (!moved) return;
+                    sync.apply(moved.ops);
+                    setCell({ id: objs[0].id, ...moved.cell });
+                  }}
+                  data-testid={`table-move-${where}`}
+                >
+                  <Icon />
+                </Button>
+              ))}
+            </>
+          )}
           <span className="px-1 text-[11px] text-muted-foreground">Cols</span>
           <Button size="icon-xs" variant="ghost" title="Add a column" onClick={() => sync.apply(tableOps(sync, objs[0].id, "addCol"))}>
             <Plus />
@@ -1166,6 +1228,8 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           objs={selectedObjs}
           screen={selScreen}
           area={area}
+          cell={cell}
+          setCell={setCell}
           onDuplicate={() => duplicate(selectedObjs)}
           onAskClaude={() => {
             setClaudeOpen(true);

@@ -41,8 +41,18 @@ export function normRect(a: Pt, b: Pt): Rect {
   return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) };
 }
 
+/**
+ * The box an object actually occupies on screen. A folded section shows only
+ * its bar, so that — not the frame it stands for — is what lines meet, what you
+ * can grab, and what the selection ring goes round.
+ */
+export function visualRect(o: BoardObject): Rect {
+  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: sectionBarW(o), h: sectionBarH(o) };
+  return { x: o.x, y: o.y, w: o.w, h: o.h };
+}
+
 /** A point on a box's border from a 0..1 position, with the way out of it. */
-export function anchorPoint(o: BoardObject, at: Pt, gap = 4): { p: Pt; dir: Pt } {
+export function anchorPoint(o: Rect, at: Pt, gap = 4): { p: Pt; dir: Pt } {
   const x = o.x + at.x * o.w;
   const y = o.y + at.y * o.h;
   // Which edge it sits on decides the way out; a corner leans both ways.
@@ -63,7 +73,7 @@ export function anchorPoint(o: BoardObject, at: Pt, gap = 4): { p: Pt; dir: Pt }
 }
 
 /** The place on a box's border nearest `p`, as a 0..1 position. */
-export function nearestAnchor(o: BoardObject, p: Pt): Pt {
+export function nearestAnchor(o: Rect, p: Pt): Pt {
   const fx = Math.min(1, Math.max(0, (p.x - o.x) / Math.max(o.w, 1)));
   const fy = Math.min(1, Math.max(0, (p.y - o.y) / Math.max(o.h, 1)));
   // Push whichever edge is closest out to it, so the point lands on the border.
@@ -79,14 +89,14 @@ export function nearestAnchor(o: BoardObject, p: Pt): Pt {
 export const ANCHOR_BAND = 26;
 
 /** Is `p` close enough to this box's border to mean a specific spot on it? */
-export function nearBorder(o: BoardObject, p: Pt) {
+export function nearBorder(o: Rect, p: Pt) {
   const inside = p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h;
   if (!inside) return false;
   return Math.min(p.x - o.x, o.x + o.w - p.x, p.y - o.y, o.y + o.h - p.y) <= ANCHOR_BAND;
 }
 
 /** Where a line should meet a shape when nobody has said: the side it heads for. */
-function autoAt(o: BoardObject, towards: Pt): Pt {
+function autoAt(o: Rect, towards: Pt): Pt {
   const c = center(o);
   const dx = towards.x - c.x;
   const dy = towards.y - c.y;
@@ -119,12 +129,16 @@ export type ConnectorCurve = {
 export function connectorCurve(doc: BoardDoc, c: Connector): ConnectorCurve {
   const A = endTarget(doc, c.from);
   const B = endTarget(doc, c.to);
-  const rawA = A ? center(A) : { x: c.from.x, y: c.from.y };
-  const rawB = B ? center(B) : { x: c.to.x, y: c.to.y };
-  const endOf = (o: BoardObject | null, at: Pt | undefined, towards: Pt, loose: Pt) =>
-    o ? anchorPoint(o, at ?? autoAt(o, towards)) : { p: loose, dir: { x: 0, y: 0 } };
-  const from = endOf(A, c.from.at, rawB, rawA);
-  const to = endOf(B, c.to.at, rawA, rawB);
+  // Each end meets whatever the shape currently shows, so folding a section
+  // leaves the lines on it joined to the bar it became.
+  const boxA = A && visualRect(A);
+  const boxB = B && visualRect(B);
+  const rawA = boxA ? center(boxA) : { x: c.from.x, y: c.from.y };
+  const rawB = boxB ? center(boxB) : { x: c.to.x, y: c.to.y };
+  const endOf = (box: Rect | null | undefined, at: Pt | undefined, towards: Pt, loose: Pt) =>
+    box ? anchorPoint(box, at ?? autoAt(box, towards)) : { p: loose, dir: { x: 0, y: 0 } };
+  const from = endOf(boxA, c.from.at, rawB, rawA);
+  const to = endOf(boxB, c.to.at, rawA, rawB);
   const a = from.p;
   const b = to.p;
   const chord = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -173,10 +187,7 @@ export function bounds(doc: BoardDoc, o: BoardObject): Rect {
   if (o.type === "connector") {
     return unionRect(connectorCurve(doc, o).points.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 })))!;
   }
-  // A folded section is only as tall as its bar, so selecting it, and the ring
-  // around it, match what you can actually see.
-  if (o.type === "section" && o.collapsed) return { x: o.x, y: o.y, w: sectionBarW(o), h: sectionBarH(o) };
-  return { x: o.x, y: o.y, w: o.w, h: o.h };
+  return visualRect(o);
 }
 
 export function unionRect(rs: Rect[]): Rect | null {

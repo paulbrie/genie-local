@@ -549,10 +549,13 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
         <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
           {suggestion}
           <div className="h-full w-full overflow-hidden rounded-md border bg-card shadow-sm">
+            {/* Every row the same height. Left to itself the table hands its
+                spare height to whichever rows have text in them, which leaves a
+                gap under the words and none in the empty rows. */}
             <table className="h-full w-full table-fixed border-collapse text-xs">
               <tbody>
                 {o.rows.map((row, r) => (
-                  <tr key={r}>
+                  <tr key={r} style={{ height: `${100 / o.rows.length}%` }}>
                     {row.map((text, c) => {
                       const head = r === 0 || (o.headerCol && c === 0);
                       const open = cell?.id === o.id && cell.r === r && cell.c === c;
@@ -561,7 +564,7 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
                           key={c}
                           data-cell={`${r},${c}`}
                           className={cn(
-                            "truncate border px-1.5 py-1 align-top",
+                            "truncate border px-1.5 py-1 align-middle",
                             head && "bg-muted/60 font-semibold",
                             open && "bg-blue-500/10 ring-2 ring-inset ring-blue-500",
                           )}

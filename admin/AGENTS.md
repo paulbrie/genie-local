@@ -151,7 +151,8 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   reactions, live cursors, follow mode). Two more object types: a **link** (its own card with address, title and note —
   the toolbar's Link tool asks for the address, and only http(s) is kept) and a
   **table** (first row the header; double-click a cell to type, Tab and Enter walk
-  on, and the toolbar adds or drops rows and columns). Both are in the agent op
+  on, rows share the height evenly, and the toolbar adds, drops or shifts rows
+  and columns around the cell you last clicked). Both are in the agent op
   language. Text boxes have a **Fit** that sizes the box to its words (measured from an
   offscreen copy of what's drawn, so markdown and wrapping count); a frame's title
   has its own size. Markdown on a board is sized relative to each object's own
@@ -178,8 +179,9 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   inside leaves it free to pick its own side as things move, which Unpin also
   restores. Lines **curve by default** (`straight` records the exception), leaving
   and arriving square-on, and dragging the handle at a curve's middle bows it
-  through that point (`bend`, held relative to the two ends). `connectorCurve` in
-  geometry.ts is the single source for the path, the points it's hit-tested and
+  through that point (`bend`, held relative to the two ends). Ends meet an object's **visible** box
+  (`visualRect`), so folding a section leaves the lines on it joined to the bar it
+  became. `connectorCurve` in geometry.ts is the single source for the path, the points it's hit-tested and
   bounded by, and the way the arrowheads face, with hit-testing and arrowheads
   following the curve; someone working outside your view shows as a marker on the edge
   of it, pointing their way — click it to follow them. Pieces:

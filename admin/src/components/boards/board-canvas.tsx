@@ -30,6 +30,7 @@ import {
   offScreen,
   nearBorder,
   nearestAnchor,
+  visualRect,
   penHit,
   penPath,
   simplify,
@@ -346,8 +347,11 @@ export function BoardCanvas(props: Props) {
    * border when the pointer is near one, nothing when it's dropped well inside,
    * which leaves the line free to pick its own side as things move.
    */
-  const anchorAt = (target: BoardObject | null, p: Pt) =>
-    target && nearBorder(target, p) ? nearestAnchor(target, p) : undefined;
+  const anchorAt = (target: BoardObject | null, p: Pt) => {
+    if (!target) return undefined;
+    const box = visualRect(target);
+    return nearBorder(box, p) ? nearestAnchor(box, p) : undefined;
+  };
 
   const create = (obj: Partial<BoardObject> & { type: BoardObject["type"] }, g?: Gesture) => {
     const d = live.current.doc;
@@ -565,8 +569,9 @@ export function BoardCanvas(props: Props) {
     const target = snapTargetAt(p, dg);
     setSnap(target);
     const over = target ? live.current.doc.objects[target] : null;
-    const landing = over && nearBorder(over, p) ? nearestAnchor(over, p) : null;
-    setAnchorDot(landing ? { x: over!.x + landing.x * over!.w, y: over!.y + landing.y * over!.h } : null);
+    const box = over && visualRect(over);
+    const landing = box && nearBorder(box, p) ? nearestAnchor(box, p) : null;
+    setAnchorDot(landing && box ? { x: box.x + landing.x * box.w, y: box.y + landing.y * box.h } : null);
     if (!dg) return;
     const d = live.current.doc;
     switch (dg.kind) {
