@@ -231,7 +231,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     `scripts/boards-mcp.mjs` wraps it as an MCP server (`boards_list`,
     `board_read`, `board_edit`, `board_history`, `board_create`), registered for
     this box in `/opt/project/.mcp.json` (gitignored). It reads `BOARDS_API_KEY`
-    from the admin's own `.env.local`, so the key isn't copied into a second file.
+    from the admin's own `.env.local`, so the key isn't copied into a second file;
+    with no key — or against an admin started before one was added, which knows
+    nothing of it and answers 401 — it signs in with `ADMIN_USER` /
+    `ADMIN_PASSWORD` instead and uses that session, so it needs no restart.
   · Images: `POST /api/boards/<id>/assets` saves to `BOARD_ASSETS_DIR`
     (`/opt/project/.board-assets/<id>/`), served by `/api/boards/assets/<id>/<file>`;
     raster types only.

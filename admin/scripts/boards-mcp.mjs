@@ -11,7 +11,10 @@
  *
  * The key is read from the admin's own .env.local, so it stays in one place
  * rather than being copied into an MCP config; BOARDS_API_KEY in the
- * environment overrides it.
+ * environment overrides it. If there is no key — or the admin was started
+ * before one was added, so it doesn't know it — this signs in with the admin's
+ * own ADMIN_USER / ADMIN_PASSWORD and uses that session instead, which needs no
+ * restart. Either way the credentials stay inside this process.
  *
  * BOARDS_URL is the admin's own origin + basePath, straight to the app (prod
  * listens on 127.0.0.1:3002; going through nginx works too).
@@ -21,24 +24,49 @@ import { createInterface } from "node:readline";
 
 const BASE = (process.env.BOARDS_URL ?? "http://127.0.0.1:3002/admin").replace(/\/$/, "");
 
-/** The admin's own key, read from its .env.local unless the environment says. */
-function apiKey() {
-  if (process.env.BOARDS_API_KEY) return process.env.BOARDS_API_KEY;
+/** One value out of the admin's .env.local. */
+function fromEnvFile(name) {
   try {
     const env = readFileSync(new URL("../.env.local", import.meta.url), "utf8");
-    return env.match(/^BOARDS_API_KEY=(.*)$/m)?.[1].trim().replace(/^["']|["']$/g, "") ?? "";
+    return env.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1].trim().replace(/^["']|["']$/g, "") ?? "";
   } catch {
     return "";
   }
 }
-const KEY = apiKey();
+
+const KEY = process.env.BOARDS_API_KEY || fromEnvFile("BOARDS_API_KEY");
+
+/** A signed-in session, for when the key isn't an option. Fetched once. */
+let cookie = null;
+async function signIn() {
+  if (cookie) return cookie;
+  const username = process.env.ADMIN_USER || fromEnvFile("ADMIN_USER");
+  const password = process.env.ADMIN_PASSWORD || fromEnvFile("ADMIN_PASSWORD");
+  if (!username || !password) return null;
+  const res = await fetch(`${BASE}/api/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: new URL(BASE).origin },
+    body: JSON.stringify({ username, password }),
+  });
+  const set = res.headers.get("set-cookie") ?? "";
+  cookie = res.ok && set.startsWith("admin_session=") ? set.split(";")[0] : null;
+  return cookie;
+}
 const AGENT = process.env.BOARDS_AGENT ?? "agent";
 
 async function api(path, init = {}) {
-  const res = await fetch(`${BASE}/api/boards${path}`, {
-    ...init,
-    headers: { "x-api-key": KEY, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  });
+  const url = `${BASE}/api/boards${path}`;
+  const send = (extra) =>
+    fetch(url, {
+      ...init,
+      headers: { "Content-Type": "application/json", Origin: new URL(BASE).origin, ...extra, ...(init.headers ?? {}) },
+    });
+
+  let res = KEY ? await send({ "x-api-key": KEY }) : await send(cookie ? { Cookie: cookie } : {});
+  // No key, or an admin that was started before the key existed: sign in and
+  // go again. Only worth one retry.
+  if (res.status === 401 && (await signIn())) res = await send({ Cookie: cookie });
+
   const text = await res.text();
   if (!res.ok) throw new Error(`${res.status} ${text.slice(0, 500)}`);
   return text;
