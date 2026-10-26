@@ -86,6 +86,7 @@ import { Avatar, ClaudePanel, CommentPopover, TimerControl, VotingControl } from
 import { bounds, fitView, unionRect, zoomAt, type Pt, type View } from "./geometry";
 import { identity, loadIdentity, randomColor, saveIdentity } from "./identity";
 import { BoardSync, type Peer } from "./sync";
+import { openBoard } from "./board-tabs";
 import { TaskPicker, taskHref, type PickedTask } from "./task-card";
 
 // ------------------------------------------------------------------ identity
@@ -1207,6 +1208,16 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     if (!res.ok) toast.error("Couldn't rename the board");
   };
 
+  // The tab above shows the name and the connection, and renames on a double-click.
+  const renameRef = useRef(renameTitle);
+  useLayoutEffect(() => {
+    renameRef.current = renameTitle;
+  });
+  useEffect(() => {
+    openBoard.next({ id: boardId, title: title || initialTitle, status, rename: () => void renameRef.current() });
+  }, [boardId, title, initialTitle, status]);
+  useEffect(() => () => openBoard.next(null), []);
+
   if (status === "missing" || status === "closed") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -1256,24 +1267,6 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
       >
-        <div className="flex min-w-0 items-center gap-1 rounded-xl border bg-background/95 py-1 pl-1 pr-3 shadow-lg backdrop-blur">
-          <Link href="/boards" title="All boards">
-            <Button size="icon-sm" variant="ghost">
-              <ArrowLeft />
-            </Button>
-          </Link>
-          <button className="truncate text-sm font-semibold hover:underline" onClick={renameTitle} title="Rename" data-testid="board-title">
-            {title || initialTitle}
-          </button>
-          <span
-            className={cn(
-              "ml-1 size-2 shrink-0 rounded-full",
-              status === "live" ? "bg-emerald-500" : status === "connecting" ? "animate-pulse bg-amber-500" : "bg-red-500",
-            )}
-            title={status === "live" ? "Live" : status === "connecting" ? "Connecting…" : "Offline, reconnecting…"}
-          />
-          {status === "offline" && <span className="text-xs text-red-600">reconnecting…</span>}
-        </div>
         <div className="flex-1" />
         <div className="flex items-center gap-1.5 rounded-xl border bg-background/95 px-2 py-1 shadow-lg backdrop-blur">
           <VotingControl sync={sync} doc={doc} />

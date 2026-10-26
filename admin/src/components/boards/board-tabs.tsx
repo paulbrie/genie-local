@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { LayoutGrid, Plus, X } from "lucide-react";
+import { Subject } from "subjecto";
+import { useSubject } from "subjecto/react";
 
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
@@ -12,6 +14,14 @@ import { cn } from "@/lib/utils";
 const KEY = "boards.tabs";
 
 type Summary = { id: number; title: string };
+
+/**
+ * The board on screen, as its live connection knows it: its current name (a
+ * rename by anyone shows at once), whether it's connected, and how to rename
+ * it. Its tab shows all three, in place of a title bar on the board.
+ */
+export type OpenBoard = { id: number; title: string; status: string; rename: () => void };
+export const openBoard = new Subject<OpenBoard | null>(null, { name: "boards.open" });
 
 function loadTabs(): number[] {
   try {
@@ -36,6 +46,8 @@ export function BoardTabs({ current, title }: { current: number; title: string }
   // the + menu, open at this point (fixed: the tab strip scrolls, and clips)
   const [adding, setAdding] = useState<{ x: number; y: number } | null>(null);
   const addRef = useRef<HTMLDivElement>(null);
+  const [live] = useSubject(openBoard);
+  const here = live?.id === current ? live : null;
 
   useEffect(() => {
     const saved = loadTabs();
@@ -81,9 +93,9 @@ export function BoardTabs({ current, title }: { current: number; title: string }
 
   const titles = useMemo(() => {
     const m = new Map((boards ?? []).map((b) => [b.id, b.title]));
-    m.set(current, m.get(current) ?? title);
+    m.set(current, here?.title || (m.get(current) ?? title));
     return m;
-  }, [boards, current, title]);
+  }, [boards, current, title, here?.title]);
 
   const close = (id: number) => {
     const i = tabs.indexOf(id);
@@ -107,7 +119,7 @@ export function BoardTabs({ current, title }: { current: number; title: string }
         <div
           key={id}
           className={cn(
-            "group flex h-8 min-w-0 max-w-52 shrink-0 items-center rounded-t-md border border-b-0 text-sm",
+            "group flex h-8 shrink-0 items-center whitespace-nowrap rounded-t-md border border-b-0 text-sm",
             id === current ? "bg-background font-medium" : "border-transparent text-muted-foreground hover:bg-background/60",
           )}
           onAuxClick={(e) => {
@@ -117,9 +129,25 @@ export function BoardTabs({ current, title }: { current: number; title: string }
             }
           }}
         >
-          <Link href={`/boards/${id}`} className="min-w-0 truncate py-1 pl-3 pr-1" title={titles.get(id) ?? `Board ${id}`}>
+          <Link
+            href={`/boards/${id}`}
+            className="py-1 pl-3 pr-1"
+            title={id === current ? "Double-click to rename" : titles.get(id)}
+            onDoubleClick={id === current ? () => here?.rename() : undefined}
+            data-testid={id === current ? "board-title" : undefined}
+          >
             {titles.get(id) ?? "…"}
           </Link>
+          {id === current && here && (
+            <span
+              className={cn(
+                "mx-1 size-2 shrink-0 rounded-full",
+                here.status === "live" ? "bg-emerald-500" : here.status === "connecting" ? "animate-pulse bg-amber-500" : "bg-red-500",
+              )}
+              title={here.status === "live" ? "Live" : here.status === "connecting" ? "Connecting…" : "Offline, reconnecting…"}
+            />
+          )}
+          {id === current && here?.status === "offline" && <span className="mr-1 text-xs text-red-600">reconnecting…</span>}
           <button
             type="button"
             title="Close this tab"

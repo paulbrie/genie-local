@@ -291,21 +291,50 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
   return null;
 }
 
-/** Things a connector can attach to under a point (not connectors, pens or comments). */
-export function attachTarget(sorted: BoardObject[], p: Pt, exclude?: string): BoardObject | null {
-  // A section is a target only where nothing in it is: whatever their order (an
-  // item sent to the back sits below every section), a line drawn to something
-  // in a section means that thing, not the frame around it.
-  let section: BoardObject | null = null;
+/** What a connector's end attaches to near a point (not connectors, pens or comments). */
+export function attachTarget(sorted: BoardObject[], p: Pt, zoom: number, exclude?: string): BoardObject | null {
+  // Magnetic at the edge only: a line's end lands on an element when it's let
+  // go near the element's outline (inside or out), and stays a free point over
+  // the middle of it. The nearest outline wins, so a section's frame doesn't
+  // take a line meant for something just inside it; on a tie, the one on top.
+  const band = EDGE_PX / zoom;
+  let best: BoardObject | null = null;
+  let bestD = Infinity;
   for (let i = sorted.length - 1; i >= 0; i--) {
     const o = sorted[i];
     if (o.id === exclude || o.type === "connector" || o.type === "pen" || o.type === "comment") continue;
-    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) {
-      if (o.type !== "section") return o;
-      section ??= o;
+    const d = distToOutline(o, p);
+    if (d <= band && d < bestD) {
+      best = o;
+      bestD = d;
     }
   }
-  return section;
+  return best;
+}
+
+/** How near, in screen pixels, a line's end must come to an outline to attach. */
+const EDGE_PX = 14;
+
+/** Distance from a point to an element's outline (its drawn edge for ellipses and diamonds). */
+function distToOutline(o: BoardObject, p: Pt): number {
+  // a folded section is only its bar
+  const folded = o.type === "section" && o.collapsed;
+  const hw = (folded ? sectionBarW(o) : o.w) / 2;
+  const hh = (folded ? sectionBarH(o) : o.h) / 2;
+  const dx = p.x - (o.x + hw);
+  const dy = p.y - (o.y + hh);
+  if (o.type === "shape" && o.shape === "ellipse" && hw > 0 && hh > 0) {
+    const r = Math.hypot(dx / hw, dy / hh);
+    return Math.abs(r - 1) * Math.min(hw, hh);
+  }
+  if (o.type === "shape" && o.shape === "diamond" && hw > 0 && hh > 0) {
+    const r = Math.abs(dx) / hw + Math.abs(dy) / hh;
+    return (Math.abs(r - 1) * hw * hh) / Math.hypot(hw, hh);
+  }
+  const ox = Math.abs(dx) - hw;
+  const oy = Math.abs(dy) - hh;
+  // inside: to the nearest side; outside: to the nearest point of the box
+  return ox <= 0 && oy <= 0 ? -Math.max(ox, oy) : Math.hypot(Math.max(ox, 0), Math.max(oy, 0));
 }
 
 /** A smooth SVG path through freehand points (quadratic midpoints). */

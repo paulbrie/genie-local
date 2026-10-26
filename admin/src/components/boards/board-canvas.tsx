@@ -420,7 +420,7 @@ export function BoardCanvas(props: Props) {
         return;
       }
       case "connector": {
-        const target = attachTarget(sortedRef.current, p);
+        const target = attachTarget(sortedRef.current, p, v.zoom);
         setDrag({ kind: "connect", from: target ? { id: target.id, x: p.x, y: p.y } : { x: p.x, y: p.y }, cur: p });
         return;
       }
@@ -561,14 +561,14 @@ export function BoardCanvas(props: Props) {
   /** The object a connector would attach to at `p`, given what's happening. */
   const snapTargetAt = (p: Pt, dg: Drag | null): string | null => {
     const d = live.current.doc;
-    if (dg?.kind === "connect") return attachTarget(sortedRef.current, p, dg.from.id)?.id ?? null;
+    if (dg?.kind === "connect") return attachTarget(sortedRef.current, p, live.current.view.zoom, dg.from.id)?.id ?? null;
     if (dg?.kind === "endpoint") {
       const c = d.objects[dg.id] as Connector | undefined;
       const far = c?.[dg.which === "from" ? "to" : "from"]?.id;
-      return attachTarget(sortedRef.current, p, far)?.id ?? null;
+      return attachTarget(sortedRef.current, p, live.current.view.zoom, far)?.id ?? null;
     }
     // Hovering with the connector tool: show what a line would start from.
-    if (!dg && live.current.tool === "connector") return attachTarget(sortedRef.current, p)?.id ?? null;
+    if (!dg && live.current.tool === "connector") return attachTarget(sortedRef.current, p, live.current.view.zoom)?.id ?? null;
     return null;
   };
 
@@ -656,7 +656,7 @@ export function BoardCanvas(props: Props) {
         setDrag({ ...dg, cur: p });
         return;
       case "endpoint": {
-        const target = attachTarget(sortedRef.current, p, (d.objects[dg.id] as Connector | undefined)?.[dg.which === "from" ? "to" : "from"]?.id);
+        const target = attachTarget(sortedRef.current, p, live.current.view.zoom, (d.objects[dg.id] as Connector | undefined)?.[dg.which === "from" ? "to" : "from"]?.id);
         const end: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, at: anchorAt(target, p) } : { x: p.x, y: p.y };
         dg.g.apply([{ k: "patch", id: dg.id, set: { [dg.which]: end } }]);
         return;
@@ -720,7 +720,7 @@ export function BoardCanvas(props: Props) {
         return;
       }
       case "connect": {
-        const target = attachTarget(sortedRef.current, p, dg.from.id);
+        const target = attachTarget(sortedRef.current, p, live.current.view.zoom, dg.from.id);
         const to: ConnectorEnd = target ? { id: target.id, x: p.x, y: p.y, at: anchorAt(target, p) } : { x: p.x, y: p.y };
         const len = Math.hypot(p.x - dg.from.x, p.y - dg.from.y);
         if (len * live.current.view.zoom > 8 || (target && dg.from.id)) {
@@ -1043,7 +1043,7 @@ export function BoardCanvas(props: Props) {
               createdAt: 0,
               from: drag.from,
               to: (() => {
-                const t = attachTarget(sorted, drag.cur, drag.from.id);
+                const t = attachTarget(sorted, drag.cur, view.zoom, drag.from.id);
                 return t ? { id: t.id, x: 0, y: 0 } : drag.cur;
               })(),
               label: "",
