@@ -293,12 +293,19 @@ export function hitTest(doc: BoardDoc, sorted: BoardObject[], p: Pt, zoom: numbe
 
 /** Things a connector can attach to under a point (not connectors, pens or comments). */
 export function attachTarget(sorted: BoardObject[], p: Pt, exclude?: string): BoardObject | null {
+  // A section is a target only where nothing in it is: whatever their order (an
+  // item sent to the back sits below every section), a line drawn to something
+  // in a section means that thing, not the frame around it.
+  let section: BoardObject | null = null;
   for (let i = sorted.length - 1; i >= 0; i--) {
     const o = sorted[i];
     if (o.id === exclude || o.type === "connector" || o.type === "pen" || o.type === "comment") continue;
-    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) return o;
+    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) {
+      if (o.type !== "section") return o;
+      section ??= o;
+    }
   }
-  return null;
+  return section;
 }
 
 /** A smooth SVG path through freehand points (quadratic midpoints). */

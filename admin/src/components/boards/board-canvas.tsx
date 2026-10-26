@@ -58,7 +58,8 @@ export type Tool =
   | "eraser"
   | "comment"
   | "link"
-  | "table";
+  | "table"
+  | "task";
 
 export type ToolOptions = {
   stickyColor: string;
@@ -115,6 +116,10 @@ type Props = {
   setEditing: (id: string | null) => void;
   onOpenComment: (target: { id: string } | { at: Pt }) => void;
   onDropFiles: (files: File[], at: Pt) => void;
+  /** The Task tool clicked at a point: pick the ticket it links to first. */
+  onPlaceTask: (at: Pt) => void;
+  /** Right-click on an element, at a point on screen (client coordinates). */
+  onObjectMenu: (id: string, at: { x: number; y: number }) => void;
   onUserPan: () => void;
   /** The canvas's size on screen, for the off-screen peer markers. */
   area: { w: number; h: number };
@@ -153,6 +158,8 @@ export function BoardCanvas(props: Props) {
     setEditing,
     onOpenComment,
     onDropFiles,
+    onPlaceTask,
+    onObjectMenu,
     onUserPan,
     onPointerWorld,
     area,
@@ -435,6 +442,10 @@ export function BoardCanvas(props: Props) {
         setSelection([id]);
         return;
       }
+      case "task":
+        setTool("select");
+        onPlaceTask(p);
+        return;
       case "table": {
         const s = DEFAULT_SIZES.table;
         const id = create({
@@ -847,7 +858,13 @@ export function BoardCanvas(props: Props) {
       onPointerCancel={onPointerUp}
       onPointerLeave={onPointerLeave}
       onDoubleClick={onDoubleClick}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const hit = hitTest(live.current.doc, sortedRef.current, worldPt(e), live.current.view.zoom);
+        if (!hit) return;
+        if (!live.current.selection.includes(hit.id)) setSelection([hit.id]);
+        onObjectMenu(hit.id, { x: e.clientX, y: e.clientY });
+      }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
       data-testid="board-canvas"

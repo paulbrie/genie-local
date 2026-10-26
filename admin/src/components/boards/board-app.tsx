@@ -13,11 +13,13 @@ import {
   Copy,
   Diamond,
   Eraser,
+  ExternalLink,
   Frame,
   Hand,
   History,
   LayoutGrid,
   Link2,
+  ListTodo,
   ImagePlus,
   Maximize,
   MessageCircle,
@@ -72,6 +74,8 @@ import {
   type BoardObject,
   type CommentObj,
   type ShapeKind,
+  type TaskObj,
+  DEFAULT_SIZES,
 } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
 
@@ -82,6 +86,7 @@ import { Avatar, ClaudePanel, CommentPopover, TimerControl, VotingControl } from
 import { bounds, fitView, unionRect, zoomAt, type Pt, type View } from "./geometry";
 import { identity, loadIdentity, randomColor, saveIdentity } from "./identity";
 import { BoardSync, type Peer } from "./sync";
+import { TaskPicker, taskHref, type PickedTask } from "./task-card";
 
 // ------------------------------------------------------------------ identity
 
@@ -146,6 +151,7 @@ const TOOLS: { tool: Tool; icon: typeof Hand; label: string; key: string }[] = [
   { tool: "comment", icon: MessageCircle, label: "Comment", key: "C" },
   { tool: "link", icon: Link2, label: "Link", key: "K" },
   { tool: "table", icon: Table, label: "Table", key: "B" },
+  { tool: "task", icon: ListTodo, label: "Task: a ticket in one of the projects", key: "J" },
 ];
 
 const SHAPE_ICONS: Record<ShapeKind, typeof Square> = {
@@ -351,6 +357,53 @@ function moveTablePart(
   return { ops: [{ k: "patch" as const, id, set: { rows } }], cell: { r: cell.r, c: to } };
 }
 
+/** A few words naming an element, for a link to it. */
+function objectLabel(o: BoardObject): string {
+  const raw =
+    o.type === "section" ? o.title
+    : o.type === "link" || o.type === "task" ? o.title
+    : o.type === "sticky" || o.type === "text" || o.type === "shape" ? o.text
+    : o.type === "table" ? o.rows[0]?.join(" · ")
+    : o.type === "comment" ? o.thread[0]?.text
+    : o.type === "image" ? o.alt
+    : o.type === "connector" ? o.label
+    : "";
+  const line = (raw ?? "").replace(/[#*_`>[\]]/g, "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line.length > 60 ? `${line.slice(0, 59)}…` : line;
+}
+
+/** Right-click on an element: copy a link to it, for a ticket or a message. */
+function ObjectMenu({ at, onClose, onCopy }: { at: { x: number; y: number }; onClose: () => void; onCopy: (markdown: boolean) => void }) {
+  useEffect(() => {
+    const close = () => onClose();
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", key);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("blur", close);
+    };
+  }, [onClose]);
+  return (
+    <div
+      className="fixed z-50 min-w-48 rounded-md border bg-popover p-1 text-sm shadow-lg"
+      style={{ left: at.x, top: at.y }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      data-testid="object-menu"
+    >
+      <button type="button" className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted" onClick={() => onCopy(false)}>
+        <Link2 className="size-4" /> Copy link
+      </button>
+      <button type="button" className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted" onClick={() => onCopy(true)}>
+        <Copy className="size-4" /> Copy as Markdown link
+      </button>
+    </div>
+  );
+}
+
 function SelectionBar({
   sync,
   objs,
@@ -359,6 +412,7 @@ function SelectionBar({
   onAskClaude,
   onAskClaudeFor,
   onDuplicate,
+  onChangeTask,
   cell,
   setCell,
 }: {
@@ -369,6 +423,8 @@ function SelectionBar({
   onAskClaude: () => void;
   onAskClaudeFor: (request: string) => void;
   onDuplicate: () => void;
+  /** Pick another ticket for the selected Task card. */
+  onChangeTask: (o: TaskObj) => void;
   /** The cell last clicked in, which the move controls act on. */
   cell: EditingCell;
   setCell: (cell: EditingCell) => void;
@@ -499,6 +555,21 @@ function SelectionBar({
             data-testid="link-edit"
           >
             <Pencil /> Edit
+          </Button>
+        </div>
+      )}
+      {only === "task" && objs.length === 1 && (
+        <div className="ml-1 flex gap-0.5 border-l pl-1">
+          <Button size="xs" variant="ghost" title="Link another ticket, or file a new one" onClick={() => onChangeTask(objs[0] as TaskObj)} data-testid="task-change">
+            <Pencil /> Change
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            title="Open the ticket on its project's Tasks page"
+            onClick={() => window.open(taskHref((objs[0] as TaskObj).project, (objs[0] as TaskObj).taskId), "_blank", "noreferrer")}
+          >
+            <ExternalLink /> Open
           </Button>
         </div>
       )}
@@ -755,6 +826,36 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     },
     [sync],
   );
+  // The Task picker: for a new card at a point, or for the card it re-points.
+  const [taskPick, setTaskPick] = useState<{ at: Pt } | { id: string; project: string; taskId: number } | null>(null);
+  const pickTask = (t: PickedTask) => {
+    const pick = taskPick;
+    setTaskPick(null);
+    if (!pick) return;
+    if ("id" in pick) {
+      sync.apply([{ k: "patch", id: pick.id, set: t }]);
+      return;
+    }
+    const s = DEFAULT_SIZES.task;
+    const id = newId("t");
+    const d = sync.doc.getValue();
+    sync.apply([{ k: "put", obj: { id, type: "task", x: pick.at.x - s.w / 2, y: pick.at.y - s.h / 2, w: s.w, h: s.h, z: maxZ(d) + 1, ...t } as BoardObject }]);
+    setSelection([id]);
+  };
+  // The right-click menu on an element.
+  const [objMenu, setObjMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const copyLink = async (id: string, markdown: boolean) => {
+    setObjMenu(null);
+    const url = `${location.origin}${BASE_PATH}/boards/${boardId}#${encodeURIComponent(id)}`;
+    const o = sync.doc.getValue().objects[id];
+    const text = markdown ? `[${(o ? objectLabel(o) : "") || `${title}: ${id}`}](${url})` : url;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(markdown ? "Markdown link copied" : "Link copied", { description: text });
+    } catch {
+      window.prompt("Copy the link", text);
+    }
+  };
   const setEditing = useCallback(
     (id: string | null) => {
       setEditingState(id);
@@ -798,16 +899,31 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
     return { x: -v.tx / v.zoom, y: -v.ty / v.zoom, w: w / v.zoom, h: h / v.zoom };
   }, []);
 
-  // First load: fit the content.
+  // First load: fit the content, or go to the element the address names
+  // (`/boards/<id>#<element>`, as Copy link gives), and again when that changes.
   useEffect(() => {
+    const focusHash = () => {
+      const d = sync.doc.getValue();
+      const o = d.objects[decodeURIComponent(location.hash.slice(1))];
+      if (!o) return false;
+      const { w, h } = size();
+      setView(fitView(bounds(d, o), w, h, 1, 160));
+      setSelection([o.id]);
+      return true;
+    };
     const sub = sync.status.subscribe((s) => {
       if (s !== "live" || fitted.current) return;
       fitted.current = true;
+      if (focusHash()) return;
       const { w, h } = size();
       setView(fitView(contentBounds(sync.doc.getValue()), w, h));
     });
-    return () => sub.unsubscribe();
-  }, [sync]);
+    window.addEventListener("hashchange", focusHash);
+    return () => {
+      sub.unsubscribe();
+      window.removeEventListener("hashchange", focusHash);
+    };
+  }, [sync, setSelection]);
 
   // Tell the others what we're looking at (for follow mode).
   useEffect(() => {
@@ -1122,6 +1238,8 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
         setEditing={setEditing}
         onOpenComment={setComment}
         onDropFiles={uploadImages}
+        onPlaceTask={(at) => setTaskPick({ at })}
+        onObjectMenu={(id, at) => setObjMenu({ id, ...at })}
         onUserPan={stopFollowing}
         onPointerWorld={onPointerWorld}
         readOnly={!!past}
@@ -1231,6 +1349,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           cell={cell}
           setCell={setCell}
           onDuplicate={() => duplicate(selectedObjs)}
+          onChangeTask={(o) => setTaskPick({ id: o.id, project: o.project, taskId: o.taskId })}
           onAskClaude={() => {
             setClaudeOpen(true);
             setAskNonce((n) => n + 1);
@@ -1241,6 +1360,22 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
           }}
         />
       )}
+
+      {objMenu && (
+        <ObjectMenu
+          at={objMenu}
+          onClose={() => setObjMenu(null)}
+          onCopy={(markdown) => void copyLink(objMenu.id, markdown)}
+        />
+      )}
+
+      <TaskPicker
+        key={taskPick ? ("id" in taskPick ? taskPick.id : "new") : "closed"}
+        open={!!taskPick}
+        initial={taskPick && "id" in taskPick ? taskPick : null}
+        onPick={pickTask}
+        onClose={() => setTaskPick(null)}
+      />
 
       {comment && commentWorld && (
         <CommentPopover

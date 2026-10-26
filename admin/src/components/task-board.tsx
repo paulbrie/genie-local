@@ -69,11 +69,14 @@ export function TaskBoard({
   tasks,
   comments,
   attachments,
+  openFirst,
 }: {
   slug: string;
   tasks: Task[];
   comments: TaskComment[];
   attachments: TaskAttachment[];
+  /** A ticket to open straight away (`?task=<id>`, as a board's Task card links). */
+  openFirst?: number;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -261,7 +264,7 @@ export function TaskBoard({
   }
 
   // --- the open ticket
-  const [openId, setOpenId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<number | null>(openFirst ?? null);
   const openTask = openId == null ? null : tasks.find((t) => t.id === openId);
 
   return (

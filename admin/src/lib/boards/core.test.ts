@@ -130,6 +130,26 @@ describe("sanitizeObject", () => {
   });
 });
 
+describe("task objects", () => {
+  it("keep a project's ticket, and drop a bad slug or id", () => {
+    const ok = sanitizeObject({ id: "t", type: "task", project: "trafficsim", taskId: 95, title: "Bridge", status: "in_progress", url: "x" });
+    assert.equal(ok?.type, "task");
+    if (ok?.type !== "task") return;
+    assert.deepEqual([ok.project, ok.taskId, ok.title, ok.status], ["trafficsim", 95, "Bridge", "in_progress"]);
+    assert.equal(ok.w, 340);
+    assert.equal((sanitizeObject({ id: "t", type: "task", project: "x", taskId: 1, status: "nope" }) as { status?: string })?.status, "open");
+    assert.equal(sanitizeObject({ id: "t", type: "task", project: "../etc", taskId: 1 }), null);
+    assert.equal(sanitizeObject({ id: "t", type: "task", project: "x", taskId: 0 }), null);
+    assert.equal(sanitizeObject({ id: "t", type: "task", project: "x", taskId: 1.5 }), null);
+  });
+  it("can be placed by Claude and are described", () => {
+    const { ops } = translateAgentOps(emptyDoc(), [{ op: "create", type: "task", project: "garden", taskId: 3, title: "Seeds" }], ann, 1);
+    const d = applyOps(emptyDoc(), ops, ann, 1);
+    const line = describeBoard(d).split("\n").map((l) => JSON.parse(l)).find((l) => l.type === "task");
+    assert.deepEqual([line.project, line.taskId, line.title, line.status], ["garden", 3, "Seeds", "open"]);
+  });
+});
+
 describe("translateAgentOps", () => {
   it("creates with refs, connects them, and fills in sizes and free positions", () => {
     const d = board([sticky("old", 0, 0, "existing")]);

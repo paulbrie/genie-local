@@ -298,7 +298,7 @@ export function extractJson(raw) {
 
 const OPS_HELP = `Ops you can use (a JSON array, applied in order):
 - {"op":"create","ref":"n1","type":"sticky","x":100,"y":100,"text":"…","color":"yellow"}
-  types: link ({"type":"link","url":"https://…","title":"optional","desc":"optional"}), table ({"type":"table","rows":[["Header","Header"],["cell","cell"]]} — the first row is the header), sticky (200x200 by default), text (a free text label; "fontSize"), shape ("shape": rect|roundrect|ellipse|diamond|triangle, with "text"; good for flowcharts), section (a titled frame, "title", "w", "h"; it sits behind the items it groups, so make it big enough to contain them with 40px padding), comment ("text"; a comment pin).
+  types: link ({"type":"link","url":"https://…","title":"optional","desc":"optional"}), task (a card for an existing ticket of a project on this server: {"type":"task","project":"<project slug>","taskId":123,"title":"the ticket's title"}; the card shows its live status and opens it), table ({"type":"table","rows":[["Header","Header"],["cell","cell"]]} — the first row is the header), sticky (200x200 by default), text (a free text label; "fontSize"), shape ("shape": rect|roundrect|ellipse|diamond|triangle, with "text"; good for flowcharts), section (a titled frame, "title", "w", "h"; it sits behind the items it groups, so make it big enough to contain them with 40px padding), comment ("text"; a comment pin).
   "ref" is your own name for the new item, so later ops in the same list can point at it.
   Leave out x and y to let the board find free space.
 - {"op":"connect","from":"<id or ref>","to":"<id or ref>","label":"optional"}   an arrow between two items; it curves, meeting each shape square-on, unless you pass "straight":true

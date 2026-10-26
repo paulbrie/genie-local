@@ -6,13 +6,17 @@ import { getProject } from "@/lib/project-page";
 
 export const dynamic = "force-dynamic";
 
-/** /projects/<slug>/tasks: the kanban board. */
+/** /projects/<slug>/tasks: the kanban board (`?task=<id>` opens that ticket). */
 export default async function ProjectTasksPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<{ task?: string | string[] }>;
 }) {
   const { slug } = await params;
+  const { task } = await searchParams;
+  const openFirst = Number(Array.isArray(task) ? task[0] : task) || undefined;
   const detail = await getProject(slug);
   if (!detail) notFound();
   const { project } = detail;
@@ -22,6 +26,6 @@ export default async function ProjectTasksPage({
     getTaskAttachments(project.id),
   ]);
   return (
-    <TaskBoard slug={project.slug} tasks={tasks} comments={comments} attachments={attachments} />
+    <TaskBoard slug={project.slug} tasks={tasks} comments={comments} attachments={attachments} openFirst={openFirst} />
   );
 }

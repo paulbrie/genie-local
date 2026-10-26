@@ -44,9 +44,18 @@ export type Pen = Base & { type: "pen"; points: [number, number][]; color: strin
 export type ImageObj = Base & { type: "image"; src: string; alt: string };
 export type CommentObj = Base & { type: "comment"; thread: Message[]; resolved: boolean };
 export type LinkObj = Base & { type: "link"; url: string; title: string; desc: string };
+/** A ticket in one of the server's projects; `title`/`status` as last seen, the card shows them live. */
+export type TaskObj = Base & {
+  type: "task";
+  project: string;
+  taskId: number;
+  title: string;
+  desc: string;
+  status: "open" | "in_progress" | "done";
+};
 export type TableObj = Base & { type: "table"; rows: string[][]; headerCol?: true };
 
-export type BoardObject = Sticky | TextBox | Shape | Section | Connector | Pen | ImageObj | CommentObj | LinkObj | TableObj;
+export type BoardObject = Sticky | TextBox | Shape | Section | Connector | Pen | ImageObj | CommentObj | LinkObj | TableObj | TaskObj;
 export type ObjectType = BoardObject["type"];
 
 export type Timer = { durationMs: number; endsAt: number | null; remainingMs: number | null };
@@ -74,7 +83,8 @@ export type ObjectFields = Partial<
     Omit<ImageObj, "type"> &
     Omit<CommentObj, "type"> &
     Omit<LinkObj, "type"> &
-    Omit<TableObj, "type">
+    Omit<TableObj, "type"> &
+    Omit<TaskObj, "type">
 >;
 
 export type Op =
@@ -117,6 +127,7 @@ export const CLAUDE_ID: string;
 export const CLAUDE_COLOR: string;
 export const OBJECT_TYPES: ObjectType[];
 export const SHAPES: ShapeKind[];
+export const TASK_STATUSES: TaskObj["status"][];
 export const ARROWS: Connector["arrow"][];
 export const ASSET_PREFIX: string;
 export const DEFAULT_SIZES: Record<string, { w: number; h: number }>;

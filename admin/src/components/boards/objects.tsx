@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 
 import { connectorCurve, penPath, sectionBarH, sectionBarW } from "./geometry";
 import { initials } from "./identity";
+import { TaskCard } from "./task-card";
 
 /** Which cell of a table is open for typing. */
 export type EditingCell = { id: string; r: number; c: number } | null;
@@ -650,6 +651,14 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
         </div>
       );
     }
+    case "task":
+      return (
+        <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
+          {suggestion}
+          <TaskCard o={o} selected={selected} />
+          <VoteBadge votes={o.votes} me={me} />
+        </div>
+      );
     case "table": {
       const cols = o.rows[0]?.length ?? 1;
       return (

@@ -73,11 +73,12 @@ async function api(path, init = {}) {
 }
 
 const OPS_DOC = `Ops, applied in order (all fields optional unless shown):
-- {"op":"create","ref":"n1","type":"sticky|text|shape|section|link|table|comment", …}
+- {"op":"create","ref":"n1","type":"sticky|text|shape|section|link|task|table|comment", …}
   · sticky / text — "text" (markdown: **bold**, lists, tables, [links](url)); text takes "fontSize"
   · shape — "shape":"rect|roundrect|ellipse|diamond|triangle" with "text"
   · section — a titled frame: "title", "w", "h"; it sits behind what it groups, so leave ~40px round them. "collapsed":true folds it to a bar
   · link — "url" (http(s)), and optionally "title" and "desc"; draws as a card
+  · task — "project" (a project's slug on this server) and "taskId" (one of its tickets), optionally "title"; a Link card to the ticket showing its live status
   · table — "rows":[["Header","Header"],["cell","cell"]]; the first row is the header
   · comment — "text" starts the thread
   "ref" names the new item for later ops in the same call; omit x/y to let the board find free space.

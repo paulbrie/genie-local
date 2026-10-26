@@ -87,7 +87,10 @@ export const OBJECT_TYPES = [
   "comment",
   "link",
   "table",
+  "task",
 ];
+/** A Task card's ticket status (the admin's TASK_STATUSES). */
+export const TASK_STATUSES = ["open", "in_progress", "done"];
 export const SHAPES = ["rect", "roundrect", "ellipse", "diamond", "triangle"];
 export const ARROWS = ["end", "both", "none"];
 /** Older boards pinned a line to a named side; those become points on it. */
@@ -109,6 +112,7 @@ export const DEFAULT_SIZES = {
   image: { w: 320, h: 240 },
   comment: { w: 32, h: 32 },
   link: { w: 340, h: 104 },
+  task: { w: 340, h: 112 },
   table: { w: 480, h: 132 },
 };
 
@@ -324,6 +328,20 @@ export function sanitizeObject(o) {
       out.url = url;
       out.title = str(o.title, LIMITS.title);
       out.desc = str(o.desc, 400);
+      break;
+    }
+    case "task": {
+      // A ticket of one of the server's projects: a Link to it that knows what
+      // it links to. The title and status are as last seen, for readers of the
+      // board (Claude, summaries); the card itself shows them live.
+      const project = str(o.project, 100);
+      const taskId = Number(o.taskId);
+      if (!/^[A-Za-z0-9._-]+$/.test(project) || !Number.isInteger(taskId) || taskId < 1 || taskId > 2 ** 31 - 1) return null;
+      out.project = project;
+      out.taskId = taskId;
+      out.title = str(o.title, LIMITS.title);
+      out.desc = str(o.desc, 400);
+      out.status = oneOf(o.status, TASK_STATUSES, "open");
       break;
     }
     case "table":
@@ -561,7 +579,7 @@ export function findFreeSpot(doc, w, h, near) {
   return { x: origin.x, y: origin.y };
 }
 
-const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed", "straight", "url", "desc", "rows", "headerCol"];
+const AGENT_FIELDS = ["x", "y", "w", "h", "text", "title", "color", "shape", "label", "fontSize", "arrow", "stroke", "collapsed", "straight", "url", "desc", "rows", "headerCol", "project", "taskId", "status"];
 
 /**
  * The small, forgiving op language Claude and outside agents write
@@ -755,6 +773,13 @@ export function describeBoard(doc, { only, maxText = 400, names } = {}) {
       case "link":
         d.url = o.url;
         if (o.title) d.title = o.title;
+        if (o.desc) d.desc = clip(o.desc, maxText);
+        break;
+      case "task":
+        d.project = o.project;
+        d.taskId = o.taskId;
+        if (o.title) d.title = o.title;
+        d.status = o.status;
         if (o.desc) d.desc = clip(o.desc, maxText);
         break;
       case "table":

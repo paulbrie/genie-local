@@ -1,3 +1,5 @@
+// GET: the project's tickets, a line each (id, title, status, assignee), for a
+// board's Task cards and their picker.
 // POST multipart `title`, `description` (optional) and `files` (optional, one
 // or more): a new ticket with its files, in one request. For a project's own
 // app to file tickets from its pages (trafficsim's Claude bridge panel): served
@@ -6,7 +8,7 @@ import { revalidatePath } from "next/cache";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { addTask, getProjectIdBySlug, insertTaskAttachments } from "@/lib/data";
+import { addTask, getProjectIdBySlug, getTasks, insertTaskAttachments } from "@/lib/data";
 import { requireAdmin } from "@/lib/require-admin";
 import { saveAttachment } from "@/lib/task-attachments";
 
@@ -17,6 +19,27 @@ type Ctx = { params: Promise<{ slug: string }> };
 /** The longest description kept inline (as the Tasks tab's form); longer goes to a .txt file, an excerpt kept. */
 const TEXT_LIMIT = 5000;
 const EXCERPT = 1500;
+
+export async function GET(_req: NextRequest, { params }: Ctx) {
+  try {
+    await requireAdmin();
+  } catch {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const { slug } = await params;
+  const projectId = await getProjectIdBySlug(slug);
+  if (projectId == null) {
+    return NextResponse.json({ error: "no such project" }, { status: 404 });
+  }
+  const tasks = (await getTasks(projectId)).map((t) => ({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    assignee: t.assignee,
+    updatedAt: t.updatedAt,
+  }));
+  return NextResponse.json({ tasks }, { headers: { "Cache-Control": "no-store" } });
+}
 
 export async function POST(req: NextRequest, { params }: Ctx) {
   try {
