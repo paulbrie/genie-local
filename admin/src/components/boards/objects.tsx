@@ -339,6 +339,145 @@ function Body({ text, className, selected }: { text: string; className?: string;
   );
 }
 
+/**
+ * The largest font size, up to `max`, at which a box's text fits inside it (its
+ * padding taken off), found by bisection on the live element. The count in
+ * stickyFont is only a first guess: headings, line breaks and a short sticky
+ * all need less. Written straight to the element's style so a re-render
+ * doesn't undo it; the board's zoom is a transform, so these are board units.
+ */
+function useFitFont<T extends HTMLElement>(max: number, deps: unknown[]) {
+  const ref = useRef<T>(null);
+  useLayoutEffect(() => {
+    const b = ref.current;
+    const c = b?.firstElementChild;
+    if (!b || !(c instanceof HTMLElement)) return;
+    const fit = () => {
+      const cs = getComputedStyle(b);
+      const room = b.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      // a textarea scrolls rather than grows, so it says itself when it overflows
+      const fits = () =>
+        c instanceof HTMLTextAreaElement
+          ? c.scrollHeight <= c.clientHeight
+          : c.offsetHeight <= room && c.scrollWidth <= c.clientWidth + 1;
+      c.style.fontSize = `${max}px`;
+      if (fits()) return;
+      let lo = 4;
+      let hi = max;
+      while (hi - lo > 0.25) {
+        const mid = (lo + hi) / 2;
+        c.style.fontSize = `${mid}px`;
+        if (fits()) lo = mid;
+        else hi = mid;
+      }
+      c.style.fontSize = `${lo}px`;
+    };
+    fit();
+    // the web font arriving late reflows the text
+    let live = true;
+    document.fonts?.ready.then(() => live && fit());
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [max, ...deps]);
+  return ref;
+}
+
+/** A sticky's coloured card, its text as large as it can be and still all show. */
+function StickyCard({
+  o,
+  editing,
+  handlers,
+  selected,
+}: {
+  o: Extract<BoardObject, { type: "sticky" }>;
+  editing?: boolean;
+  handlers: ObjectHandlers;
+  selected?: boolean;
+}) {
+  const ref = useFitFont<HTMLDivElement>(stickyFont(o.text, o.w), [o.text, o.w, o.h, editing, !!o.author]);
+  return (
+    <div
+      ref={ref}
+      className={cn(
+        "flex h-full w-full flex-col justify-center overflow-hidden p-4 text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.15)]",
+        // room for the author's name along the bottom
+        o.author && "pb-6",
+      )}
+      style={{ background: o.color }}
+    >
+      {editing ? (
+        <EditableText
+          value={o.text}
+          onChange={(t) => handlers.onText(o.id, t)}
+          onDone={handlers.onEditEnd}
+          className="text-center leading-snug"
+          style={{ height: "100%" }}
+        />
+      ) : (
+        <div className="break-words text-center leading-snug">
+          <Body text={o.text} className="text-zinc-900" selected={selected} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where a shape's text may go: the largest box that stays inside its outline
+ * (half the width and height for a diamond, the lower half of a triangle, about
+ * 70% of an ellipse), and never nearer the edge than the usual padding.
+ */
+function shapeInset(kind: ShapeKind, w: number, h: number): React.CSSProperties {
+  const [top, side, bottom] =
+    kind === "ellipse"
+      ? [0.146 * h, 0.146 * w, 0.146 * h]
+      : kind === "diamond"
+        ? [0.25 * h, 0.25 * w, 0.25 * h]
+        : kind === "triangle"
+          ? [0.5 * h, 0.25 * w, 0]
+          : [0, 0, 0];
+  const pad = (n: number) => Math.max(12, Math.round(n));
+  return { paddingTop: pad(top), paddingRight: pad(side), paddingBottom: pad(bottom), paddingLeft: pad(side) };
+}
+
+/** A shape's words, at 15px or as much smaller as it takes to show them all. */
+function ShapeLabel({
+  o,
+  editing,
+  handlers,
+  selected,
+}: {
+  o: Extract<BoardObject, { type: "shape" }>;
+  editing?: boolean;
+  handlers: ObjectHandlers;
+  selected?: boolean;
+}) {
+  const ref = useFitFont<HTMLDivElement>(15, [o.text, o.w, o.h, o.shape, editing]);
+  return (
+    <div
+      ref={ref}
+      className="absolute inset-0 flex flex-col justify-center text-center text-zinc-900"
+      style={shapeInset(o.shape, o.w, o.h)}
+    >
+      {editing ? (
+        <EditableText
+          value={o.text}
+          onChange={(t) => handlers.onText(o.id, t)}
+          onDone={handlers.onEditEnd}
+          className="text-center"
+          style={{ height: "100%" }}
+        />
+      ) : (
+        <div className="break-words">
+          <Body text={o.text} className="text-zinc-900" selected={selected} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, lockedBy, hiddenCount = 0, selected, cell }: Props) {
   const box: React.CSSProperties = { left: o.x, top: o.y, width: o.w, height: o.h, zIndex: o.z };
   const ring = lockedBy ? { boxShadow: `0 0 0 2px ${lockedBy}` } : undefined;
@@ -347,28 +486,10 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
 
   switch (o.type) {
     case "sticky": {
-      const fs = stickyFont(o.text, o.w);
       return (
         <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
           {suggestion}
-          <div
-            className="flex h-full w-full flex-col justify-center overflow-hidden p-4 text-zinc-900 shadow-[0_4px_12px_rgba(0,0,0,0.15)]"
-            style={{ background: o.color }}
-          >
-            {editing ? (
-              <EditableText
-                value={o.text}
-                onChange={(t) => handlers.onText(o.id, t)}
-                onDone={handlers.onEditEnd}
-                className="text-center leading-snug"
-                style={{ fontSize: fs, height: "100%" }}
-              />
-            ) : (
-              <div className="break-words text-center leading-snug" style={{ fontSize: fs }}>
-                <Body text={o.text} className="text-zinc-900" selected={selected} />
-              </div>
-            )}
-          </div>
+          <StickyCard o={o} editing={editing} handlers={handlers} selected={selected} />
           {o.author && (
             <div className="pointer-events-none absolute bottom-1.5 left-3 max-w-[85%] truncate text-[10px] text-zinc-900/45">
               {o.author.name}
@@ -405,21 +526,7 @@ export const ObjectView = memo(function ObjectView({ o, editing, me, handlers, l
         <div className={cn("absolute select-none", suggestStyle)} style={{ ...box, ...ring }}>
           {suggestion}
           <ShapeSvg kind={o.shape} w={o.w} h={o.h} fill={o.color} stroke={o.stroke} />
-          <div className="absolute inset-0 flex items-center justify-center p-3 text-center text-sm text-zinc-900">
-            {editing ? (
-              <EditableText
-                value={o.text}
-                onChange={(t) => handlers.onText(o.id, t)}
-                onDone={handlers.onEditEnd}
-                className="text-center"
-                style={{ fontSize: 15 }}
-              />
-            ) : (
-              <div className="break-words" style={{ fontSize: 15 }}>
-                <Body text={o.text} className="text-zinc-900" selected={selected} />
-              </div>
-            )}
-          </div>
+          <ShapeLabel o={o} editing={editing} handlers={handlers} selected={selected} />
           <VoteBadge votes={o.votes} me={me} />
         </div>
       );
