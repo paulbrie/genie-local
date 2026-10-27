@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
 import type { BoardSummary } from "@/lib/boards/db";
+import { confirmDialog, promptDialog } from "@/lib/ask";
 
 import { identity, loadIdentity } from "./identity";
 
@@ -107,8 +108,8 @@ export function BoardsManager({ initial, initialArchived }: { initial: BoardSumm
                   size="icon-xs"
                   variant="secondary"
                   title="Rename"
-                  onClick={() => {
-                    const t = window.prompt("Board name", b.title);
+                  onClick={async () => {
+                    const t = await promptDialog("Board name", b.title, { confirmLabel: "Rename" });
                     if (t?.trim())
                       run(async () => {
                         await api(`/${b.id}`, { method: "PATCH", body: JSON.stringify({ title: t.trim() }) });
@@ -179,8 +180,8 @@ export function BoardsManager({ initial, initialArchived }: { initial: BoardSumm
                     size="xs"
                     variant="ghost"
                     className="text-destructive"
-                    onClick={() => {
-                      if (window.confirm(`Delete "${b.title}" for good?`))
+                    onClick={async () => {
+                      if (await confirmDialog(`Delete "${b.title}" for good?`, { confirmLabel: "Delete", destructive: true }))
                         run(async () => {
                           await api(`/${b.id}`, { method: "DELETE" });
                           router.refresh();

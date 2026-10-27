@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Fredoka, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppSidebar } from "@/components/app-sidebar";
+import { AskHost } from "@/components/ask-host";
 import { RunDock } from "@/components/run-dock";
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { JarvisConsole } from "@/components/jarvis-console";
@@ -76,6 +77,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <JarvisConsole />
           <RunDock />
           <UploadDock />
+          <AskHost />
           <Toaster richColors position="top-right" />
         </ThemeProvider>
       </body>

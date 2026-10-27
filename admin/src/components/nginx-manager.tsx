@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { NginxEditor } from "@/components/nginx-editor";
 import { BASE_PATH } from "@/lib/config";
 import type { NginxFile, NginxFilesSnapshot } from "@/lib/nginx-config";
+import { confirmDialog } from "@/lib/ask";
 
 type WriteResult = {
   ok: boolean;
@@ -102,10 +103,10 @@ export function NginxManager() {
     };
   }, [selected]);
 
-  const select = (path: string) => {
+  const select = async (path: string) => {
     if (
       dirty &&
-      !window.confirm("Discard unsaved changes to this file?")
+      !(await confirmDialog("Discard unsaved changes to this file?", { confirmLabel: "Discard", destructive: true }))
     )
       return;
     if (path !== selected) setTest(null);

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { deleteProjectAction } from "@/app/actions";
 import { Button } from "@/components/ui/button";
+import { confirmDialog } from "@/lib/ask";
 
 /**
  * Removes a project from the dashboard (archives it). Deliberately NON-destructive
@@ -22,13 +23,13 @@ export function DeleteProjectButton({ slug }: { slug: string }) {
       size="sm"
       variant="destructive"
       disabled={isPending}
-      onClick={() => {
+      onClick={async () => {
         if (
-          !confirm(
-            `Remove "${slug}" from the dashboard?\n\n` +
-              `The files on disk are NOT deleted — this only stops the admin from ` +
+          !(await confirmDialog(
+            `The files on disk are NOT deleted — this only stops the admin from ` +
               `tracking it. You can restore it later from this project's URL.`,
-          )
+            { title: `Remove "${slug}" from the dashboard?`, confirmLabel: "Remove", destructive: true },
+          ))
         )
           return;
         startTransition(async () => {

@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
 import { startUploads, uploadedInto } from "@/store/uploads";
+import { confirmDialog } from "@/lib/ask";
 import { filesOfDrop } from "./upload-client";
 import { formatBytes, UploadList } from "./upload-list";
 
@@ -236,7 +237,7 @@ export function FileExplorer() {
     const p0 = preview;
     if (!p0 || p0.next == null || p0.size == null || p0.more) return;
     const left = p0.size - p0.next;
-    if (all && left > LOAD_ALL_ASK && !window.confirm(`Load the remaining ${formatBytes(left)} into the browser? A file this big can make this tab slow, or crash it.`)) return;
+    if (all && left > LOAD_ALL_ASK && !(await confirmDialog(`Load the remaining ${formatBytes(left)} into the browser? A file this big can make this tab slow, or crash it.`, { confirmLabel: "Load it all" }))) return;
     stopLoading.current = false;
     setPreview((p) => (p?.path === p0.path ? { ...p, more: true, moreError: undefined } : p));
     let next = p0.next, size = p0.size;
@@ -522,7 +523,7 @@ export function FileExplorer() {
                 )}
               <DialogFooter>
                 <Button variant="destructive" disabled={busy || !dialog.items?.length}
-                  onClick={() => { if (window.confirm(`Delete ${dialog.items?.length} item(s) in the trash for good (${formatBytes(dialog.items?.reduce((n, i) => n + i.bytes, 0) ?? 0)})? This can't be undone.`)) void act(() => post({ op: "empty-trash" })); }}>
+                  onClick={async () => { if (await confirmDialog(`Delete ${dialog.items?.length} item(s) in the trash for good (${formatBytes(dialog.items?.reduce((n, i) => n + i.bytes, 0) ?? 0)})? This can't be undone.`, { confirmLabel: "Empty the trash", destructive: true })) void act(() => post({ op: "empty-trash" })); }}>
                   Empty the trash
                 </Button>
               </DialogFooter>

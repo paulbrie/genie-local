@@ -18,6 +18,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import type { RunLifecycle } from "@/lib/agent-run-types";
 import { BASE_PATH } from "@/lib/config";
 import { activeRuns, closeRun, openRun } from "@/store/runs";
+import { confirmDialog } from "@/lib/ask";
 
 /** Relative "3m ago" style time; falls back to a locale string for old runs. */
 function ago(iso: string | null): string {
@@ -68,8 +69,8 @@ export function RunHistory() {
 
   const finishedCount = runs.filter((r) => !r.running).length;
 
-  function clearFinished() {
-    if (!confirm(`Delete all ${finishedCount} finished run(s) from history?`))
+  async function clearFinished() {
+    if (!(await confirmDialog(`Delete all ${finishedCount} finished run(s) from history?`, { confirmLabel: "Delete", destructive: true })))
       return;
     start(async () => {
       try {

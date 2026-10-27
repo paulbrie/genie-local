@@ -18,6 +18,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { StatusDot } from "@/components/ui/status-dot";
+import { confirmDialog } from "@/lib/ask";
 
 // Log id (relative to /tmp) the deploy streams to — mirrors DEPLOY_LOG in
 // @/lib/deploy (kept as a literal here since that module is server-only).
@@ -78,13 +79,12 @@ export function DeployPanel() {
 
   const running = status?.deploy === "running" || isPending;
 
-  const onDeploy = () => {
+  const onDeploy = async () => {
     if (
-      !confirm(
-        `Build and deploy to /admin now?${
-          migrate ? "\n\nMigrations WILL run first." : ""
-        }\n\nThe prod server restarts at the end (~a few seconds of downtime).`,
-      )
+      !(await confirmDialog(
+        `${migrate ? "Migrations WILL run first.\n\n" : ""}The prod server restarts at the end (~a few seconds of downtime).`,
+        { title: "Build and deploy to /admin now?", confirmLabel: "Deploy" },
+      ))
     )
       return;
     startTransition(async () => {

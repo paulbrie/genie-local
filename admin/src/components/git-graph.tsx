@@ -24,6 +24,7 @@ import {
 import { BASE_PATH } from "@/lib/config";
 import { formatRelativeTime } from "@/lib/format";
 import type { GitGraph, GitRepo, GraphRow, GraphViews } from "@/lib/git-graph";
+import { confirmDialog } from "@/lib/ask";
 
 // Lane colours — mid-saturation so they read on both light and dark themes.
 const PALETTE = [
@@ -180,10 +181,10 @@ export function GitGraphView({
   const [switching, setSwitching] = useState(false);
   const checkout = async (branch: string, from: string | null, dir: string) => {
     if (
-      !confirm(
-        `Switch ${dir} from ${from ?? "a detached HEAD"} to ${branch}?\n\n` +
-          "Its dev server reloads on the new branch, and agents working in that checkout will be on it too.",
-      )
+      !(await confirmDialog(
+        "Its dev server reloads on the new branch, and agents working in that checkout will be on it too.",
+        { title: `Switch ${dir} from ${from ?? "a detached HEAD"} to ${branch}?`, confirmLabel: "Switch" },
+      ))
     )
       return;
     setSwitching(true);

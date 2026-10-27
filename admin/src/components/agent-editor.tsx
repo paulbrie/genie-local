@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import type { Agent, Pipeline } from "@/lib/agents";
+import { confirmDialog, promptDialog } from "@/lib/ask";
 
 type Kind = "agent" | "pipeline";
 
@@ -678,8 +679,8 @@ export function DuplicateAgentButton({
   const router = useRouter();
   const [pending, start] = useTransition();
 
-  function dup() {
-    const to = window.prompt(`Duplicate "${slug}" as (kebab-case slug):`, `${slug}-copy`);
+  async function dup() {
+    const to = await promptDialog(`Duplicate "${slug}" as (kebab-case slug):`, `${slug}-copy`, { confirmLabel: "Duplicate" });
     if (!to) return;
     const target = to.trim();
     if (!SLUG_RE.test(target)) {
@@ -724,8 +725,8 @@ export function DeleteAgentButton({
   const router = useRouter();
   const [pending, start] = useTransition();
 
-  function del() {
-    if (!confirm(`Delete ${kind} "${name}"? This removes ${slug}.md.`)) return;
+  async function del() {
+    if (!(await confirmDialog(`Delete ${kind} "${name}"? This removes ${slug}.md.`, { confirmLabel: "Delete", destructive: true }))) return;
     start(async () => {
       try {
         await deleteAgentSourceAction(kind, slug);

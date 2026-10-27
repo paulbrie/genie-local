@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { ProjectRecipe } from "@/db/schema";
 import { formatRelativeTime } from "@/lib/format";
+import { confirmDialog } from "@/lib/ask";
 
 type Draft = { name: string; kind: string; description: string; body: string };
 const EMPTY: Draft = { name: "", kind: "", description: "", body: "" };
@@ -70,8 +71,8 @@ export function RecipesManager({ recipes }: { recipes: ProjectRecipe[] }) {
     [recipes],
   );
 
-  function open(id: number | "new") {
-    if (dirty && !window.confirm("Discard the unsaved changes to this recipe?")) return;
+  async function open(id: number | "new") {
+    if (dirty && !(await confirmDialog("Discard the unsaved changes to this recipe?", { confirmLabel: "Discard", destructive: true }))) return;
     const r = id === "new" ? null : recipes.find((x) => x.id === id);
     const d = r ? toDraft(r) : EMPTY;
     setCurrent(id);
@@ -103,8 +104,8 @@ export function RecipesManager({ recipes }: { recipes: ProjectRecipe[] }) {
     });
   }
 
-  function remove() {
-    if (!selected || !window.confirm(`Delete the recipe "${selected.name}"?`)) return;
+  async function remove() {
+    if (!selected || !(await confirmDialog(`Delete the recipe "${selected.name}"?`, { confirmLabel: "Delete", destructive: true }))) return;
     startTransition(async () => {
       await deleteRecipeAction(selected.id);
       toast.success(`Deleted "${selected.name}"`);

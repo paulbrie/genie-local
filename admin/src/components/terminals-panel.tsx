@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
 import { formatBytes } from "@/lib/format";
 import { dock, openTerminal } from "@/store/terminals";
+import { confirmDialog } from "@/lib/ask";
 
 const API = `${BASE_PATH}/api/terminals`;
 
@@ -94,7 +95,7 @@ export function TerminalsPanel() {
   }
 
   async function kill(name: string) {
-    if (!confirm(`Kill terminal "${name}"? Running processes will be stopped.`))
+    if (!(await confirmDialog(`Kill terminal "${name}"? Running processes will be stopped.`, { confirmLabel: "Kill", destructive: true })))
       return;
     if (await killSession(name)) await refreshList();
   }

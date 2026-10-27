@@ -43,6 +43,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { BASE_PATH } from "@/lib/config";
+import { promptDialog } from "@/lib/ask";
 
 const API = `${BASE_PATH}/api/db`;
 
@@ -1095,7 +1096,7 @@ function QueryRunner({ connId, database }: { connId: number; database: string })
   }
 
   async function saveCurrent() {
-    const name = prompt("Save query as:");
+    const name = await promptDialog("Save query as:", "", { confirmLabel: "Save" });
     if (!name) return;
     try {
       await jsonOrThrow(

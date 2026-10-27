@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { BASE_PATH } from "@/lib/config";
 import type { BoardDoc } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/ask";
 
 export type HistoryEntry = {
   id: number;
@@ -88,7 +89,7 @@ export function HistoryPanel({
   const restore = async () => {
     if (!entries || index < 0) return;
     const entry = entries[index];
-    if (!window.confirm(`Put the board back to ${describe(entry)} (${when(entry.createdAt)})? Everyone on it moves back too.`)) return;
+    if (!(await confirmDialog(`Put the board back to ${describe(entry)} (${when(entry.createdAt)})? Everyone on it moves back too.`, { confirmLabel: "Put it back" }))) return;
     setBusy(true);
     try {
       const res = await fetch(`${BASE_PATH}/api/boards/${boardId}/history`, {

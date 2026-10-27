@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/ask";
 
 type Status = {
   branch: string;
@@ -73,9 +74,10 @@ export function AdminUpdateButton() {
       return;
     }
     if (
-      !window.confirm(
-        `${ask}\n\n${listed}${more}\n\nIt will build, migrate and restart, so this page will blink.`,
-      )
+      !(await confirmDialog(`${listed}${more}\n\nIt will build, migrate and restart, so this page will blink.`, {
+        title: ask,
+        confirmLabel: local ? "Deploy" : "Update",
+      }))
     ) {
       return;
     }

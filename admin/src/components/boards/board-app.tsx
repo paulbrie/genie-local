@@ -78,6 +78,7 @@ import {
   DEFAULT_SIZES,
 } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
+import { promptDialog } from "@/lib/ask";
 
 import { BoardCanvas, cloneObjects, DEFAULT_TOOL_OPTIONS, isTyping, type Tool, type ToolOptions } from "./board-canvas";
 import { HistoryPanel, type HistoryEntry } from "./board-history";
@@ -545,11 +546,11 @@ function SelectionBar({
             size="xs"
             variant="ghost"
             title="Change the address or what it says"
-            onClick={() => {
+            onClick={async () => {
               const o = objs[0] as typeof objs[0] & { url: string; title: string };
-              const url = window.prompt("Link address", o.url);
+              const url = await promptDialog("Link address", o.url);
               if (url === null) return;
-              const title = window.prompt("What it should say (blank for the site's name)", o.title);
+              const title = await promptDialog("What it should say (blank for the site's name)", o.title);
               if (title === null) return;
               sync.apply([{ k: "patch", id: o.id, set: { url: url.trim(), title: title.trim() } }]);
             }}
@@ -637,8 +638,8 @@ function SelectionBar({
           <Button
             size="xs"
             variant="ghost"
-            onClick={() => {
-              const label = window.prompt("Label", (first.label as string) ?? "");
+            onClick={async () => {
+              const label = await promptDialog("Label", (first.label as string) ?? "");
               if (label !== null) patchAll({ label });
             }}
           >
@@ -854,7 +855,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
       await navigator.clipboard.writeText(text);
       toast.success(markdown ? "Markdown link copied" : "Link copied", { description: text });
     } catch {
-      window.prompt("Copy the link", text);
+      await promptDialog("Copy the link", text, { cancelLabel: "Close" });
     }
   };
   const setEditing = useCallback(
@@ -1198,7 +1199,7 @@ function Board({ boardId, initialTitle, me, onEditMe }: { boardId: number; initi
   const commentWorld = openComment ? { x: openComment.x, y: openComment.y } : comment && "at" in comment ? comment.at : null;
 
   const renameTitle = async () => {
-    const t = window.prompt("Board name", title || initialTitle);
+    const t = await promptDialog("Board name", title || initialTitle, { confirmLabel: "Rename" });
     if (!t?.trim()) return;
     const res = await fetch(`${BASE_PATH}/api/boards/${boardId}`, {
       method: "PATCH",

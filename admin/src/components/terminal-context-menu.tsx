@@ -12,6 +12,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { liveTerminals, openTerminal, setLiveTerminals } from "@/store/terminals";
+import { confirmDialog } from "@/lib/ask";
 
 /**
  * Right-click on a terminal in the sidebar: Open it, or Kill it (its tmux
@@ -31,7 +32,7 @@ export function TerminalContextMenu({
 }) {
   async function kill() {
     const what = claude ? "The Claude session in it ends" : "Running processes will stop";
-    if (!confirm(`Delete terminal "${name}"? ${what}.`)) return;
+    if (!(await confirmDialog(`Delete terminal "${name}"? ${what}.`, { confirmLabel: "Delete", destructive: true }))) return;
     // Gone from the sidebar now, not at the next poll.
     if (await killSession(name)) setLiveTerminals(liveTerminals.getValue().filter((t) => t.name !== name));
   }

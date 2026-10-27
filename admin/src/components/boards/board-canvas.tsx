@@ -17,6 +17,7 @@ import {
   type ShapeKind,
 } from "@/lib/boards/core.mjs";
 import { cn } from "@/lib/utils";
+import { promptDialog } from "@/lib/ask";
 
 import {
   attachTarget,
@@ -433,13 +434,14 @@ export function BoardCanvas(props: Props) {
         return;
       case "link": {
         // Nothing to show without an address, so ask for it first.
-        const raw = window.prompt("Link address");
         setTool("select");
-        const url = raw?.trim();
-        if (!url) return;
-        const s = DEFAULT_SIZES.link;
-        const id = create({ type: "link", x: p.x - s.w / 2, y: p.y - s.h / 2, w: s.w, h: s.h, url: /^https?:\/\//i.test(url) ? url : `https://${url}` } as Partial<BoardObject> & { type: "link" });
-        setSelection([id]);
+        void promptDialog("Link address", "", { confirmLabel: "Add link", placeholder: "https://…" }).then((raw) => {
+          const url = raw?.trim();
+          if (!url) return;
+          const s = DEFAULT_SIZES.link;
+          const id = create({ type: "link", x: p.x - s.w / 2, y: p.y - s.h / 2, w: s.w, h: s.h, url: /^https?:\/\//i.test(url) ? url : `https://${url}` } as Partial<BoardObject> & { type: "link" });
+          setSelection([id]);
+        });
         return;
       }
       case "task":
@@ -786,8 +788,9 @@ export function BoardCanvas(props: Props) {
       setSelection([hit.id]);
       setEditing(hit.id);
     } else if (hit.type === "connector") {
-      const label = window.prompt("Connector label", hit.label);
-      if (label !== null) sync.apply([{ k: "patch", id: hit.id, set: { label } }]);
+      void promptDialog("Connector label", hit.label ?? "").then((label) => {
+        if (label !== null) sync.apply([{ k: "patch", id: hit.id, set: { label } }]);
+      });
     }
   };
 

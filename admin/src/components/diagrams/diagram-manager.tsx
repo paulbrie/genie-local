@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { Diagram } from "@/lib/diagrams";
 import { cn } from "@/lib/utils";
+import { confirmDialog } from "@/lib/ask";
 
 const STARTER = `graph TD
   A[Start] --> B{Decision}
@@ -164,8 +165,8 @@ export function DiagramManager({
     });
   };
 
-  const purge = (d: Diagram) => {
-    if (!confirm(`Permanently delete “${d.title}”? This cannot be undone.`))
+  const purge = async (d: Diagram) => {
+    if (!(await confirmDialog(`Permanently delete “${d.title}”? This cannot be undone.`, { confirmLabel: "Delete", destructive: true })))
       return;
     startTransition(async () => {
       try {

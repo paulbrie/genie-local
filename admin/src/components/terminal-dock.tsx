@@ -62,6 +62,7 @@ import {
   writeToPty,
 } from "@/lib/terminal-bridge";
 import { Z_GLOBAL_CONTROLS, Z_GLOBAL_OVERLAY, Z_TERMINAL_WINDOWS } from "@/lib/z-layers";
+import { confirmDialog } from "@/lib/ask";
 
 const API = `${BASE_PATH}/api/terminals`;
 // Status dot / token meter refresh. Metadata only now — the live pane streams
@@ -342,8 +343,8 @@ export function TerminalDock() {
         name={active}
         openNames={visible}
         onClose={() => closeTerminal(active)}
-        onKill={() => {
-          if (confirm(`Kill terminal "${active}"? Running processes will stop.`))
+        onKill={async () => {
+          if (await confirmDialog(`Kill terminal "${active}"? Running processes will stop.`, { confirmLabel: "Kill", destructive: true }))
             void killSession(active);
         }}
         onRename={(next) => renameSession(active, next)}
@@ -364,9 +365,9 @@ export function TerminalDock() {
           bringToFront={bringToFront}
           onMinimize={() => minimizeTerminal(name)}
           onClose={() => closeTerminal(name)}
-          onKill={() => {
+          onKill={async () => {
             if (
-              confirm(`Kill terminal "${name}"? Running processes will stop.`)
+              await confirmDialog(`Kill terminal "${name}"? Running processes will stop.`, { confirmLabel: "Kill", destructive: true })
             )
               void killSession(name);
           }}

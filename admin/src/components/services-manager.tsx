@@ -35,6 +35,7 @@ import type {
   ServiceUnit,
   ServicesSnapshot,
 } from "@/lib/services";
+import { confirmDialog } from "@/lib/ask";
 
 const POLL_MS = 6000;
 
@@ -268,10 +269,13 @@ function ServiceRow({
           <IconBtn
             title="Restart"
             disabled={busy}
-            onClick={() => {
+            onClick={async () => {
               if (
                 !s.protected ||
-                confirm(`Restart protected unit ${s.unit}? This may briefly interrupt the dashboard/session.`)
+                (await confirmDialog("This may briefly interrupt the dashboard/session.", {
+                  title: `Restart protected unit ${s.unit}?`,
+                  confirmLabel: "Restart",
+                }))
               )
                 onAct(s.unit, "restart");
             }}

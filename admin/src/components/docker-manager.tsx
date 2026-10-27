@@ -36,6 +36,7 @@ import type {
   DockerImage,
   DockerSnapshot,
 } from "@/lib/docker";
+import { confirmDialog } from "@/lib/ask";
 
 const POLL_MS = 5000;
 
@@ -257,10 +258,11 @@ export function DockerManager() {
                             title="Remove"
                             destructive
                             disabled={disabled}
-                            onClick={() => {
+                            onClick={async () => {
                               if (
-                                confirm(
+                                await confirmDialog(
                                   `Remove container "${c.name}"?${running ? " It is running and will be force-removed." : ""}`,
+                                  { confirmLabel: "Remove", destructive: true },
                                 )
                               )
                                 act("container", c.id, "remove", c.name);
@@ -324,9 +326,9 @@ export function DockerManager() {
                         title="Remove image"
                         destructive
                         disabled={busy === img.id}
-                        onClick={() => {
+                        onClick={async () => {
                           const label = `${img.repository}:${img.tag}`;
-                          if (confirm(`Remove image "${label}"?`))
+                          if (await confirmDialog(`Remove image "${label}"?`, { confirmLabel: "Remove", destructive: true }))
                             act("image", img.id, "remove", label);
                         }}
                       >
