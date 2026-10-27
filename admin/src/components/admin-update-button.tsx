@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownToLine, Loader2 } from "lucide-react";
+import { ArrowDownToLine, Loader2, Rocket } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ type Status = {
   behind: number;
   ahead: number;
   incoming: string[];
+  undeployed: number;
+  undeployedLog: string[];
   dirty: number;
   blocked: string | null;
 };
@@ -25,8 +27,10 @@ const POLL_MS = 3 * 60_000;
 /**
  * Shows up in the toolbar only when GitHub is ahead of this checkout, and
  * updates the admin to match: pull, reinstall if the lockfile moved, then
- * build, migrate and restart. The restart takes this page with it for a moment,
- * which the confirmation says plainly.
+ * build, migrate and restart. Or, when the commits are made here (so GitHub is
+ * never ahead), when the running build is older than the checkout: then it only
+ * deploys. The restart takes this page with it for a moment, which the
+ * confirmation says plainly.
  */
 export function AdminUpdateButton() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -52,11 +56,16 @@ export function AdminUpdateButton() {
     };
   }, [check]);
 
-  if (!status || status.behind < 1) return null;
+  if (!status || (status.behind < 1 && (status.undeployed ?? 0) < 1)) return null;
 
-  const what = `${status.behind} update${status.behind === 1 ? "" : "s"}`;
-  const listed = status.incoming.slice(0, 8).map((s) => `· ${s}`).join("\n");
-  const more = status.incoming.length > 8 ? `\n…and ${status.incoming.length - 8} more` : "";
+  // (nothing on GitHub to take: the commits are here, only not deployed)
+  const local = status.behind < 1;
+  const n = local ? status.undeployed : status.behind;
+  const subjects = local ? status.undeployedLog : status.incoming;
+  const what = local ? `Deploy ${n} commit${n === 1 ? "" : "s"}` : `${n} update${n === 1 ? "" : "s"}`;
+  const listed = subjects.slice(0, 8).map((s) => `· ${s}`).join("\n");
+  const more = subjects.length > 8 ? `\n…and ${subjects.length - 8} more` : "";
+  const ask = local ? "Deploy the commits the running admin doesn't have yet?" : "Update the admin to the latest on GitHub?";
 
   const update = async () => {
     if (status.blocked) {
@@ -65,13 +74,13 @@ export function AdminUpdateButton() {
     }
     if (
       !window.confirm(
-        `Update the admin to the latest on GitHub?\n\n${listed}${more}\n\nIt will build, migrate and restart, so this page will blink.`,
+        `${ask}\n\n${listed}${more}\n\nIt will build, migrate and restart, so this page will blink.`,
       )
     ) {
       return;
     }
     setRunning(true);
-    const note = toast.loading("Updating the admin…");
+    const note = toast.loading(local ? "Deploying the admin…" : "Updating the admin…");
     try {
       const res = await fetch(`${BASE_PATH}/api/admin-update`, { method: "POST" });
       const body: Result = await res.json();
@@ -96,12 +105,12 @@ export function AdminUpdateButton() {
       title={
         status.blocked
           ? `${what} waiting, but: ${status.blocked}`
-          : `Update the admin to the latest on GitHub:\n${listed}${more}`
+          : `${ask}\n${listed}${more}`
       }
       data-testid="admin-update"
     >
-      {running ? <Loader2 className="animate-spin" /> : <ArrowDownToLine />}
-      {running ? "Updating…" : what}
+      {running ? <Loader2 className="animate-spin" /> : local ? <Rocket /> : <ArrowDownToLine />}
+      {running ? (local ? "Deploying…" : "Updating…") : what}
     </Button>
   );
 }

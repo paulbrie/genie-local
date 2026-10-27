@@ -1,4 +1,19 @@
+import { execFileSync } from "node:child_process";
+
 import type { NextConfig } from "next";
+
+// The commit a production build is made from, baked in so the toolbar can tell
+// when this checkout has commits the running admin doesn't (src/lib/admin-update.ts).
+// Commits made on this box and pushed never put GitHub ahead, so without it there
+// was nothing to offer. Empty in dev: it reloads from the working copy anyway.
+const BUILT_COMMIT = (() => {
+  if (process.env.NODE_ENV !== "production") return "";
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { cwd: import.meta.dirname, encoding: "utf8" }).trim();
+  } catch {
+    return "";
+  }
+})();
 
 // Public hostnames this app is served under. There is NO hardcoded domain: the
 // setup wizard (deploy/setup-server.mjs) detects the host the box is reached at
@@ -23,6 +38,7 @@ const nextConfig: NextConfig = {
   // next/link, router, and static assets are automatically prefixed with basePath.
   basePath: process.env.APP_BASE_PATH ?? "/admin",
   distDir: process.env.APP_DIST_DIR ?? ".next",
+  env: { ADMIN_BUILT_COMMIT: BUILT_COMMIT },
   // We run `next dev` behind the nginx proxy on a different host than the dev
   // server's own origin. Next 16's dev server blocks cross-origin requests to
   // /_next/* dev resources with a 403 unless the public host is allowlisted —

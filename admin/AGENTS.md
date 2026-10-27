@@ -78,6 +78,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   is forced: local commits or uncommitted edits block it with a message instead of
   being overwritten. `ADMIN_REPO` overrides the repo path, which is how the git
   half gets tested without touching the real one.
+  Commits made in this checkout and pushed never put `origin` ahead, so the button
+  also shows ("Deploy N commits") when `admin/` has commits newer than the running
+  build: `next.config.ts` bakes the commit a production build is made from into
+  `ADMIN_BUILT_COMMIT`, and the click only runs `admin-ctl deploy --migrate`.
 
 ## Data & config
 

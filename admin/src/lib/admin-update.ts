@@ -30,6 +30,13 @@ export type UpdateStatus = {
   ahead: number;
   /** Subject lines of what's waiting, newest first. */
   incoming: string[];
+  /**
+   * Commits to admin/ in this checkout that the running build doesn't have: made
+   * here (and pushed), so GitHub isn't ahead, but not deployed yet.
+   */
+  undeployed: number;
+  /** Their subject lines, newest first. */
+  undeployedLog: string[];
   /** Files changed locally and not committed, which a pull could collide with. */
   dirty: number;
   /** Why an update can't run now, if it can't. */
@@ -49,6 +56,8 @@ export async function updateStatus(): Promise<UpdateStatus> {
     behind: 0,
     ahead: 0,
     incoming: [],
+    undeployed: 0,
+    undeployedLog: [],
     dirty: 0,
     blocked: null,
     checkedAt: Date.now(),
@@ -66,9 +75,20 @@ export async function updateStatus(): Promise<UpdateStatus> {
       out.incoming = log ? log.split("\n") : [];
     }
     const status = await git(["status", "--porcelain"]);
-    out.dirty = status ? status.split("\n").filter((l) => !l.startsWith("??")).length : 0;
+    const changed = status ? status.split("\n").filter((l) => !l.startsWith("??")) : [];
+    out.dirty = changed.length;
 
-    if (!out.behind) out.blocked = null;
+    // (only a production build knows its commit; one git doesn't know, e.g. after a rewrite, counts as nothing to say)
+    const built = process.env.ADMIN_BUILT_COMMIT;
+    if (built) {
+      const log = await git(["log", "--format=%s", `${built}..HEAD`, "--", "admin"]).catch(() => "");
+      out.undeployedLog = log ? log.split("\n") : [];
+      out.undeployed = out.undeployedLog.length;
+    }
+
+    const changedAdmin = changed.filter((l) => l.slice(3).startsWith("admin/")).length;
+    if (!out.behind && !out.undeployed) out.blocked = null;
+    else if (!out.behind) out.blocked = changedAdmin ? `${changedAdmin} file(s) in admin/ changed here and not committed — the build would ship them.` : null;
     else if (out.ahead) out.blocked = `This checkout has ${out.ahead} commit(s) of its own — merge or push them first.`;
     else if (out.dirty) out.blocked = `${out.dirty} file(s) changed here and not committed — a pull could collide with them.`;
   } catch (e) {
@@ -131,11 +151,24 @@ export async function fastForward(): Promise<{ ok: boolean; steps: string[]; err
 }
 
 /**
+ * Ship the commits made here that the running admin doesn't have yet: nothing
+ * to pull, straight to `admin-ctl deploy` (with migrations, as for an update).
+ */
+async function deployLocal(status: UpdateStatus): Promise<UpdateResult> {
+  if (status.blocked) return { ok: false, steps: [], error: status.blocked, log: DEPLOY_LOG };
+  const deploy = await startDeploy(true);
+  if (!deploy.ok) return { ok: false, steps: [], error: `The deploy wouldn't start: ${deploy.error ?? "unknown"}`, log: DEPLOY_LOG };
+  return { ok: true, steps: [`Deploying ${status.undeployed} commit(s) — the admin will blink.`], log: DEPLOY_LOG };
+}
+
+/**
  * Take what's on GitHub and ship it: fast-forward, then hand over to
  * `admin-ctl deploy`, which builds, migrates and restarts the admin — so the
  * page that asked for this will blink.
  */
 export async function runUpdate(): Promise<UpdateResult> {
+  const status = await updateStatus();
+  if (!status.behind && status.undeployed) return deployLocal(status);
   const pulled = await fastForward();
   if (!pulled.ok) return { ...pulled, log: DEPLOY_LOG };
 
