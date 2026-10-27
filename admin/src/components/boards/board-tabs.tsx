@@ -9,6 +9,7 @@ import { useSubject } from "subjecto/react";
 
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
+import { noteBoardOpened, syncRecentBoards } from "@/store/recent-boards";
 
 /** The boards kept open as tabs, in order, on this browser. */
 const KEY = "boards.tabs";
@@ -65,6 +66,7 @@ export function BoardTabs({ current, title }: { current: number; title: string }
         .then((list: Summary[] | null) => {
           if (!live || !Array.isArray(list)) return;
           setBoards(list);
+          syncRecentBoards(list);
           // a board archived or deleted since loses its tab
           const known = new Set(list.map((b) => b.id));
           setTabs((t) => {
@@ -96,6 +98,10 @@ export function BoardTabs({ current, title }: { current: number; title: string }
     m.set(current, here?.title || (m.get(current) ?? title));
     return m;
   }, [boards, current, title, here?.title]);
+
+  // (the sidebar lists the boards last opened here, under its current name)
+  const currentTitle = titles.get(current) ?? title;
+  useEffect(() => noteBoardOpened(current, currentTitle), [current, currentTitle]);
 
   const close = (id: number) => {
     const i = tabs.indexOf(id);

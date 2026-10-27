@@ -47,6 +47,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { activeRuns, openRun } from "@/store/runs";
 import { mobileNav } from "@/store/ui";
 import {
@@ -68,19 +69,19 @@ const NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
   // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
   { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
+  { href: "/terminals", label: "Terminals", icon: SquareTerminal },
+  { href: "/boards", label: "Boards", icon: StickyNote },
+  { href: "/files", label: "Files", icon: FolderOpen },
+  { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/processes", label: "Processes", icon: Activity },
   { href: "/chrome", label: "Chrome", icon: Globe },
-  { href: "/terminals", label: "Terminals", icon: SquareTerminal },
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/docker", label: "Docker", icon: Container },
   { href: "/services", label: "Services", icon: Server },
   { href: "/nginx", label: "Nginx", icon: Network },
   { href: "/railway", label: "Railway", icon: TrainFront },
-  { href: "/db", label: "DB Explorer", icon: Database },
   { href: "/diagrams", label: "Diagrams", icon: Share2 },
-  { href: "/boards", label: "Boards", icon: StickyNote },
   { href: "/recipes", label: "Recipes", icon: ChefHat },
-  { href: "/files", label: "Files", icon: FolderOpen },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/logins", label: "Logins", icon: KeyRound },
   { href: "/claude", label: "Claude", icon: Sparkles },
@@ -130,6 +131,16 @@ export function AppSidebar() {
     (r) => r.running || r.state === "running" || r.state === "starting",
   );
   const [terms] = useSubject(liveTerminals);
+  const [boards] = useSubject(recentBoards);
+  // The boards last opened on this browser, as sub-items under Boards: their
+  // names refreshed (and archived ones dropped) from the board list.
+  useEffect(() => {
+    hydrateRecentBoards();
+    fetch(`${BASE_PATH}/api/boards`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((list) => Array.isArray(list) && syncRecentBoards(list))
+      .catch(() => {});
+  }, []);
   // "Currently working" = anything not sitting idle at a shell prompt.
   const workingTerms = terms.filter((t) => t.status !== "idle");
 
@@ -424,6 +435,31 @@ export function AppSidebar() {
                           </span>
                         )}
                       </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* The boards last opened here, as sub-items under Boards. */}
+              {item.href === "/boards" && !rail && boards.length > 0 && (
+                <div className="mt-px flex flex-col gap-px">
+                  {boards.map((b) => {
+                    const here = pathname === `/boards/${b.id}`;
+                    return (
+                      <Link
+                        key={b.id}
+                        href={`/boards/${b.id}`}
+                        onClick={closeMobile}
+                        aria-current={here ? "page" : undefined}
+                        title={b.title}
+                        className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
+                          here
+                            ? "font-medium text-foreground"
+                            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="truncate">{b.title}</span>
+                      </Link>
                     );
                   })}
                 </div>
