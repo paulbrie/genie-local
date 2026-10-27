@@ -11,6 +11,7 @@ import { TerminalNarrator } from "@/components/terminal-narrator";
 import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { UploadDock } from "@/components/upload-dock";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -74,6 +75,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <JarvisOrb />
           <JarvisConsole />
           <RunDock />
+          <UploadDock />
           <Toaster richColors position="top-right" />
         </ThemeProvider>
       </body>

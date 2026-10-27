@@ -4,9 +4,10 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
-  Copy, Eye, FileArchive, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload, X,
+  Copy, Eye, FileArchive, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Search, Trash2, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useSubject } from "subjecto/react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
-import { filesOfDrop, uploadFile } from "./upload-client";
+import { startUploads, uploadedInto } from "@/store/uploads";
+import { filesOfDrop } from "./upload-client";
+import { formatBytes, UploadList } from "./upload-list";
 
 const MonacoViewer = dynamic(() => import("./monaco-viewer"), { ssr: false, loading: () => <p className="p-3 text-xs text-muted-foreground">Loading the viewer…</p> });
 
@@ -32,7 +35,6 @@ const readUrl = (p: string, offset: number, mode?: string, reveal?: boolean) =>
   `${API}?op=read&path=${encodeURIComponent(p)}&offset=${offset}${mode ? `&mode=${mode}` : ""}${reveal ? "&reveal=1" : ""}`;
 type TrashItem = { id: string; name: string; originalPath: string; deletedAt: string; bytes: number; type: string };
 type DeletePlan = { path: string; type: string; bytes: number; files: number; truncated: boolean; running: { slug: string; pid: number }[] };
-type Upload = { key: string; name: string; dir: string; size: number; sent: number; bytesPerSec: number | null; status: "uploading" | "done" | "error" | "cancelled"; error?: string; abort: AbortController };
 type SortKey = "name" | "size" | "modified" | "type";
 
 const API = `${BASE_PATH}/api/files`;
@@ -50,13 +52,6 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 }
 const post = <T,>(body: object) => api<T>(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024, i = 0;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
-}
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 const extOf = (e: Entry) => (e.type === "dir" ? "folder" : e.name.includes(".") ? e.name.split(".").pop()!.toLowerCase() : "file");
 
@@ -106,7 +101,6 @@ export function FileExplorer() {
   const [selected, setSelected] = useState<Entry | null>(null);
   const [writeRoots, setWriteRoots] = useState<string[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [uploads, setUploads] = useState<Upload[]>([]);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<
     | { kind: "mkdir" } | { kind: "rename"; entry: Entry } | { kind: "move"; entry: Entry } | { kind: "delete"; entry: Entry; plan?: DeletePlan; error?: string; force: boolean }
@@ -172,27 +166,13 @@ export function FileExplorer() {
     return [{ name: listing.root, path: listing.root }, ...rel.map((seg, i) => ({ name: seg, path: `${listing.root}/${rel.slice(0, i + 1).join("/")}` }))];
   }, [listing]);
 
-  const startUploads = useCallback(async (files: { file: File; rel: string }[], dir: string) => {
-    // (a dropped folder's subfolders first: made as needed, "already exists" is fine)
-    const folders = [...new Set(files.map((f) => f.rel.split("/").slice(0, -1).join("/")).filter(Boolean))].sort((a, b) => a.split("/").length - b.split("/").length);
-    for (const f of folders) {
-      const parts = f.split("/");
-      await post({ op: "mkdir", dir: [dir, ...parts.slice(0, -1)].join("/"), name: parts[parts.length - 1] }).catch(() => {});
-    }
-    for (const { file, rel } of files) {
-      const parts = rel.split("/"), name = parts.pop()!, into = [dir, ...parts].join("/");
-      const key = `${into}/${name}#${Date.now()}`, abort = new AbortController();
-      setUploads((u) => [...u, { key, name: rel, dir: into, size: file.size, sent: 0, bytesPerSec: null, status: "uploading", abort }]);
-      const update = (patch: Partial<Upload>) => setUploads((u) => u.map((x) => (x.key === key ? { ...x, ...patch } : x)));
-      try {
-        await uploadFile(file, into, name, { signal: abort.signal, onProgress: (p) => update({ sent: p.sent, bytesPerSec: p.bytesPerSec }) });
-        update({ status: "done", sent: file.size });
-      } catch (err) {
-        update(abort.signal.aborted ? { status: "cancelled" } : { status: "error", error: (err as Error).message });
-      }
-    }
-    void load(dir);
-  }, [load]);
+  // (uploads run on in store/uploads.ts when you leave the page; a finished batch reloads this folder if it's the one showing)
+  const [done] = useSubject(uploadedInto);
+  const cwdRef = useRef(cwd);
+  useEffect(() => { cwdRef.current = cwd; }, [cwd]);
+  useEffect(() => {
+    if (done && done.dir === cwdRef.current) void load(done.dir);
+  }, [done, load]);
 
   const act = async (fn: () => Promise<unknown>, after?: () => void) => {
     setBusy(true);
@@ -278,7 +258,6 @@ export function FileExplorer() {
   const writable = writeRoots.some((w) => within(cwd, w));
   const changeable = (p: string) => writeRoots.some((w) => within(p, w) && p !== w);
   const readOnlyWhy = `Read-only here: changes only under ${writeRoots.join(", ")}`;
-  const active = uploads.filter((u) => u.status === "uploading").length;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -465,31 +444,7 @@ export function FileExplorer() {
         </aside>
       </div>
 
-      {uploads.length > 0 && (
-        <section aria-label="Uploads" className="rounded-lg border p-2">
-          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
-            <span>Uploads{active ? ` · ${active} in progress` : ""}</span>
-            <button type="button" className="hover:text-foreground" onClick={() => setUploads((u) => u.filter((x) => x.status === "uploading"))}>Clear finished</button>
-          </div>
-          <ul className="max-h-40 space-y-1 overflow-auto">
-            {uploads.map((u) => {
-              const pct = u.size ? Math.floor((u.sent / u.size) * 100) : 100;
-              return (
-                <li key={u.key} className="flex items-center gap-2 text-xs">
-                  <span className="w-56 truncate" title={`${u.dir}/${u.name}`}>{u.name}</span>
-                  <span className="h-2 flex-1 overflow-hidden rounded bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label={`Upload of ${u.name}`}>
-                    <span className={cn("block h-full", u.status === "error" ? "bg-destructive" : u.status === "done" ? "bg-emerald-500" : "bg-primary")} style={{ width: `${pct}%` }} />
-                  </span>
-                  <span className="w-72 whitespace-nowrap text-right tabular-nums text-muted-foreground">
-                    {u.status === "uploading" ? `${pct}% · ${formatBytes(u.sent)} / ${formatBytes(u.size)}${u.bytesPerSec != null ? ` · ${formatBytes(u.bytesPerSec)}/s` : ""}` : u.status === "done" ? "done" : u.status === "cancelled" ? "cancelled" : <span className="text-destructive" title={u.error}>failed: {u.error}</span>}
-                  </span>
-                  {u.status === "uploading" && <button type="button" aria-label={`Cancel ${u.name}`} onClick={() => u.abort.abort()} className="rounded p-0.5 hover:bg-muted"><X className="size-3.5" /></button>}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
+      <UploadList />
 
       <Dialog open={!!dialog} onOpenChange={(o) => { if (!o && !busy) setDialog(null); }}>
         <DialogContent className="sm:max-w-lg">
