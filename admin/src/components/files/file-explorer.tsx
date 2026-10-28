@@ -1,10 +1,9 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
-  Copy, Eye, FileArchive, Link2, Loader2, Lock, MoveRight, Pencil, RefreshCw, RotateCcw, Save, Search, Trash2, Upload,
+  AppWindow, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
+  Copy, FileArchive, Link2, Loader2, Lock, MoveRight, RefreshCw, RotateCcw, Search, TextCursorInput, Trash2, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useSubject } from "subjecto/react";
@@ -15,55 +14,23 @@ import {
 } from "@/components/ui/context-menu";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { BASE_PATH } from "@/lib/config";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { cn } from "@/lib/utils";
+import { Z_FILE_DIALOGS, Z_FILE_WINDOWS } from "@/lib/z-layers";
 import { startUploads, uploadedInto } from "@/store/uploads";
 import { confirmDialog } from "@/lib/ask";
-import type { EditorControls } from "./monaco-viewer";
+import { API, api, downloadFile, type Entry, postTo, pseudo, viewable, when, within } from "./files-api";
+import { FileWindow } from "./file-window";
 import { filesOfDrop } from "./upload-client";
 import { formatBytes, UploadList } from "./upload-list";
 
-const MonacoViewer = dynamic(() => import("./monaco-viewer"), { ssr: false, loading: () => <p className="p-3 text-xs text-muted-foreground">Loading the viewer…</p> });
-
-type Entry = { name: string; path: string; type: "dir" | "file" | "symlink" | "other"; size: number; modified: string; secret: boolean };
 type Listing = { path: string; root: string; parent: string | null; entries: Entry[]; noPermission?: boolean };
-/**
- * a page of a file's preview, as the API sends it (lib/files/preview); the first page also says whether the file can be
- * edited (then it is the whole file, with the hash a save must still find on disk: lib/files/edit) or why not
- */
-type Page = { mode: "text" | "hex"; text: string; size: number; offset: number; next: number; editable?: boolean; readOnly?: string; hash?: string; mtime?: number };
-/** what the preview holds: the pages so far (`next` = bytes shown), for a credential file only once revealed */
-type Preview = {
-  path: string; text?: string; mode?: "text" | "hex"; size?: number; next?: number; reveal?: boolean; more?: boolean; moreError?: string; error?: string; secret?: boolean; revealing?: boolean;
-  editable?: boolean; readOnly?: string; hash?: string; mtime?: number;
-  /** which read this is (an editor opens afresh with each) */
-  load?: number;
-};
-/** "Load all" asks first when more than this is left: it all goes into the browser */
-const LOAD_ALL_ASK = 100 * 1024 * 1024;
-/** (`scope`: "&project=<slug>" from a project's Files tab, else "") */
-const readUrl = (scope: string, p: string, offset: number, mode?: string, reveal?: boolean) =>
-  `${API}?op=read&path=${encodeURIComponent(p)}&offset=${offset}${mode ? `&mode=${mode}` : ""}${reveal ? "&reveal=1" : ""}${scope}`;
 type TrashItem = { id: string; name: string; originalPath: string; deletedAt: string; bytes: number; type: string };
 type DeletePlan = { path: string; type: string; bytes: number; files: number; truncated: boolean; running: { slug: string; pid: number }[] };
 type SortKey = "name" | "size" | "modified" | "type";
+/** an open file window: its file, its place in the cascade, its stacking, and a count that asks it to take the focus */
+type Win = { entry: Entry; index: number; z: number; focus: number };
 
-const API = `${BASE_PATH}/api/files`;
-// (no SVG: it would run on the admin's origin; it previews as text)
-const IMAGE = /\.(png|jpe?g|gif|webp|avif|ico)$/i, PDF = /\.pdf$/i;
-const within = (p: string, root: string) => root === "/" || p === root || p.startsWith(`${root}/`);
-/** kernel pseudo-files (/proc, /sys): listed, never read */
-const pseudo = (p: string) => within(p, "/proc") || within(p, "/sys");
-
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { cache: "no-store", ...init });
-  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw Object.assign(new Error(body.error ?? `HTTP ${res.status}`), { status: res.status });
-  return body;
-}
-const postTo = <T,>(body: object) => api<T>(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-
-const when = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 const extOf = (e: Entry) => (e.type === "dir" ? "folder" : e.name.includes(".") ? e.name.split(".").pop()!.toLowerCase() : "file");
 
 /** one folder in the tree, its subfolders loaded when opened */
@@ -96,12 +63,12 @@ function TreeNode({ path, name, depth, current, scope, onOpen }: { path: string;
 }
 
 /**
- * The admin's file explorer (T243): the roots' folders as a tree, a folder's files (sort, search, breadcrumbs), a preview
- * (any file, any size, a page at a time: text in a read-only Monaco, binary as hex, images, PDFs; a credential file's
- * contents on request), download, uploads of any size (chunked,
- * resumable, by picking or dropping files and folders), new folder, rename, move, and delete to a trash that restores.
- * A text file the server lets change opens in an editor instead: Save (Ctrl/Cmd+S), refused if it changed on disk
- * meanwhile; unsaved changes are asked about before another file, folder or page replaces them.
+ * The admin's file explorer (T243): the roots' folders as a tree, a folder's files (sort, search, breadcrumbs), the
+ * selection's details, download, uploads of any size (chunked, resumable, by picking or dropping files and folders), new
+ * folder, rename, move, and delete to a trash that restores. A file clicked opens in its own window (file-window.tsx,
+ * several at once, and they stay open from folder to folder): any file, any size, a page at a time, images, PDFs, a
+ * credential file's contents on request, and a text file the server lets change in an editor (file-viewer.tsx). Unsaved
+ * changes are asked about before their window closes, the file is renamed, moved or deleted, or the page is left.
  * `project`: a project's Files tab, the explorer rooted at that project's folder (the server holds every request of
  * this view to it, `&project=` / `project`).
  */
@@ -116,11 +83,10 @@ export function FileExplorer({ project }: { project?: string } = {}) {
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "name", desc: false });
   const [selected, setSelected] = useState<Entry | null>(null);
   const [writeRoots, setWriteRoots] = useState<string[]>([]);
-  const [preview, setPreview] = useState<Preview | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<
     | { kind: "mkdir" } | { kind: "rename"; entry: Entry } | { kind: "move"; entry: Entry } | { kind: "delete"; entry: Entry; plan?: DeletePlan; error?: string; force: boolean }
-    | { kind: "secret"; entry: Entry } | { kind: "trash"; items?: TrashItem[]; error?: string } | null
+    | { kind: "trash"; items?: TrashItem[]; error?: string } | null
   >(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -134,7 +100,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       setListing(l);
       setCwd(l.path);
       setError(null);
-      setSelected((s) => (s && l.entries.some((e) => e.path === s.path) ? s : null));
+      setSelected((s) => (s && l.entries.find((e) => e.path === s.path)) ?? null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -155,96 +121,79 @@ export function FileExplorer({ project }: { project?: string } = {}) {
     refreshTrash();
   }, [load, refreshTrash, scope]);
 
-  // (a file chosen: its preview; a credential file's contents only after "Show contents", for that file; `reloads`: read
-  // it again, after a refused save or dropped changes)
-  const [reloads, setReloads] = useState(0);
-  const reads = useRef(0), keepPreview = useRef<string | null>(null);
-  useEffect(() => {
-    // (the file just saved, its entry updated: the preview already holds what is on disk)
-    if (selected && keepPreview.current === selected.path) { keepPreview.current = null; return; }
-    if (!selected || selected.type !== "file" || pseudo(selected.path) || (!selected.secret && (IMAGE.test(selected.name) || PDF.test(selected.name)))) { setPreview(null); return; }
-    if (selected.secret) { setPreview({ path: selected.path, secret: true }); return; }
-    let live = true;
-    setPreview({ path: selected.path });
-    api<Page>(readUrl(scope, selected.path, 0))
-      .then((r) => live && setPreview({ path: selected.path, ...r, load: ++reads.current }), (err) => live && setPreview({ path: selected.path, error: (err as Error).message }));
-    return () => { live = false; };
-  }, [selected, scope, reloads]);
-
-  // The editor (a file the server lets change): unsaved changes, as Monaco reports them for the read it opened with.
-  const editing = !!selected && !!preview?.editable && !!preview.hash && preview.path === selected.path;
-  const editorKey = preview ? `${preview.path}#${preview.load ?? 0}` : "";
-  const [changes, setChanges] = useState<{ key: string; dirty: boolean } | null>(null);
-  const dirty = editing && changes?.key === editorKey && changes.dirty;
-  const [saving, setSaving] = useState(false);
-  const controls = useRef<EditorControls | null>(null);
-  /** the file with unsaved changes, for the asks below (they run outside a render) */
-  const unsaved = useRef<string | null>(null);
-  useEffect(() => { unsaved.current = dirty ? preview?.path ?? null : null; }, [dirty, preview?.path]);
-  /** true when what's being left has no unsaved changes, or they are to be dropped (one ask for clicks that come together) */
-  const asking = useRef<Promise<boolean> | null>(null);
-  const leave = useCallback((): Promise<boolean> => {
-    if (!unsaved.current) return Promise.resolve(true);
-    asking.current ??= confirmDialog(`${unsaved.current.split("/").pop()} has changes that aren't saved. Discard them?`, { title: "Unsaved changes", confirmLabel: "Discard changes", destructive: true })
-      .then((ok) => {
-        asking.current = null;
-        // (dropped: read again, so a file that stays open shows what is on disk)
-        if (ok) { unsaved.current = null; setChanges(null); setReloads((n) => n + 1); }
-        return ok;
-      });
-    return asking.current;
+  // The file windows: opened by a click on a file (again: that window to the front), the frontmost is `active`.
+  const isMobile = useIsMobile();
+  const [wins, setWins] = useState<Win[]>([]);
+  const zTop = useRef(Z_FILE_WINDOWS), opened = useRef(0);
+  const active = wins.reduce<Win | null>((top, w) => (!top || w.z > top.z ? w : top), null)?.entry.path;
+  const openFile = (e: Entry) => {
+    if (!viewable(e)) return;
+    setWins((ws) => (ws.some((w) => w.entry.path === e.path)
+      ? ws.map((w) => (w.entry.path === e.path ? { ...w, z: ++zTop.current, focus: w.focus + 1 } : w))
+      : [...ws, { entry: e, index: opened.current++, z: ++zTop.current, focus: 1 }]));
+  };
+  const raise = useCallback((p: string) => {
+    setWins((ws) => (Math.max(...ws.map((w) => w.z)) === ws.find((w) => w.entry.path === p)?.z ? ws : ws.map((w) => (w.entry.path === p ? { ...w, z: ++zTop.current } : w))));
   }, []);
-  /** opens a folder / chooses an entry, once unsaved changes are dealt with */
-  const go = (p: string) => { void leave().then((ok) => { if (ok) void load(p); }); };
-  const choose = (e: Entry) => {
-    if (e.path === selected?.path && unsaved.current) return; // (the file being edited: nothing to reload)
-    void leave().then((ok) => { if (ok) setSelected(e); });
+  /** the files with unsaved changes (a ref too, for the asks below, which run outside a render) */
+  const [dirty, setDirty] = useState<string[]>([]);
+  const unsaved = useRef<string[]>([]);
+  const markDirty = useCallback((p: string, d: boolean) => {
+    setDirty((ds) => {
+      const next = d === ds.includes(p) ? ds : d ? [...ds, p] : ds.filter((x) => x !== p);
+      unsaved.current = next;
+      return next;
+    });
+  }, []);
+  /** closes the windows of `paths` (their changes, if any, dropped) */
+  const closeWins = useCallback((gone: (p: string) => boolean) => {
+    setWins((ws) => ws.filter((w) => !gone(w.entry.path)));
+    unsaved.current = unsaved.current.filter((p) => !gone(p));
+    setDirty(unsaved.current);
+  }, []);
+  /**
+   * true when the windows of what's being left (`under`: a file or folder about to be renamed, moved or deleted; else
+   * all of them, the page) have no unsaved changes, or they are to be dropped: then those windows close (one ask for
+   * clicks that come together)
+   */
+  const asking = useRef<Promise<boolean> | null>(null);
+  const leave = useCallback((under?: string): Promise<boolean> => {
+    const hit = (p: string) => !under || within(p, under);
+    const lost = unsaved.current.filter(hit);
+    if (!lost.length) return Promise.resolve(true);
+    const names = lost.map((p) => p.split("/").pop());
+    asking.current ??= confirmDialog(
+      lost.length === 1 ? `${names[0]} has changes that aren't saved. Discard them?` : `${lost.length} files have changes that aren't saved (${names.join(", ")}). Discard them?`,
+      { title: "Unsaved changes", confirmLabel: "Discard changes", destructive: true },
+    ).then((ok) => {
+      asking.current = null;
+      if (ok) closeWins((p) => lost.includes(p));
+      return ok;
+    });
+    return asking.current;
+  }, [closeWins]);
+  /** a window's ×, or Escape in it: asks first when it has unsaved changes */
+  const closeWin = (p: string) => { void leave(p).then((ok) => { if (ok) closeWins((x) => x === p); }); };
+  /** a window's file saved: the listing (and the details, if it's the selection) show what is on disk now */
+  const saved = (p: string, r: { size: number; mtime: number }) => {
+    setSelected((s) => (s?.path === p ? { ...s, size: r.size, modified: new Date(r.mtime).toISOString() } : s));
+    void load(cwdRef.current);
   };
-  const save = async (text: string): Promise<boolean> => {
-    const p0 = preview;
-    if (!p0?.editable || !p0.hash) return false;
-    setSaving(true);
-    try {
-      const r = await post<{ path: string; size: number; mtime: number; hash: string }>({ op: "write", path: p0.path, content: text, hash: p0.hash });
-      setPreview((p) => (p?.path === p0.path && p.load === p0.load ? { ...p, text, size: r.size, next: r.size, hash: r.hash, mtime: r.mtime } : p));
-      if (selected?.path === p0.path) {
-        keepPreview.current = p0.path;
-        setSelected({ ...selected, size: r.size, modified: new Date(r.mtime).toISOString() });
-      }
-      toast.success(`Saved ${p0.path.split("/").pop()}`);
-      void load(cwd);
-      return true;
-    } catch (err) {
-      if ((err as { status?: number }).status === 409) {
-        const reload = await confirmDialog(
-          `${p0.path.split("/").pop()} changed on disk since it was opened, so it wasn't saved. Reload it from disk? The changes made here are then lost; cancel keeps them, to copy them first.`,
-          { title: "Changed on disk", confirmLabel: "Reload from disk", destructive: true },
-        );
-        if (reload) { unsaved.current = null; setReloads((n) => n + 1); void load(cwd); }
-      } else toast.error(`Not saved: ${(err as Error).message}`);
-      return false;
-    } finally {
-      setSaving(false);
-    }
+  /** opens a folder; the file windows stay open */
+  const go = (p: string) => { void load(p); };
+  /** a row clicked: selected, and a file opened in its window (not when the click was one of the row's buttons) */
+  const choose = (e: Entry, target?: EventTarget) => {
+    setSelected(e);
+    if (!(target as Element | undefined)?.closest?.("button")) openFile(e);
   };
-  // (Ctrl/Cmd+S saves with the focus anywhere on the page, not only in the editor, which handles it itself)
-  useEffect(() => {
-    if (!editing) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "s") return;
-      e.preventDefault();
-      controls.current?.save();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editing]);
   // (leaving the page with unsaved changes: the browser asks on a reload or a close, the app's dialog on a link)
+  const anyDirty = dirty.length > 0;
   useEffect(() => {
-    if (!dirty) return;
+    if (!anyDirty) return;
     const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); };
     const onClick = (e: MouseEvent) => {
       const a = (e.target as Element | null)?.closest?.("a[href]");
-      if (!(a instanceof HTMLAnchorElement) || !unsaved.current || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (!(a instanceof HTMLAnchorElement) || !unsaved.current.length || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       if (a.target === "_blank" || a.hasAttribute("download")) return;
       e.preventDefault();
       e.stopPropagation();
@@ -253,7 +202,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
     window.addEventListener("beforeunload", onUnload);
     window.addEventListener("click", onClick, true);
     return () => { window.removeEventListener("beforeunload", onUnload); window.removeEventListener("click", onClick, true); };
-  }, [dirty, leave]);
+  }, [anyDirty, leave]);
 
   const entries = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -295,8 +244,10 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       setBusy(false);
     }
   };
+  // (renamed, moved or deleted: its windows, or those of the files in it, close; changes in them are asked about first)
+  const gone = (entry: Entry) => () => { setSelected(null); closeWins((p) => within(p, entry.path)); };
   const openDelete = async (entry: Entry) => {
-    if (!(await leave())) return;
+    if (!(await leave(entry.path))) return;
     setDialog({ kind: "delete", entry, force: false });
     api<DeletePlan>(`${API}?op=plan-delete&path=${encodeURIComponent(entry.path)}${scope}`).then(
       (plan) => setDialog((d) => (d?.kind === "delete" && d.entry.path === entry.path ? { ...d, plan } : d)),
@@ -304,12 +255,12 @@ export function FileExplorer({ project }: { project?: string } = {}) {
     );
   };
   const openRename = async (entry: Entry) => {
-    if (!(await leave())) return;
+    if (!(await leave(entry.path))) return;
     setDraft(entry.name);
     setDialog({ kind: "rename", entry });
   };
   const openMove = async (entry: Entry) => {
-    if (!(await leave())) return;
+    if (!(await leave(entry.path))) return;
     setDraft(cwd);
     setDialog({ kind: "move", entry });
   };
@@ -317,12 +268,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
     setDialog({ kind: "trash" });
     api<{ items: TrashItem[] }>(`${API}?op=trash${scope}`).then((t) => setDialog((d) => (d?.kind === "trash" ? { ...d, items: t.items } : d)), () => {});
   };
-  const download = (e: Entry, confirmed = false) => {
-    if (e.secret && !confirmed) { setDialog({ kind: "secret", entry: e }); return; }
-    const a = document.createElement("a");
-    a.href = `${API}/raw?path=${encodeURIComponent(e.path)}&download=1${e.secret ? "&confirm=1" : ""}${scope}`;
-    a.click();
-  };
+  const download = (e: Entry) => void downloadFile(scope, e);
   /** a folder as a .tar.gz (credential files and node_modules / build dirs left out: api/files/archive) */
   const downloadFolder = (p: string) => {
     const a = document.createElement("a");
@@ -341,45 +287,10 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       </button>
     </th>
   );
-  const reveal = (e: Entry) => {
-    setPreview({ path: e.path, secret: true, revealing: true });
-    api<Page>(readUrl(scope, e.path, 0, undefined, true))
-      .then((r) => setPreview((p) => (p?.path === e.path ? { path: e.path, ...r, reveal: true } : p)), (err) => setPreview((p) => (p?.path === e.path ? { path: e.path, secret: true, error: (err as Error).message } : p)));
-  };
-  /** the preview's next page, or (`all`) every page left until the end or "Stop"; appended, the viewer keeps its place */
-  const stopLoading = useRef(false), previewPath = useRef<string | null>(null);
-  useEffect(() => { previewPath.current = preview?.path ?? null; }, [preview?.path]);
-  const loadMore = async (all: boolean) => {
-    const p0 = preview;
-    if (!p0 || p0.next == null || p0.size == null || p0.more) return;
-    const left = p0.size - p0.next;
-    if (all && left > LOAD_ALL_ASK && !(await confirmDialog(`Load the remaining ${formatBytes(left)} into the browser? A file this big can make this tab slow, or crash it.`, { confirmLabel: "Load it all" }))) return;
-    stopLoading.current = false;
-    setPreview((p) => (p?.path === p0.path ? { ...p, more: true, moreError: undefined } : p));
-    let next = p0.next, size = p0.size;
-    try {
-      do {
-        const r = await api<Page>(readUrl(scope, p0.path, next, p0.mode, p0.reveal));
-        if (r.next <= next) break; // (nothing new: the file shrank)
-        next = r.next;
-        size = r.size;
-        setPreview((p) => (p?.path === p0.path ? { ...p, text: (p.text ?? "") + (p.mode === "hex" ? "\n" : "") + r.text, next: r.next, size: r.size } : p));
-      } while (all && next < size && !stopLoading.current && previewPath.current === p0.path);
-    } catch (err) {
-      setPreview((p) => (p?.path === p0.path ? { ...p, moreError: (err as Error).message } : p));
-    } finally {
-      setPreview((p) => (p?.path === p0.path ? { ...p, more: false } : p));
-    }
-  };
   /** changes are allowed here (the server checks again) */
   const writable = writeRoots.some((w) => within(cwd, w));
   const changeable = (p: string) => writeRoots.some((w) => within(p, w) && p !== w);
   const readOnlyWhy = `Read-only here: changes only under ${writeRoots.join(", ")}`;
-  // (the file's size and time: as last read when the editor read it, which can be newer than the listing)
-  const shown = editing && preview.size != null && preview.mtime != null
-    ? { size: preview.size, modified: new Date(preview.mtime).toISOString() }
-    : { size: selected?.size ?? 0, modified: selected?.modified ?? "" };
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -406,7 +317,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       </div>
       {error && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[240px_1fr_380px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[240px_1fr_300px]">
         <aside className="min-h-0 overflow-auto rounded-lg border p-1" aria-label="Folders">
           <ul>{roots.map((r) => <TreeNode key={r} path={r} name={r} depth={0} current={cwd} scope={scope} onOpen={go} />)}</ul>
         </aside>
@@ -424,7 +335,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
           <ContextMenuTrigger onContextMenuCapture={() => setMenuEntry(null)}>
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-background text-left text-xs text-muted-foreground">
-              <tr>{th("name", "Name", "w-full")}{th("size", "Size", "text-right whitespace-nowrap")}{th("modified", "Modified", "whitespace-nowrap")}{th("type", "Type")}<th className="w-24" /></tr>
+              <tr>{th("name", "Name", "w-full")}{th("size", "Size", "text-right whitespace-nowrap")}{th("modified", "Modified", "whitespace-nowrap")}{th("type", "Type")}<th className="w-28" /></tr>
             </thead>
             <tbody>
               {listing?.parent && (
@@ -433,8 +344,9 @@ export function FileExplorer({ project }: { project?: string } = {}) {
                 </tr>
               )}
               {entries.map((e) => (
-                <tr key={e.path} aria-selected={selected?.path === e.path} onClick={() => choose(e)} onContextMenu={() => setMenuEntry(e)} onDoubleClick={() => (e.type === "dir" ? go(e.path) : choose(e))}
-                  className={cn("group cursor-default border-t hover:bg-muted/60", selected?.path === e.path && "bg-muted")}>
+                <tr key={e.path} aria-selected={selected?.path === e.path} onClick={(ev) => choose(e, ev.target)} onContextMenu={() => setMenuEntry(e)} onDoubleClick={(ev) => (e.type === "dir" ? go(e.path) : choose(e, ev.target))}
+                  className={cn("group border-t hover:bg-muted/60", viewable(e) ? "cursor-pointer" : "cursor-default", selected?.path === e.path && "bg-muted")}
+                  title={viewable(e) ? `Open ${e.name} in a window` : undefined}>
                   <td className="max-w-0 px-2 py-1">
                     <span className="flex items-center gap-1.5 truncate">
                       {e.type === "dir" ? <Folder className="size-4 shrink-0 text-amber-500" /> : e.secret ? <FileLock className="size-4 shrink-0 text-rose-500" /> : e.type === "symlink" ? <Link2 className="size-4 shrink-0 text-muted-foreground" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
@@ -446,10 +358,15 @@ export function FileExplorer({ project }: { project?: string } = {}) {
                   <td className="px-2 py-1 text-muted-foreground">{e.secret ? "credential" : extOf(e)}</td>
                   <td className="px-1 py-1">
                     <span className="flex justify-end gap-0.5 opacity-60 group-hover:opacity-100">
-                      {e.type === "file" && !pseudo(e.path) && <button type="button" title="Download" aria-label={`Download ${e.name}`} onClick={() => download(e)} className="rounded p-1 hover:bg-background"><Download className="size-3.5" /></button>}
+                      {viewable(e) && (
+                        <>
+                          <button type="button" title="Open in a window" aria-label={`Open ${e.name}`} onClick={() => openFile(e)} className="rounded p-1 hover:bg-background"><AppWindow className="size-3.5" /></button>
+                          <button type="button" title="Download" aria-label={`Download ${e.name}`} onClick={() => download(e)} className="rounded p-1 hover:bg-background"><Download className="size-3.5" /></button>
+                        </>
+                      )}
                       {changeable(e.path) && (
                         <>
-                          <button type="button" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => void openRename(e)} className="rounded p-1 hover:bg-background"><Pencil className="size-3.5" /></button>
+                          <button type="button" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => void openRename(e)} className="rounded p-1 hover:bg-background"><TextCursorInput className="size-3.5" /></button>
                           <button type="button" title="Move" aria-label={`Move ${e.name}`} onClick={() => void openMove(e)} className="rounded p-1 hover:bg-background"><MoveRight className="size-3.5" /></button>
                           <button type="button" title="Delete" aria-label={`Delete ${e.name}`} onClick={() => void openDelete(e)} className="rounded p-1 text-destructive hover:bg-background"><Trash2 className="size-3.5" /></button>
                         </>
@@ -469,7 +386,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
           </table>
           </ContextMenuTrigger>
           {menuTarget && (
-            <ContextMenuContent className="w-56">
+            <ContextMenuContent className="w-56" positionerStyle={{ zIndex: Z_FILE_DIALOGS }}>
               <ContextMenuLabel className="truncate font-mono" title={menuTarget.path}>
                 {menuEntry ? menuTarget.name : `${menuTarget.path} (this folder)`}
               </ContextMenuLabel>
@@ -477,7 +394,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
               {menuEntry && (menuTarget.type === "dir" ? (
                 <ContextMenuItem onClick={() => go(menuTarget.path)}><FolderOpen /> Open</ContextMenuItem>
               ) : (
-                <ContextMenuItem onClick={() => choose(menuTarget)}><Eye /> Preview</ContextMenuItem>
+                viewable(menuTarget) && <ContextMenuItem onClick={() => { setSelected(menuTarget); openFile(menuTarget); }}><AppWindow /> Open in a window</ContextMenuItem>
               ))}
               {!pseudo(menuTarget.path) && (menuTarget.type === "dir" ? (
                 <ContextMenuItem onClick={() => downloadFolder(menuTarget.path)} title="Credential files, node_modules and build folders are left out">
@@ -492,7 +409,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
               {menuEntry && changeable(menuTarget.path) && (
                 <>
                   <ContextMenuSeparator />
-                  <ContextMenuItem onClick={() => void openRename(menuTarget)}><Pencil /> Rename</ContextMenuItem>
+                  <ContextMenuItem onClick={() => void openRename(menuTarget)}><TextCursorInput /> Rename</ContextMenuItem>
                   <ContextMenuItem onClick={() => void openMove(menuTarget)}><MoveRight /> Move</ContextMenuItem>
                   <ContextMenuItem variant="destructive" onClick={() => void openDelete(menuTarget)}><Trash2 /> Delete</ContextMenuItem>
                 </>
@@ -502,87 +419,47 @@ export function FileExplorer({ project }: { project?: string } = {}) {
           </ContextMenu>
         </section>
 
-        <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border" aria-label="Preview">
+        <aside className="flex min-h-0 flex-col overflow-hidden rounded-lg border" aria-label="Details">
           {!selected ? (
-            <p className="p-4 text-sm text-muted-foreground">Select a file to preview it.</p>
+            <p className="p-4 text-sm text-muted-foreground">Click a file to open it in its own window, where a text file can be edited. Several can be open at once.</p>
           ) : (
             <>
               <div className="flex items-center gap-2 border-b px-3 py-2">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium" title={selected.path}>
-                  {selected.name}{dirty && <span className="ml-1.5 text-amber-500" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
+                  {selected.name}{dirty.includes(selected.path) && <span className="ml-1.5 text-amber-500" title="Unsaved changes" aria-label="Unsaved changes">●</span>}
                 </span>
-                {editing ? (
-                  <Button size="sm" disabled={!dirty || saving} title="Save (Ctrl+S)" onClick={() => controls.current?.save()}>
-                    {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} Save
-                  </Button>
-                ) : preview?.path === selected.path && preview.readOnly && preview.mode === "text" && (
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground" title={`Read-only: ${preview.readOnly}`}><Lock className="size-3.5" /> Read-only</span>
-                )}
-                {selected.type === "file" && !pseudo(selected.path) && <Button size="sm" variant="outline" onClick={() => download(selected)}><Download className="size-4" /> Download</Button>}
+                {viewable(selected) ? <Button size="sm" onClick={() => openFile(selected)}><AppWindow className="size-4" /> Open</Button>
+                  : selected.type === "dir" && <Button size="sm" variant="outline" onClick={() => go(selected.path)}><FolderOpen className="size-4" /> Open</Button>}
+                {viewable(selected) && <Button size="sm" variant="outline" aria-label={`Download ${selected.name}`} title="Download" onClick={() => download(selected)}><Download className="size-4" /></Button>}
               </div>
-              <div className="min-h-0 flex-1 overflow-auto">
-                {selected.type === "dir" ? <p className="p-4 text-sm text-muted-foreground">A folder. Double-click it to open.</p>
-                  : selected.type !== "file" ? <p className="p-4 text-sm text-muted-foreground">{selected.type === "symlink" ? "A symbolic link." : "Not a regular file (a device, socket or pipe): nothing to preview."}</p>
-                  : pseudo(selected.path) ? <p className="p-4 text-sm text-muted-foreground">A kernel file (/proc, /sys): listed here, not read.</p>
-                  : selected.secret && preview?.path === selected.path && preview.secret ? (
-                    <div className="space-y-3 p-4 text-sm">
-                      <p><FileLock className="mb-2 size-5 text-rose-500" />A credential file: it may hold passwords or keys, so its contents stay hidden until you ask. Viewing is logged (the path only).</p>
-                      {preview.error && <p className="text-destructive">{preview.error}</p>}
-                      <Button size="sm" variant="outline" disabled={preview.revealing} onClick={() => reveal(selected)}>
-                        {preview.revealing ? <Loader2 className="size-4 animate-spin" /> : <Eye className="size-4" />} Show contents
-                      </Button>
-                    </div>
-                  )
-                  // eslint-disable-next-line @next/next/no-img-element -- (the admin's own API, behind its session: not for the image optimizer)
-                  : !selected.secret && IMAGE.test(selected.name) ? <img src={`${API}/raw?path=${encodeURIComponent(selected.path)}${scope}`} alt={selected.name} className="mx-auto max-h-full max-w-full object-contain p-2" />
-                  : !selected.secret && PDF.test(selected.name) ? <iframe title={selected.name} src={`${API}/raw?path=${encodeURIComponent(selected.path)}${scope}`} className="h-full w-full" />
-                  : !preview || preview.path !== selected.path ? <p className="p-4 text-sm text-muted-foreground">Loading…</p>
-                  : preview.error ? <p className="p-4 text-sm text-destructive">{preview.error}</p>
-                  : (
-                    <div className="flex h-full flex-col">
-                      {(preview.mode === "hex" || (preview.next ?? 0) < (preview.size ?? 0)) && (
-                        <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1 text-xs text-muted-foreground">
-                          <span className="mr-auto">
-                            {preview.mode === "hex" && "A binary file, as hex. "}
-                            {(preview.next ?? 0) < (preview.size ?? 0) ? `The first ${formatBytes(preview.next ?? 0)} of ${formatBytes(preview.size ?? 0)}.` : `All ${formatBytes(preview.size ?? 0)}.`}
-                          </span>
-                          {preview.moreError && <span className="text-destructive">{preview.moreError}</span>}
-                          {preview.more ? (
-                            <>
-                              <Loader2 className="size-3.5 animate-spin" />
-                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => { stopLoading.current = true; }}>Stop</button>
-                            </>
-                          ) : (preview.next ?? 0) < (preview.size ?? 0) && (
-                            <>
-                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => void loadMore(false)}>Load more</button>
-                              <button type="button" className="rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground" onClick={() => void loadMore(true)}>Load all</button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                      <div className="min-h-[300px] flex-1">
-                        {editing ? (
-                          <MonacoViewer key={editorKey} name={selected.name} text={preview.text ?? ""} editable onSave={save}
-                            onDirty={(d) => setChanges({ key: editorKey, dirty: d })} onReady={(c) => { controls.current = c; }} />
-                        ) : <MonacoViewer name={preview.mode === "hex" ? `${selected.name}.hexdump` : selected.name} text={preview.text ?? ""} />}
-                      </div>
-                    </div>
-                  )}
+              <div className="min-h-0 flex-1 overflow-auto p-4 text-sm text-muted-foreground">
+                {selected.type === "dir" ? "A folder. Double-click it to open."
+                  : selected.type !== "file" ? (selected.type === "symlink" ? "A symbolic link." : "Not a regular file (a device, socket or pipe): nothing to preview.")
+                  : pseudo(selected.path) ? "A kernel file (/proc, /sys): listed here, not read."
+                  : selected.secret ? <><FileLock className="mb-2 size-5 text-rose-500" />A credential file: its window shows the contents only when asked to.</>
+                  : wins.some((w) => w.entry.path === selected.path) ? "Open in a window: Open brings it to the front."
+                  : "Open shows it in its own window: move it by its title, resize it from an edge or corner."}
               </div>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 border-t px-3 py-2 text-xs text-muted-foreground">
                 <dt>Path</dt><dd className="truncate font-mono" title={selected.path}>{selected.path}</dd>
-                <dt>Size</dt><dd>{selected.type === "file" ? `${formatBytes(shown.size)} (${shown.size.toLocaleString()} bytes)` : "—"}</dd>
-                <dt>Modified</dt><dd>{when(shown.modified)}</dd>
+                <dt>Size</dt><dd>{selected.type === "file" ? `${formatBytes(selected.size)} (${selected.size.toLocaleString()} bytes)` : "—"}</dd>
+                <dt>Modified</dt><dd>{when(selected.modified)}</dd>
               </dl>
             </>
           )}
         </aside>
       </div>
 
+      {wins.map((w) => (
+        <FileWindow key={w.entry.path} entry={w.entry} scope={scope} project={project} index={w.index} z={w.z} active={w.entry.path === active}
+          focusTick={w.focus} mobile={isMobile} dirty={dirty.includes(w.entry.path)} onRaise={() => raise(w.entry.path)} onClose={() => closeWin(w.entry.path)}
+          onDirty={(d) => markDirty(w.entry.path, d)} onSaved={(r) => saved(w.entry.path, r)} />
+      ))}
+
       <UploadList />
 
       <Dialog open={!!dialog} onOpenChange={(o) => { if (!o && !busy) setDialog(null); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg" style={{ zIndex: Z_FILE_DIALOGS }}>
           {dialog?.kind === "mkdir" && (
             <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "mkdir", dir: cwd, name: draft })); }}>
               <DialogHeader><DialogTitle>New folder</DialogTitle><DialogDescription>In {cwd}</DialogDescription></DialogHeader>
@@ -591,14 +468,14 @@ export function FileExplorer({ project }: { project?: string } = {}) {
             </form>
           )}
           {dialog?.kind === "rename" && (
-            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "rename", path: dialog.entry.path, name: draft }), () => setSelected(null)); }}>
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "rename", path: dialog.entry.path, name: draft }), gone(dialog.entry)); }}>
               <DialogHeader><DialogTitle>Rename</DialogTitle><DialogDescription>{dialog.entry.path}</DialogDescription></DialogHeader>
               <Input autoFocus aria-label="New name" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3" />
               <DialogFooter><Button type="submit" disabled={!draft.trim() || draft === dialog.entry.name || busy}>Rename</Button></DialogFooter>
             </form>
           )}
           {dialog?.kind === "move" && (
-            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "move", path: dialog.entry.path, to: draft }), () => setSelected(null)); }}>
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "move", path: dialog.entry.path, to: draft }), gone(dialog.entry)); }}>
               <DialogHeader><DialogTitle>Move {dialog.entry.name}</DialogTitle><DialogDescription>To the folder (a full path inside {roots.join(" or ")}):</DialogDescription></DialogHeader>
               <Input autoFocus aria-label="Destination folder" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3 font-mono" />
               <DialogFooter><Button type="submit" disabled={!draft.trim() || busy}>Move</Button></DialogFooter>
@@ -625,17 +502,10 @@ export function FileExplorer({ project }: { project?: string } = {}) {
                 )}
               <DialogFooter>
                 <Button variant="destructive" disabled={busy || !dialog.plan || !!dialog.error || (dialog.plan.running.length > 0 && !dialog.force)}
-                  onClick={() => act(() => post({ op: "delete", path: dialog.entry.path, force: dialog.force }), () => setSelected(null))}>
+                  onClick={() => act(() => post({ op: "delete", path: dialog.entry.path, force: dialog.force }), gone(dialog.entry))}>
                   <Trash2 className="size-4" /> Move to the trash
                 </Button>
               </DialogFooter>
-            </>
-          )}
-          {dialog?.kind === "secret" && (
-            <>
-              <DialogHeader><DialogTitle>Download a credential file?</DialogTitle><DialogDescription className="font-mono break-all">{dialog.entry.path}</DialogDescription></DialogHeader>
-              <p className="text-sm">It may hold passwords or keys. It downloads to this computer; the download is logged.</p>
-              <DialogFooter><Button onClick={() => { download(dialog.entry, true); setDialog(null); }}><Download className="size-4" /> Download</Button></DialogFooter>
             </>
           )}
           {dialog?.kind === "trash" && (

@@ -5,6 +5,15 @@
  * global controls stay reachable above the terminals.
  */
 
+/**
+ * The file explorer's file windows (Files, a project's Files tab) count up from
+ * here as they're raised: above the page and its dialogs, under the terminals.
+ */
+export const Z_FILE_WINDOWS = 1_000;
+
+/** The explorer's own dialogs (rename, move, delete, …): above its file windows. */
+export const Z_FILE_DIALOGS = 9_000;
+
 /** Floating terminal windows count up from here as they're raised. */
 export const Z_TERMINAL_WINDOWS = 10_000;
 

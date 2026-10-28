@@ -1,17 +1,24 @@
 "use client";
 
-// The file explorer's Monaco (T243), set up as the Ops view's code windows are (monaco from the package, its base
-// worker bundled); highlighting only, so no language workers. Read-only for the preview, or an editor for a file the
-// server says can be saved (`editable`).
+// The file explorer's Monaco (T243), set up as the Ops view's code windows are (monaco from the package, its workers
+// bundled): the language workers too, which Monaco's JSON / CSS / HTML / TS modes ask for (outline, folding), and the
+// same mapping as code-window.tsx, so whichever of the two loads first leaves a complete MonacoEnvironment. Read-only
+// for the preview, or an editor for a file the server says can be saved (`editable`).
 import { Editor, loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
 
 loader.config({ monaco });
 if (typeof self !== "undefined") {
-  (self as unknown as { MonacoEnvironment?: object }).MonacoEnvironment ??= {
-    getWorker: () => new Worker(new URL("../agents3d/ops/monaco/editor.worker.ts", import.meta.url), { type: "module" }),
+  // (`new URL(...)` literals, each, so webpack bundles the workers)
+  const worker = (label: string) => {
+    if (label === "typescript" || label === "javascript") return new Worker(new URL("../agents3d/ops/monaco/ts.worker.ts", import.meta.url), { type: "module" });
+    if (label === "json") return new Worker(new URL("../agents3d/ops/monaco/json.worker.ts", import.meta.url), { type: "module" });
+    if (label === "css" || label === "scss" || label === "less") return new Worker(new URL("../agents3d/ops/monaco/css.worker.ts", import.meta.url), { type: "module" });
+    if (label === "html" || label === "handlebars" || label === "razor") return new Worker(new URL("../agents3d/ops/monaco/html.worker.ts", import.meta.url), { type: "module" });
+    return new Worker(new URL("../agents3d/ops/monaco/editor.worker.ts", import.meta.url), { type: "module" });
   };
+  (self as unknown as { MonacoEnvironment?: { getWorker: (id: string, label: string) => Worker } }).MonacoEnvironment ??= { getWorker: (_id, label) => worker(label) };
 }
 
 const LANG: Record<string, string> = {

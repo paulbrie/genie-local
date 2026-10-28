@@ -18,12 +18,16 @@ function ContextMenuTrigger({ ...props }: ContextMenuPrimitive.Trigger.Props) {
 
 function ContextMenuContent({
   className,
+  positionerStyle,
   children,
   ...props
-}: ContextMenuPrimitive.Popup.Props) {
+}: ContextMenuPrimitive.Popup.Props & {
+  /** e.g. a higher z-index, for a menu over floating windows */
+  positionerStyle?: React.CSSProperties
+}) {
   return (
     <ContextMenuPrimitive.Portal>
-      <ContextMenuPrimitive.Positioner className="isolate z-50 outline-none">
+      <ContextMenuPrimitive.Positioner className="isolate z-50 outline-none" style={positionerStyle}>
         <ContextMenuPrimitive.Popup
           data-slot="context-menu-content"
           className={cn(
