@@ -109,6 +109,8 @@ describe("propsFor: nothing forbidden gets in", () => {
     assert.deepEqual(propsFor("terminal.detach", { seconds: -1 }), {});
     assert.deepEqual(propsFor("auth.failed", { reason: "wrong password for paul" }), {});
     assert.deepEqual(propsFor("auth.login", { reason: "wrong_password" }), {});
+    assert.deepEqual(propsFor("auth.login", { via: "google" }), {});
+    assert.deepEqual(propsFor("auth.login", { via: "paul@example.com" }), {});
     assert.deepEqual(propsFor("nope", { path: "/" }), {});
   });
 
@@ -128,6 +130,9 @@ describe("propsFor: nothing forbidden gets in", () => {
       seconds: 13,
     });
     assert.deepEqual(propsFor("auth.failed", { reason: "wrong_password" }), { reason: "wrong_password" });
+    assert.deepEqual(propsFor("auth.failed", { reason: "not_allowed" }), { reason: "not_allowed" });
+    assert.deepEqual(propsFor("auth.login", { via: "genie" }), { via: "genie" });
+    assert.deepEqual(propsFor("auth.login", { via: "password" }), { via: "password" });
   });
 });
 

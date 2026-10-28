@@ -1,6 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -191,6 +193,11 @@ export const adminLogins = pgTable("admin_logins", {
   userAgent: text("user_agent"),
   // The session this login opened / this logout ended (admin_sessions.id).
   sessionId: text("session_id"),
+  // Who, for a Sign in with Genie attempt (the Google account's email) and a
+  // logout of that person's session; null for the shared password login.
+  email: text("email"),
+  // 'password' (the shared login form) | 'genie' (Sign in with Genie); null on logouts and older rows.
+  via: text("via"),
 });
 
 /**
@@ -204,9 +211,44 @@ export const adminSessions = pgTable("admin_sessions", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
   ip: text("ip"),
   userAgent: text("user_agent"),
-  // 'login' (the login form) | 'token' (a cookie first seen elsewhere, e.g. `npm run session`)
+  // 'login' (the password form) | 'genie' (Sign in with Genie) | 'token' (a cookie first seen elsewhere, e.g. `npm run session`)
   via: text("via").notNull().default("login"),
   endedAt: timestamp("ended_at", { withTimezone: true }),
+  // The person the session is (its cookie's `user:<email>`); null for the shared admin login.
+  email: text("email"),
+});
+
+/**
+ * Local accounts: who may Sign in with Genie (Google, brokered by the genie
+ * manager) on this server. The manager vouches that the person is a member of
+ * the server's genie project; an enabled row here is this server's own say.
+ * The shared ADMIN_USER / ADMIN_PASSWORD login doesn't use it.
+ */
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: serial("id").primaryKey(),
+    // Lowercased (the manager sends it lowercased too).
+    email: text("email").notNull(),
+    name: text("name").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("admin_users_email_key").on(t.email),
+    check("admin_users_email_lower", sql`${t.email} = lower(${t.email})`),
+  ],
+);
+
+/**
+ * Sign in with Genie assertions already used, by `jti`, kept until they expire
+ * so one can't be posted twice. In the database rather than in memory so prod
+ * and dev (same instance, same audience) and a restart all share it.
+ */
+export const adminSsoJtis = pgTable("admin_sso_jtis", {
+  jti: text("jti").primaryKey(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 });
 
 /**
@@ -349,4 +391,5 @@ export type TaskComment = typeof taskComments.$inferSelect;
 export type TaskAttachment = typeof taskAttachments.$inferSelect;
 export type AdminLogin = typeof adminLogins.$inferSelect;
 export type AdminSession = typeof adminSessions.$inferSelect;
+export type AdminUser = typeof adminUsers.$inferSelect;
 export type ProjectRecipe = typeof projectRecipes.$inferSelect;

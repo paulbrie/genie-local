@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     username: string | null,
     body: { status: number; error: string; headers?: Record<string, string> },
   ) => {
-    await recordLoginAttempt({ ok: false, reason, username, ip, userAgent });
+    await recordLoginAttempt({ ok: false, reason, username, via: "password", ip, userAgent });
     // Only why it failed: never the username that was tried.
     recordActivity("auth.failed", { ip, ua: userAgent, props: { reason } });
     return NextResponse.json(
@@ -101,8 +101,8 @@ export async function POST(req: Request) {
   const token = await createSessionToken();
   const sessionId = sessionIdOf(token);
   await openSession(sessionId, ip, userAgent);
-  await recordLoginAttempt({ ok: true, username: typedUser, ip, userAgent, sessionId });
-  recordActivity("auth.login", { session: sessionId, ip, ua: userAgent });
+  await recordLoginAttempt({ ok: true, username: typedUser, via: "password", ip, userAgent, sessionId });
+  recordActivity("auth.login", { session: sessionId, ip, ua: userAgent, props: { via: "password" } });
 
   const res = NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, token, {

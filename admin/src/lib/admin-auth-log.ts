@@ -14,8 +14,13 @@ export const LOGIN_FAILURES = {
   bad_request: "Malformed request (no username / password sent)",
   not_configured: "No ADMIN_PASSWORD set on the server: every login fails",
   forbidden_origin: "Sent from another website (cross-origin request blocked)",
+  not_allowed: "Sign in with Genie: this Google account isn't on the Users list, or is disabled",
+  genie_invalid: "Sign in with Genie: the manager's assertion didn't verify (why is in the server log)",
 } as const;
 export type LoginFailure = keyof typeof LOGIN_FAILURES;
+
+/** How a login came in: the shared password form or Sign in with Genie. */
+export type LoginVia = "password" | "genie";
 
 /** A session seen this recently counts as connected (the top bar beats every 20 s). */
 export const CONNECTED_MS = 60_000;
@@ -44,6 +49,9 @@ export async function recordLoginAttempt(entry: {
   ok: boolean;
   reason?: LoginFailure;
   username?: string | null;
+  /** The Google account's email, for Sign in with Genie. */
+  email?: string | null;
+  via?: LoginVia;
   ip: string;
   userAgent: string | null;
   sessionId?: string;
@@ -58,20 +66,35 @@ export async function recordLoginAttempt(entry: {
       ip: entry.ip,
       userAgent: entry.userAgent?.slice(0, 500) ?? null,
       sessionId: entry.sessionId ?? null,
+      email: entry.email?.slice(0, 254) ?? null,
+      via: entry.via ?? null,
     }),
   );
 }
 
-export async function openSession(id: string, ip: string, userAgent: string | null) {
+/** A new session: from the password form (email null) or Sign in with Genie (the person's email). */
+export async function openSession(
+  id: string,
+  ip: string,
+  userAgent: string | null,
+  person: { via: LoginVia; email: string | null } = { via: "password", email: null },
+) {
   await quietly("open session", () =>
     db
       .insert(adminSessions)
-      .values({ id, ip, userAgent: userAgent?.slice(0, 500) ?? null, via: "login" })
+      .values({
+        id,
+        ip,
+        userAgent: userAgent?.slice(0, 500) ?? null,
+        // admin_sessions has always called the password form 'login'.
+        via: person.via === "genie" ? "genie" : "login",
+        email: person.email,
+      })
       .onConflictDoNothing(),
   );
 }
 
-export async function endSession(id: string, ip: string, userAgent: string | null) {
+export async function endSession(id: string, ip: string, userAgent: string | null, email: string | null = null) {
   await quietly("logout", async () => {
     await db.update(adminSessions).set({ endedAt: new Date() }).where(eq(adminSessions.id, id));
     await db.insert(adminLogins).values({
@@ -80,16 +103,17 @@ export async function endSession(id: string, ip: string, userAgent: string | nul
       ip,
       userAgent: userAgent?.slice(0, 500) ?? null,
       sessionId: id,
+      email,
     });
   });
 }
 
 /** The heartbeat: this session is here now (created if it predates tracking). */
-export async function touchSession(id: string, ip: string, userAgent: string | null) {
+export async function touchSession(id: string, ip: string, userAgent: string | null, email: string | null = null) {
   await quietly("heartbeat", () =>
     db
       .insert(adminSessions)
-      .values({ id, ip, userAgent: userAgent?.slice(0, 500) ?? null, via: "token" })
+      .values({ id, ip, userAgent: userAgent?.slice(0, 500) ?? null, via: "token", email })
       .onConflictDoUpdate({
         target: adminSessions.id,
         set: { lastSeenAt: sql`now()`, ip, userAgent: userAgent?.slice(0, 500) ?? null },

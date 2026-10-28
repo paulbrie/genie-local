@@ -23,6 +23,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
 import { clientIpOf, recordActivity, sessionIdOf } from "../src/lib/activity-core.mjs";
+import { subjectAllowed } from "../src/lib/session-access.mjs";
 
 const require = createRequire(import.meta.url);
 // node-pty & ws are CommonJS with native/typed exports — require() is the
@@ -86,12 +87,15 @@ export async function verifySessionToken(token) {
   let diff = 0;
   for (let i = 0; i < expected.length; i++) diff |= expected[i] ^ got[i];
   if (diff !== 0) return false;
+  let p;
   try {
-    const p = JSON.parse(new TextDecoder().decode(fromB64url(body)));
-    return typeof p.exp === "number" && p.exp > Date.now();
+    p = JSON.parse(new TextDecoder().decode(fromB64url(body)));
   } catch {
     return false;
   }
+  if (typeof p.exp !== "number" || p.exp <= Date.now()) return false;
+  // (a Sign in with Genie session only while its person is still on the Users list and enabled)
+  return subjectAllowed(typeof p.sub === "string" ? p.sub : "admin");
 }
 
 /** Pull one cookie value out of a Cookie header. */

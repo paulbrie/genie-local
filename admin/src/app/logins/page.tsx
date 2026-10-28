@@ -44,7 +44,8 @@ export default async function LoginsPage({
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Logins</h1>
         <p className="text-sm text-muted-foreground">
-          Who is signed in to the admin, from where, and every login attempt with the reason a failed one failed.
+          Who is signed in to the admin (a person, through Sign in with Genie, or the shared password login), from
+          where, and every login attempt with the reason a failed one failed.
         </p>
       </header>
 
@@ -81,6 +82,7 @@ export default async function LoginsPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>State</TableHead>
+                  <TableHead>Who</TableHead>
                   <TableHead>Browser</TableHead>
                   <TableHead>IP</TableHead>
                   <TableHead>Signed in</TableHead>
@@ -94,6 +96,9 @@ export default async function LoginsPage({
                     <TableRow key={s.id}>
                       <TableCell className={state === "Connected" ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"}>
                         {state}
+                      </TableCell>
+                      <TableCell>
+                        <Who email={s.email} via={s.via === "genie" ? "genie" : s.via === "login" ? "password" : null} />
                       </TableCell>
                       <TableCell title={s.userAgent ?? undefined}>
                         {describeUserAgent(s.userAgent)}
@@ -149,7 +154,7 @@ export default async function LoginsPage({
                 <TableRow>
                   <TableHead>When</TableHead>
                   <TableHead>Result</TableHead>
-                  <TableHead>Username</TableHead>
+                  <TableHead>Who</TableHead>
                   <TableHead>IP</TableHead>
                   <TableHead>Browser</TableHead>
                 </TableRow>
@@ -172,7 +177,9 @@ export default async function LoginsPage({
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{l.username ?? ""}</TableCell>
+                    <TableCell>
+                      <Who email={l.email} username={l.username} via={l.via} />
+                    </TableCell>
                     <TableCell className="font-mono text-xs">{l.ip}</TableCell>
                     <TableCell title={l.userAgent ?? undefined}>{describeUserAgent(l.userAgent)}</TableCell>
                   </TableRow>
@@ -184,5 +191,28 @@ export default async function LoginsPage({
       </Card>
       <AutoRefresh ms={20_000} />
     </main>
+  );
+}
+
+/** A person (Sign in with Genie) or the shared login, with how they came in. */
+function Who({ email, username, via }: { email: string | null; username?: string | null; via: string | null }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {email ? (
+        <span className="text-xs">{email}</span>
+      ) : (
+        <span className="font-mono text-xs">{username ?? (via === "genie" ? "" : "admin")}</span>
+      )}
+      {via === "genie" && (
+        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground" title="Signed in with Google, through Genie">
+          Genie
+        </span>
+      )}
+      {via === "password" && (
+        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground" title="The shared password login (emergency login)">
+          password
+        </span>
+      )}
+    </span>
   );
 }

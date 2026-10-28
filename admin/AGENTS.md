@@ -57,6 +57,20 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   `/api/logout` clears it (Logout button in the toolbar). nginx does **not** do
   auth — no `auth_basic` (that would show a browser Basic-Auth modal instead of
   the login page). NOTE: proxy sees the basePath-STRIPPED path (`/admin/db` → `/db`).
+- **Sign in with Genie** (Google, brokered by the genie manager; no keys on the box).
+  `/api/auth/genie/start` → the manager's `/auth/vps/start` → Google → the manager
+  POSTs a short-lived EdDSA assertion to `/api/auth/genie/callback`, verified here
+  against the manager's JWKS (iss/aud/project/nonce cookie/exp/jti replay in
+  `admin_sso_jtis`; `src/lib/genie-sso-core.ts`). The server's identity comes from
+  `/opt/project/.genie-instance.json` (written by genie). The person must be a member
+  of the server's genie project (genie checks) AND an enabled row on the Users page
+  (`admin_users`); the session is then `sub: "user:<email>"`. `verifySessionToken`
+  re-checks that row (cached 10 s, `src/lib/session-access.mjs`, shared with
+  `server/pty.mjs`), so disabling or removing someone ends their sessions too; open
+  terminal/board sockets are re-checked every 30 s in server.mjs. The shared
+  `ADMIN_USER`/`ADMIN_PASSWORD` login (`sub: "admin"`) stays as the emergency login.
+  The proxy lets exactly `POST /api/auth/genie/callback` skip its origin check
+  (`src/lib/proxy-rules.ts`).
 - Server Actions require `experimental.serverActions.allowedOrigins` to include
   the public domain — the proxy changes the origin, so dropping this breaks
   notes/tasks/rescan with a CSRF error. Both this and `allowedDevOrigins` derive

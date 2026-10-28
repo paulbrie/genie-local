@@ -38,6 +38,7 @@ export const PAGE_ROUTES = [
   "/tasks",
   "/teams",
   "/terminals",
+  "/users",
 ] as const;
 
 /** Every route.ts under src/app/api, as its route. */
@@ -49,6 +50,8 @@ export const API_ROUTES = [
   "/api/agents3d/file",
   "/api/agents3d/panes",
   "/api/ask",
+  "/api/auth/genie/callback",
+  "/api/auth/genie/start",
   "/api/authcheck",
   "/api/boards",
   "/api/boards/[id]",
@@ -140,6 +143,7 @@ export const API_ROUTES = [
  */
 const NOT_ACTIONS = new Set([
   "/api/activity",
+  "/api/auth/genie/callback",
   "/api/login",
   "/api/logout",
   "/api/narrate",

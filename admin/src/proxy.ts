@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 
 import { recordProxyRequest } from "@/lib/activity";
 import { originAllowed } from "@/lib/origin";
+import { isPublicPath, skipsOriginCheck } from "@/lib/proxy-rules";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -26,8 +27,9 @@ export async function proxy(req: NextRequest) {
   const token = req.cookies.get(SESSION_COOKIE)?.value;
   const authed = await verifySessionToken(token);
 
-  // /api/login checks the origin itself, so a blocked login is logged with why.
-  if (!SAFE_METHODS.has(method) && !originAllowed(req) && path !== "/api/login") {
+  // /api/login checks the origin itself, so a blocked login is logged with why;
+  // the Sign in with Genie callback is the manager's cross-site POST (proxy-rules.ts).
+  if (!SAFE_METHODS.has(method) && !originAllowed(req) && !skipsOriginCheck(path, method)) {
     return NextResponse.json({ error: "forbidden origin" }, { status: 403 });
   }
 
@@ -49,11 +51,8 @@ export async function proxy(req: NextRequest) {
   // throws and isn't awaited.
   if (authed || path === "/login") recordProxyRequest(req, path, method, authed ? (token ?? null) : null);
 
-  // Login page (GET only) + auth endpoints: allowed unauthenticated.
-  if (path === "/login" && SAFE_METHODS.has(method)) {
-    return NextResponse.next();
-  }
-  if (path === "/api/login" || path === "/api/logout") {
+  // Login page (GET only) + auth endpoints (incl. Sign in with Genie): allowed unauthenticated.
+  if (isPublicPath(path, method)) {
     return NextResponse.next();
   }
 

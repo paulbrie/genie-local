@@ -120,6 +120,8 @@ const isTerminal = (v) => typeof v === "string" && v.length > 0 && v.length <= 6
 const isSeconds = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
 const isBool = (v) => typeof v === "boolean";
 const isReason = (v) => typeof v === "string" && /^[a-z_]{1,40}$/.test(v);
+// How someone signed in: Sign in with Genie or the shared (emergency) password login.
+const isLoginVia = (v) => v === "genie" || v === "password";
 
 /** The events the receiver accepts, each with the props it may carry and their shape. */
 export const EVENT_PROPS = {
@@ -127,7 +129,7 @@ export const EVENT_PROPS = {
   action: { name: isActionName, project: isSlug, ok: isBool },
   "terminal.attach": { terminal: isTerminal },
   "terminal.detach": { terminal: isTerminal, seconds: isSeconds },
-  "auth.login": {},
+  "auth.login": { via: isLoginVia },
   "auth.logout": {},
   "auth.failed": { reason: isReason },
 };

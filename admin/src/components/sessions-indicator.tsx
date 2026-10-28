@@ -15,6 +15,8 @@ type ConnectedSession = {
   browser: string;
   userAgent: string | null;
   via: string;
+  /** Who, for a Sign in with Genie session; null for the shared admin login. */
+  email: string | null;
   since: string;
   lastSeenAt: string;
 };
@@ -97,7 +99,7 @@ export function SessionsIndicator() {
             {sessions.map((s) => (
               <li key={s.key} className="px-2 py-1.5 text-xs" title={s.userAgent ?? undefined}>
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate font-medium">{s.browser}</span>
+                  <span className="truncate font-medium">{s.email ?? s.browser}</span>
                   {s.current && (
                     <span className="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary">this browser</span>
                   )}
@@ -111,6 +113,7 @@ export function SessionsIndicator() {
                   )}
                 </div>
                 <div className="mt-0.5 flex gap-2 text-muted-foreground">
+                  {s.email && <span className="truncate">{s.browser}</span>}
                   <span className="font-mono">{s.ip ?? "unknown IP"}</span>
                   <span>· since {formatRelativeTime(s.since)}</span>
                   <span className="ml-auto">seen {formatRelativeTime(s.lastSeenAt)}</span>

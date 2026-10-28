@@ -85,6 +85,20 @@ const server = createServer((req, res) => handle(req, res));
 const wss = new WebSocketServer({ noServer: true });
 const boardsWss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
 
+// Open terminal and board sockets are re-checked every so often: a session that has expired, or whose person was
+// disabled or removed on the Users page, is closed (4401) rather than kept until the tab goes away.
+const sessionOf = new WeakMap();
+const RECHECK_MS = 30_000;
+setInterval(() => {
+  for (const ws of [...wss.clients, ...boardsWss.clients]) {
+    verifySessionToken(sessionOf.get(ws))
+      .then((ok) => {
+        if (!ok) ws.close(4401, "signed out");
+      })
+      .catch(() => {});
+  }
+}, RECHECK_MS).unref();
+
 server.on("upgrade", (req, socket, head) => {
   let pathname;
   try {
@@ -117,10 +131,16 @@ server.on("upgrade", (req, socket, head) => {
             socket.destroy();
             return;
           }
-          boardsWss.handleUpgrade(req, socket, head, (ws) => handleBoardConnection(ws, boardId));
+          boardsWss.handleUpgrade(req, socket, head, (ws) => {
+            sessionOf.set(ws, token);
+            handleBoardConnection(ws, boardId);
+          });
           return;
         }
-        wss.handleUpgrade(req, socket, head, (ws) => handlePtyConnection(ws, req));
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          sessionOf.set(ws, token);
+          handlePtyConnection(ws, req);
+        });
       })
       .catch(() => socket.destroy());
     return;
