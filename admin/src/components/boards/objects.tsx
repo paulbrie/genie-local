@@ -88,7 +88,8 @@ function EditableText({
       }}
       onPointerDown={(e) => e.stopPropagation()}
       spellCheck
-      className={cn("block w-full resize-none border-0 bg-transparent p-0 outline-none", className)}
+      // (no scrollbar: the box's text shrinks to fit instead, and the caret is kept in view all the same)
+      className={cn("block w-full resize-none overflow-hidden border-0 bg-transparent p-0 outline-none", className)}
       style={style}
       data-fit={dataFit}
     />
@@ -356,10 +357,19 @@ function useFitFont<T extends HTMLElement>(max: number, deps: unknown[]) {
     const fit = () => {
       const cs = getComputedStyle(b);
       const room = b.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-      // a textarea scrolls rather than grows, so it says itself when it overflows
+      // A textarea scrolls rather than grows: its text's own height is its scrollHeight with no height of its own.
+      // (Not scrollHeight against clientHeight: that rounds, so text could stop a fraction of a pixel too tall, and
+      // in some browsers that showed a scrollbar, which narrowed the text, which then overflowed for real.)
+      const textHeight = (t: HTMLTextAreaElement) => {
+        const h = t.style.height;
+        t.style.height = "0px";
+        const need = t.scrollHeight;
+        t.style.height = h;
+        return need;
+      };
       const fits = () =>
         c instanceof HTMLTextAreaElement
-          ? c.scrollHeight <= c.clientHeight
+          ? textHeight(c) + 1 <= c.clientHeight
           : c.offsetHeight <= room && c.scrollWidth <= c.clientWidth + 1;
       c.style.fontSize = `${max}px`;
       if (fits()) return;
