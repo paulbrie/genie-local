@@ -1,10 +1,9 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
-
 import { and, desc, eq, gte, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
+import { clientIpOf, sessionIdOf } from "@/lib/activity-core.mjs";
 import { adminLogins, adminSessions } from "@/db/schema";
 
 /** Why a login failed, as stored (reason) and as shown. */
@@ -22,17 +21,15 @@ export type LoginFailure = keyof typeof LOGIN_FAILURES;
 export const CONNECTED_MS = 60_000;
 
 export function clientIp(req: Request): string {
-  return (
-    req.headers.get("x-real-ip") ??
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    "unknown"
-  );
+  return clientIpOf(req.headers.get("x-real-ip"), req.headers.get("x-forwarded-for")) ?? "unknown";
 }
 
-/** A session's id: a hash of its cookie (never stored itself). */
-export function sessionIdOf(token: string): string {
-  return createHash("sha256").update(token).digest("hex").slice(0, 32);
-}
+/**
+ * A session's id: a hash of its cookie (never stored itself). Defined in
+ * activity-core.mjs so activity events (incl. the raw-Node PTY bridge's) carry
+ * the same id as admin_sessions.
+ */
+export { sessionIdOf };
 
 /** Logging must never break a login: failures here are only reported. */
 async function quietly(what: string, fn: () => Promise<unknown>) {

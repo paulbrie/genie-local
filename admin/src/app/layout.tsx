@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fredoka, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { ActivityBeacon } from "@/components/activity-beacon";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AskHost } from "@/components/ask-host";
 import { RunDock } from "@/components/run-dock";
@@ -80,6 +81,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <UploadDock />
           <AskHost />
           <ProjectMemoryMonitor />
+          <ActivityBeacon />
           <Toaster richColors position="top-right" />
         </ThemeProvider>
       </body>

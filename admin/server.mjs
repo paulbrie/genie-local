@@ -120,7 +120,7 @@ server.on("upgrade", (req, socket, head) => {
           boardsWss.handleUpgrade(req, socket, head, (ws) => handleBoardConnection(ws, boardId));
           return;
         }
-        wss.handleUpgrade(req, socket, head, (ws) => handlePtyConnection(ws));
+        wss.handleUpgrade(req, socket, head, (ws) => handlePtyConnection(ws, req));
       })
       .catch(() => socket.destroy());
     return;

@@ -25,6 +25,8 @@ out/
 .task-attachments/
 # images people put on the admin's boards
 .board-assets/
+# user activity spool, shipped to genie by genie-stats (admin/src/lib/activity-core.mjs)
+/.activity/
 *.log
 *.pid
 

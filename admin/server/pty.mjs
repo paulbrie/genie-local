@@ -22,6 +22,8 @@ import { createRequire } from "node:module";
 import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
+import { clientIpOf, recordActivity, sessionIdOf } from "../src/lib/activity-core.mjs";
+
 const require = createRequire(import.meta.url);
 // node-pty & ws are CommonJS with native/typed exports — require() is the
 // bullet-proof interop here (named ESM imports are flaky across their builds).
@@ -202,8 +204,47 @@ function sendJson(ws, type, payload = {}) {
   try { ws.send(JSON.stringify({ type, payload })); } catch { /* closed */ }
 }
 
+/**
+ * Who opened this socket, for activity events (session id, IP, User-Agent).
+ * server.mjs has already verified the cookie before handing the socket over.
+ */
+export function activityContextOf(req) {
+  if (!req) return {};
+  const token = getCookie(req.headers.cookie);
+  const header = (name) => {
+    const v = req.headers[name];
+    return (Array.isArray(v) ? v[0] : v) ?? null;
+  };
+  return {
+    session: token ? sessionIdOf(token) : null,
+    ip: clientIpOf(header("x-real-ip"), header("x-forwarded-for")),
+    ua: header("user-agent"),
+  };
+}
+
+/**
+ * terminal.attach when a PTY starts on a socket, terminal.detach (with the
+ * seconds attached) once when that socket goes away: the name only, never what
+ * goes through it. `record` is injectable for the tests.
+ */
+export function terminalActivity(ctx, name, record = recordActivity, now = Date.now) {
+  const since = now();
+  void record("terminal.attach", { ...ctx, props: { terminal: name } });
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    void record("terminal.detach", {
+      ...ctx,
+      props: { terminal: name, seconds: Math.round((now() - since) / 1000) },
+    });
+  };
+}
+
 /** Wire one authenticated WebSocket to a tmux-attached PTY. */
-export function handlePtyConnection(ws) {
+export function handlePtyConnection(ws, req) {
+  const activity = activityContextOf(req);
+  let detached = null;        // records terminal.detach, set once a PTY started
   /** @type {import("node-pty").IPty | null} */
   let child = null;
   let batcher = null;
@@ -232,6 +273,7 @@ export function handlePtyConnection(ws) {
     if (resizeTimer) { clearTimeout(resizeTimer); resizeTimer = null; }
     if (batcher) { batcher.dispose(); batcher = null; }
     if (child) { try { child.kill(); } catch { /* already dead */ } child = null; }
+    if (detached) { detached(); detached = null; }
   };
 
   ws.on("message", (raw) => {
@@ -275,6 +317,7 @@ export function handlePtyConnection(ws) {
           sendJson(ws, "pty:exit", { exitCode });
           // tmux attach exits non-zero when the session is gone / can't attach.
         });
+        detached = terminalActivity(activity, payload.name);
         sendJson(ws, "pty:ready", {});
         return;
       }

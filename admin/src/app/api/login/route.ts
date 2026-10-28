@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { recordActivity } from "@/lib/activity";
 import {
   clientIp,
   openSession,
@@ -48,6 +49,8 @@ export async function POST(req: Request) {
     body: { status: number; error: string; headers?: Record<string, string> },
   ) => {
     await recordLoginAttempt({ ok: false, reason, username, ip, userAgent });
+    // Only why it failed: never the username that was tried.
+    recordActivity("auth.failed", { ip, ua: userAgent, props: { reason } });
     return NextResponse.json(
       { ok: false, error: body.error },
       { status: body.status, headers: body.headers },
@@ -99,6 +102,7 @@ export async function POST(req: Request) {
   const sessionId = sessionIdOf(token);
   await openSession(sessionId, ip, userAgent);
   await recordLoginAttempt({ ok: true, username: typedUser, ip, userAgent, sessionId });
+  recordActivity("auth.login", { session: sessionId, ip, ua: userAgent });
 
   const res = NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, token, {

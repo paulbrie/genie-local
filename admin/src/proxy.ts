@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+import { recordProxyRequest } from "@/lib/activity";
 import { originAllowed } from "@/lib/origin";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
@@ -42,6 +43,12 @@ export async function proxy(req: NextRequest) {
   if (path.startsWith("/_next/") || path === "/favicon.ico" || path === "/icon.svg") {
     return NextResponse.next();
   }
+
+  // Activity for genie (page views, server actions, mutating /api calls) of
+  // signed-in requests, plus the login page itself. Fire and forget: it never
+  // throws and isn't awaited.
+  if (authed || path === "/login") recordProxyRequest(req, path, method, authed ? (token ?? null) : null);
+
   // Login page (GET only) + auth endpoints: allowed unauthenticated.
   if (path === "/login" && SAFE_METHODS.has(method)) {
     return NextResponse.next();
