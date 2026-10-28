@@ -127,6 +127,13 @@
       "when": 1792936921813,
       "tag": "0017_board_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793193950798,
+      "tag": "0018_project_mem_limit",
+      "breakpoints": true
     }
   ]
 }

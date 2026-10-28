@@ -7,6 +7,7 @@ import { RunDock } from "@/components/run-dock";
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { JarvisConsole } from "@/components/jarvis-console";
 import { JarvisOrb } from "@/components/jarvis-orb";
+import { ProjectMemoryMonitor } from "@/components/project-memory-monitor";
 import { TerminalDock } from "@/components/terminal-dock";
 import { TerminalNarrator } from "@/components/terminal-narrator";
 import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
@@ -78,6 +79,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <RunDock />
           <UploadDock />
           <AskHost />
+          <ProjectMemoryMonitor />
           <Toaster richColors position="top-right" />
         </ThemeProvider>
       </body>

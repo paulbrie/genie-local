@@ -56,6 +56,9 @@ type RawPoint = {
   mt: number;
   du?: number;
   dt?: number;
+  /** Each running project's memory (MB), and its agents' apart; absent before they were recorded. */
+  pm?: Record<string, number>;
+  pa?: Record<string, number>;
 };
 
 /** Roughly this many points across the window — enough for a smooth sparkline. */
@@ -139,5 +142,50 @@ export async function readStatsHistory(
       diskTotalBytes: a.diskN ? a.dt / a.diskN : null,
     }));
 
+  return { range, bucketMs, points };
+}
+
+/** One project's memory over time: its processes and containers, and its agents apart (bytes, bucket averages). */
+export type ProjectMemoryPoint = { t: number; bytes: number; agentBytes: number };
+export type ProjectMemoryHistory = { range: HistoryRange; bucketMs: number; points: ProjectMemoryPoint[] };
+
+/**
+ * A project's memory from the same history file, downsampled like the server's
+ * figures. A sample from before projects were recorded is skipped; one where the
+ * project wasn't running counts as 0.
+ */
+export async function readProjectMemoryHistory(slug: string, range: HistoryRange, now: number = Date.now()): Promise<ProjectMemoryHistory> {
+  const spanMs = RANGE_MS[range];
+  const start = now - spanMs;
+  const bucketMs = Math.max(1, Math.floor(spanMs / TARGET_BUCKETS));
+  let raw: string;
+  try {
+    raw = await fs.readFile(HISTORY_FILE, "utf8");
+  } catch {
+    return { range, bucketMs, points: [] };
+  }
+  const MB = 1024 * 1024;
+  const buckets = new Map<number, { n: number; t: number; mb: number; agentMb: number }>();
+  for (const line of raw.split("\n")) {
+    // (lines from before projects were recorded: no need to parse them)
+    if (!line.includes('"pm"')) continue;
+    let p: RawPoint;
+    try {
+      p = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof p.t !== "number" || p.t < start || p.t > now || !p.pm) continue;
+    const key = Math.floor((p.t - start) / bucketMs);
+    const a = buckets.get(key) ?? { n: 0, t: 0, mb: 0, agentMb: 0 };
+    a.n++;
+    a.t += p.t;
+    a.mb += p.pm[slug] ?? 0;
+    a.agentMb += p.pa?.[slug] ?? 0;
+    buckets.set(key, a);
+  }
+  const points = [...buckets.entries()]
+    .sort((x, y) => x[0] - y[0])
+    .map(([, a]) => ({ t: Math.round(a.t / a.n), bytes: (a.mb / a.n) * MB, agentBytes: (a.agentMb / a.n) * MB }));
   return { range, bucketMs, points };
 }

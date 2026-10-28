@@ -11,6 +11,7 @@ import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
 import { AdminUpdateButton } from "@/components/admin-update-button";
 import { SessionsIndicator } from "@/components/sessions-indicator";
+import { ProjectsMemoryBadge } from "@/components/project-memory-badge";
 
 const POLL_MS = 5000;
 
@@ -101,6 +102,7 @@ export function StatsToolbar() {
           }
         />
       </div>
+      <ProjectsMemoryBadge />
       <span className="hidden text-xs text-muted-foreground sm:inline">
         {error
           ? "stats unavailable"

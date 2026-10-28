@@ -24,6 +24,8 @@ export const projects = pgTable(
     path: text("path").notNull(),
     name: text("name"),
     archived: boolean("archived").notNull().default(false),
+    // Warn when what the project runs passes this much memory (MB); null = no limit (src/lib/project-memory).
+    memLimitMb: integer("mem_limit_mb"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

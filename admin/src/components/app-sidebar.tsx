@@ -46,7 +46,9 @@ import { TerminalContextMenu } from "@/components/terminal-context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
+import type { ProjectMemory } from "@/lib/project-memory";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { activeRuns, openRun } from "@/store/runs";
 import { mobileNav } from "@/store/ui";
@@ -560,6 +562,18 @@ const TERM_DOT: Record<"idle" | "busy", { dot: string; ping: string | null }> = 
   busy: { dot: "bg-emerald-500", ping: "bg-emerald-400" },
 };
 
+/** Sidebar-sized memory: 5.5G, 580M. */
+function shortBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)}G`;
+  return `${Math.max(1, Math.round(n / 1024 ** 2))}M`;
+}
+
+/** "5.5G in memory: dev 5.4G, postgres 40M (+1.2G agents)" */
+function memoryTitle(m: ProjectMemory): string {
+  const parts = m.groups.filter((g) => g.kind !== "agent" && g.bytes >= 1024 ** 2).slice(0, 4).map((g) => `${g.label} ${shortBytes(g.bytes)}`);
+  return `${shortBytes(m.bytes)} in memory${parts.length ? `: ${parts.join(", ")}` : ""}${m.agentBytes ? ` (+${shortBytes(m.agentBytes)} agents)` : ""}`;
+}
+
 /** Compact byte size for the Docker badge: 1_610_612_736 → "1.5 GB". */
 function fmtBytes(n: number): string {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
@@ -719,6 +733,7 @@ function ProjectsGroup({
   onNavigate: () => void;
 }) {
   const [list, setList] = useState<ProjectNavItem[] | null>(null);
+  const [memory] = useSubject(projectMemory);
   // Bumped after a script is started / stopped from a project's menu.
   const [reload, setReload] = useState(0);
   useEffect(() => {
@@ -792,6 +807,11 @@ function ProjectsGroup({
           {list.map((p) => {
             const href = `/projects/${encodeURIComponent(p.slug)}`;
             const on = pathname === href || pathname.startsWith(`${href}/`);
+            // what it has in memory now (store/project-memory), red past its limit
+            const mem = memoryOf(memory, p.slug);
+            const limit = memory?.limits[p.slug];
+            const over = !!mem && !!limit && mem.bytes > limit * 1024 * 1024;
+            const memText = mem && mem.bytes > 0 ? shortBytes(mem.bytes) : null;
             return (
               // Right-click: the project's tabs, and its scripts.
               <ProjectContextMenu
@@ -806,7 +826,7 @@ function ProjectsGroup({
                   href={href}
                   onClick={onNavigate}
                   aria-current={on ? "page" : undefined}
-                  title={`${p.slug}${p.running ? ` · running${(p.ports ?? []).length ? ` on :${(p.ports ?? []).join(", :")}` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
+                  title={`${p.slug}${p.running ? ` · running${(p.ports ?? []).length ? ` on :${(p.ports ?? []).join(", :")}` : ""}` : ""}${mem ? ` · ${memoryTitle(mem)}${limit ? ` (limit ${shortBytes(limit * 1024 * 1024)})` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
                   className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
                     on ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                   }`}
@@ -823,8 +843,16 @@ function ProjectsGroup({
                       :{(p.ports ?? []).join(" :")}
                     </span>
                   )}
+                  {memText && (
+                    <span
+                      className={`shrink-0 font-mono text-[10px] tabular-nums ${(p.ports ?? []).length > 0 ? "" : "ml-auto"} ${over ? "font-semibold text-destructive" : "opacity-70"}`}
+                      data-testid={`project-mem-${p.slug}`}
+                    >
+                      {memText}
+                    </span>
+                  )}
                   {p.openTasks > 0 && (
-                    <span className={`shrink-0 tabular-nums opacity-70 ${(p.ports ?? []).length > 0 ? "" : "ml-auto"}`}>
+                    <span className={`shrink-0 tabular-nums opacity-70 ${(p.ports ?? []).length > 0 || memText ? "" : "ml-auto"}`}>
                       {p.openTasks}
                     </span>
                   )}

@@ -36,6 +36,7 @@ export default async function ProjectLayout({
     { id: "scripts", label: `Scripts (${scriptCount})` },
     { id: "tasks", label: `Tasks (${tasks.length})` },
     { id: "notes", label: `Notes (${notes.length})` },
+    { id: "memory", label: "Memory" },
     ...(apps.some(({ app }) => app.isGit) ? [{ id: "git", label: "Git" }] : []),
   ];
 

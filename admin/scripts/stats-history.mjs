@@ -28,6 +28,33 @@ const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const PRUNE_SLACK_MS = 24 * 60 * 60 * 1000;
 // A daemon record older than this is treated as stale → self-measure instead.
 const DAEMON_FRESH_MS = 60 * 1000;
+const PROJECTS_ROOT = process.env.PROJECTS_ROOT ?? "/opt/project/projects";
+const RUN_LOG_ROOT = process.env.RUN_LOG_ROOT ?? "/tmp/projects";
+
+/**
+ * Each running project's memory in MB, and its agents' (Claude sessions) apart:
+ * { pm: { slug: MB }, pa: { slug: MB } }, the same measure as the app's
+ * (src/lib/project-memory/core.mjs). Null if that can't be had: the server's
+ * own figures are still written.
+ */
+async function projectMemory() {
+  try {
+    const { measureProjects, projectContainers } = await import("../src/lib/project-memory/core.mjs");
+    const containers = await projectContainers(PROJECTS_ROOT);
+    const s = await measureProjects({ root: PROJECTS_ROOT, runDir: RUN_LOG_ROOT, containers });
+    const mb = (n) => Math.round(n / 1024 / 1024);
+    const pm = {};
+    const pa = {};
+    for (const p of s.projects) {
+      if (p.bytes) pm[p.slug] = mb(p.bytes);
+      if (p.agentBytes) pa[p.slug] = mb(p.agentBytes);
+    }
+    return { pm, pa };
+  } catch (e) {
+    process.stderr.write(`stats-history: project memory: ${e?.message ?? e}\n`);
+    return null;
+  }
+}
 
 /** Most recent fully-parseable daemon record, or null. Mirrors src/lib/stats.ts. */
 async function readDaemonLatest() {
@@ -164,7 +191,8 @@ async function main() {
 
   await fs.mkdir(path.dirname(HISTORY_FILE), { recursive: true });
   await pruneIfStale(now);
-  await fs.appendFile(HISTORY_FILE, JSON.stringify(toPoint(ts, stats)) + "\n");
+  const projects = await projectMemory();
+  await fs.appendFile(HISTORY_FILE, JSON.stringify({ ...toPoint(ts, stats), ...projects }) + "\n");
 }
 
 main().catch((e) => {

@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "mem_limit_mb" integer;
