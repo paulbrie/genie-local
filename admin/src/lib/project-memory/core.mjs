@@ -21,7 +21,8 @@ async function readStat(pid) {
     const close = raw.lastIndexOf(")");
     const comm = raw.slice(raw.indexOf("(") + 1, close);
     const f = raw.slice(close + 2).split(" ");
-    return { comm, ppid: Number(f[1]), pgid: Number(f[2]), rss: Number(f[21]) * PAGE };
+    // starttime (field 22) is in clock ticks since boot: 100 a second on Linux
+    return { comm, ppid: Number(f[1]), pgid: Number(f[2]), rss: Number(f[21]) * PAGE, startTicks: Number(f[19]) };
   } catch {
     return null;
   }
@@ -127,8 +128,18 @@ export async function projectContainers(root) {
  * Returns { ts, projects: [{ slug, bytes, agentBytes, groups: [{ key, label, kind, app, script, pids, bytes, estimated }] }] },
  * projects and groups biggest first. `bytes` leaves the agents out; `estimated` = some of it is RSS, not PSS.
  */
+/** When the system booted (ms), for processes' start times. */
+async function bootTime() {
+  try {
+    const m = /^btime (\d+)/m.exec(await fs.readFile("/proc/stat", "utf8"));
+    return m ? Number(m[1]) * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function measureProjects({ root, runDir, containers = [] }) {
-  const runs = await runnerGroups(runDir);
+  const [runs, boot] = await Promise.all([runnerGroups(runDir), bootTime()]);
   let names = [];
   try {
     names = await fs.readdir("/proc");
@@ -173,22 +184,38 @@ export async function measureProjects({ root, runDir, containers = [] }) {
   };
   const isClaude = (p) => !!p && (/^claude/i.test(p.comm) || p.argv.some((a) => /(^|\/)claude(\.exe)?$/.test(a)));
   const isShell = (p) => !p || /^(sh|bash|zsh|dash)$/.test(p.comm);
+  // one Claude session, one row: a session's processes can sit in several groups (a background session's host and
+  // its client), so an agent is filed under its topmost Claude ancestor in the project
+  const agentRoot = (p) => {
+    let q = p;
+    for (let hops = 0; hops < 16 && isClaude(byPid.get(q.ppid)); hops++) q = byPid.get(q.ppid);
+    return q.pid;
+  };
   for (const p of found) {
     const leader = byPid.get(p.pgid);
     // a Claude session, and what runs in its own group (its MCP servers…); what it runs through a shell of its own is
     // the project's (a dev server, tests) and counts as such
     const isAgent = isClaude(p) || isClaude(leader);
     const slug = runs.get(p.pgid);
-    const key = isAgent ? `agent:${p.pgid}` : `pg:${p.pgid}`;
+    const key = isAgent ? `agent:${agentRoot(leader ?? p)}` : `pg:${p.pgid}`;
     const proj = project(p.project);
     let g = proj.groups.get(key);
     if (!g) {
       const script = slug && slug.startsWith(`${p.project}-`) ? slug.slice(p.project.length + 1) : slug ?? null;
-      g = { key, label: "", kind: isAgent ? "agent" : slug ? "script" : "process", app: p.sub, script, pids: [], bytes: 0, estimated: false, members: [] };
+      g = { key, label: "", kind: isAgent ? "agent" : slug ? "script" : "process", app: p.sub, script, pids: [], procs: [], bytes: 0, estimated: false, members: [] };
       proj.groups.set(key, g);
     }
     g.members.push(p);
     g.pids.push(p.pid);
+    g.procs.push({
+      pid: p.pid,
+      ppid: p.ppid,
+      command: (p.argv.length ? p.argv.join(" ") : p.comm).slice(0, 300),
+      cwd: p.cwd,
+      bytes: p.bytes,
+      estimated: p.estimated,
+      startedAt: boot != null ? boot + p.startTicks * 10 : null,
+    });
     g.bytes += p.bytes;
     g.estimated ||= p.estimated;
     if (isAgent) proj.agentBytes += p.bytes;
@@ -201,10 +228,11 @@ export async function measureProjects({ root, runDir, containers = [] }) {
       const named = g.kind === "agent" ? null : isShell(leader) ? g.members.reduce((x, y) => (y.bytes > x.bytes ? y : x)) : leader;
       g.label = g.kind === "agent" ? "claude" : (g.script ?? commandLabel(named.argv, named.comm));
       delete g.members;
+      g.procs.sort((a, b) => b.bytes - a.bytes);
     }
   for (const c of containers) {
     const proj = project(c.project);
-    proj.groups.set(`docker:${c.name}`, { key: `docker:${c.name}`, label: c.name, kind: "container", app: "", script: null, pids: [], bytes: c.bytes, estimated: false });
+    proj.groups.set(`docker:${c.name}`, { key: `docker:${c.name}`, label: c.name, kind: "container", app: "", script: null, pids: [], procs: [], bytes: c.bytes, estimated: false });
     proj.bytes += c.bytes;
   }
 

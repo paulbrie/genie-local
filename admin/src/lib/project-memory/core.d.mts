@@ -1,5 +1,16 @@
 // Types for core.mjs (kept as plain JS so the history cron can import it).
 
+export type MemoryProcess = {
+  pid: number;
+  ppid: number;
+  /** Its command line (cut at 300 characters). */
+  command: string;
+  cwd: string;
+  bytes: number;
+  estimated: boolean;
+  startedAt: number | null;
+};
+
 export type MemoryGroup = {
   key: string;
   /** The script ("dev"), else the command ("npm run dev", "chrome"), the container's name, or "claude". */
@@ -10,6 +21,10 @@ export type MemoryGroup = {
   /** The runner's script, when the admin started it. */
   script: string | null;
   pids: number[];
+  /** Its processes, biggest first (none for a container). */
+  procs: MemoryProcess[];
+  /** The admin terminal it runs in (found by walking up its processes' parents), when it does; set by the app. */
+  terminal?: string | null;
   bytes: number;
   /** Some of it is RSS, PSS couldn't be read: an overestimate. */
   estimated: boolean;
