@@ -16,6 +16,7 @@ import {
   moveTaskAction,
 } from "@/app/actions";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
+import { DictationControls } from "@/components/dictation";
 import { filesFromPaste, spillLongText, uploadTaskFiles } from "@/components/task-attachments";
 import { STATUS_LABEL, TaskDrawer } from "@/components/task-drawer";
 import { LastTicket } from "@/components/last-ticket";
@@ -335,6 +336,8 @@ export function TaskBoard({
             <Paperclip className="size-3.5" />
             Attach files
           </Button>
+          {/* Voice input into the title or description, whichever has focus. */}
+          <DictationControls scope={formRef} />
           {newFiles.map((f, i) => isThumbable(f) ? null : (
             <span
               key={`${f.name}-${i}`}

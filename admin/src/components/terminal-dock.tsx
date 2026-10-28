@@ -22,6 +22,7 @@ import { useSubject } from "subjecto/react";
 import "@xterm/xterm/css/xterm.css";
 
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
+import { SpeechLangSelect } from "@/components/dictation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -34,7 +35,7 @@ import {
   sameGeom,
 } from "@/lib/term-geometry";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { SPEECH_LANGS, useSpeechInput } from "@/lib/use-speech-input";
+import { useSpeechInput } from "@/lib/use-speech-input";
 import {
   closeTerminal,
   dock,
@@ -1351,22 +1352,10 @@ function TerminalView({
                     focusTerminal(name);
                   }}
                 />
-                <select
-                  aria-label="Voice input language"
-                  value={speech.lang}
-                  onChange={(e) => speech.setLang(e.target.value)}
+                <SpeechLangSelect
+                  speech={speech}
                   className="shrink-0 rounded-md border bg-background px-2 py-1.5 font-mono text-xs text-foreground"
-                >
-                  {!SPEECH_LANGS.some((l) => l.value === speech.lang) &&
-                    speech.lang && (
-                      <option value={speech.lang}>{speech.lang}</option>
-                    )}
-                  {SPEECH_LANGS.map((l) => (
-                    <option key={l.value} value={l.value}>
-                      {l.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </>
             )}
             <BarKey label="^C" onTap={() => sendKey("C-c")} />
@@ -1433,11 +1422,8 @@ function TerminalView({
                     “{speech.interim}”
                   </span>
                 )}
-                <select
-                  aria-label="Voice input language"
-                  title="Voice input language"
-                  value={speech.lang}
-                  onChange={(e) => speech.setLang(e.target.value)}
+                <SpeechLangSelect
+                  speech={speech}
                   style={
                     footerBg
                       ? { backgroundColor: footerBg, color: textOn(footerBg) }
@@ -1446,18 +1432,7 @@ function TerminalView({
                   className={`h-6 rounded-md border px-1 text-xs ${
                     footerBg ? "" : "bg-background text-foreground"
                   }`}
-                >
-                  {/* Keep an unlisted browser/persisted locale selectable. */}
-                  {!SPEECH_LANGS.some((l) => l.value === speech.lang) &&
-                    speech.lang && (
-                      <option value={speech.lang}>{speech.lang}</option>
-                    )}
-                  {SPEECH_LANGS.map((l) => (
-                    <option key={l.value} value={l.value}>
-                      {l.label}
-                    </option>
-                  ))}
-                </select>
+                />
                 <Button
                   size="sm"
                   variant={speech.listening ? "default" : "outline"}

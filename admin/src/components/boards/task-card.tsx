@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { CircleCheck, CircleDashed, CircleDot, ListTodo, Loader2, Plus, Search } from "lucide-react";
 
+import { DictationControls } from "@/components/dictation";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -172,6 +173,7 @@ export function TaskPicker({
   const [desc, setDesc] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const entry = useTickets(open ? project : null);
 
   useEffect(() => {
@@ -284,6 +286,7 @@ export function TaskPicker({
         )}
         {project && creating && (
           <form
+            ref={formRef}
             className="space-y-2"
             onSubmit={(e) => {
               e.preventDefault();
@@ -294,6 +297,7 @@ export function TaskPicker({
             <Textarea value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description (optional)" rows={4} maxLength={5000} />
             {error && <div className="text-sm text-destructive">{error}</div>}
             <DialogFooter>
+              <DictationControls scope={formRef} className="sm:mr-auto" />
               <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
                 Back
               </Button>
