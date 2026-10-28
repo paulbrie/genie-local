@@ -6,7 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { rssBytesByProcessTree } from "@/lib/runner";
+import { memBytesByProcessTree } from "@/lib/runner";
 
 const exec = promisify(execFile);
 
@@ -51,7 +51,7 @@ export type Terminal = {
   status: TermStatus;
   cwd: string; // pane current path
   tokens: ClaudeTokens | null; // cumulative session tokens (Claude sessions only)
-  memBytes: number; // resident memory of the pane's process tree (shell + command)
+  memBytes: number; // memory (PSS) of the pane's process tree (shell + command + what it started)
   dead: boolean; // the pane's program exited and tmux kept it (remain-on-exit)
   /** claude-background: what runs, e.g. "1 shell", "2 agents" (backgroundWork) */
   background?: string | null;
@@ -379,9 +379,9 @@ export async function listTerminals(): Promise<Terminal[]> {
     }))
     .sort((a, b) => a.createdAt - b.createdAt);
 
-  // Resident memory of each session's active-pane process tree (shell + whatever
-  // it's running + children). One /proc scan covers all sessions.
-  const memByPid = await rssBytesByProcessTree(base.map((t) => t.panePid));
+  // Memory of each session's active-pane process tree (shell + whatever it's
+  // running + children). One /proc scan covers all sessions.
+  const memByPid = await memBytesByProcessTree(base.map((t) => t.panePid));
 
   // A Claude pane's "working vs waiting" state only shows in its output, so
   // capture the visible pane for those (cheap: no scrollback/escapes) and

@@ -9,22 +9,25 @@ import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Z_GLOBAL_CONTROLS } from "@/lib/z-layers";
 import { projectMemory } from "@/store/project-memory";
+import { liveTerminals } from "@/store/terminals";
 
 /**
  * "Projects 9.5 GB" in the top bar: the memory every project's processes and
  * containers use together, and on hover (or focus) each project's share, its
- * agents apart. The breakdown is fixed-positioned: the bar's metrics scroll
+ * agents apart, and each terminal's. The breakdown is fixed-positioned: the bar's metrics scroll
  * sideways and would clip it.
  */
 export function ProjectsMemoryBadge() {
   const [status] = useSubject(projectMemory);
+  const [terms] = useSubject(liveTerminals);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   if (!status) return null;
   const total = status.projects.reduce((n, p) => n + p.bytes, 0);
   const agents = status.projects.reduce((n, p) => n + p.agentBytes, 0);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    setAt({ x: r.left, y: r.bottom + 6 });
+    // (its right edge under the badge's: the badge sits near the right of the bar)
+    setAt({ x: window.innerWidth - r.right, y: r.bottom + 6 });
   };
   return (
     <div
@@ -42,8 +45,8 @@ export function ProjectsMemoryBadge() {
       {at && (
         <div
           role="tooltip"
-          style={{ left: at.x, top: at.y, zIndex: Z_GLOBAL_CONTROLS }}
-          className="fixed w-72 rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-xl"
+          style={{ right: Math.max(8, at.x), top: at.y, zIndex: Z_GLOBAL_CONTROLS }}
+          className="fixed w-80 max-w-[calc(100vw-1rem)] rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-xl"
         >
           <div className="mb-1 flex justify-between text-muted-foreground">
             <span>Memory by project</span>
@@ -63,6 +66,23 @@ export function ProjectsMemoryBadge() {
               );
             })}
           </ul>
+          {terms.some((t) => t.memBytes) && (
+            <>
+              {/* (a terminal's memory is also its project's when it runs there: shown for itself, not added up) */}
+              <div className="mt-2 mb-1 border-t pt-1 text-muted-foreground">Terminals</div>
+              <ul className="space-y-0.5" data-testid="terminals-memory">
+                {[...terms]
+                  .filter((t) => t.memBytes)
+                  .sort((a, b) => (b.memBytes ?? 0) - (a.memBytes ?? 0))
+                  .map((t) => (
+                    <li key={t.name} className="flex items-baseline gap-2">
+                      <span className="truncate">{t.name}</span>
+                      <span className="ml-auto font-mono tabular-nums">{formatBytes(t.memBytes ?? 0)}</span>
+                    </li>
+                  ))}
+              </ul>
+            </>
+          )}
           {agents > 0 && (
             <p className="mt-1 border-t pt-1 text-muted-foreground">
               Agents (Claude sessions) {formatBytes(agents)}, not in the total.

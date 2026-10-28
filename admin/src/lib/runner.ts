@@ -174,15 +174,18 @@ export async function rssBytesByProcessGroup(): Promise<Map<number, number>> {
 }
 
 /**
- * Sum resident memory (RSS) of the process SUBTREE rooted at each given pid — the
- * process itself plus every descendant, following PPID links in /proc. Unlike
+ * Sum the memory of the process SUBTREE rooted at each given pid — the process
+ * itself plus every descendant, following PPID links in /proc. Each process counts
+ * its PSS (its share of the pages it shares, from smaps_rollup), so the workers of
+ * one server, sharing most of their memory, add up to what's really in use; RSS
+ * where PSS can't be read. Unlike
  * {@link rssBytesByProcessGroup}, this is for tmux terminals: a pane's shell
  * (`pane_pid`) puts each foreground job in its OWN process group (job control), so
  * a pgid sum would miss the running command (claude/node) — walking the tree
  * captures the shell + command + its children. Returns bytes keyed by root pid.
  * One /proc scan serves every root passed in.
  */
-export async function rssBytesByProcessTree(
+export async function memBytesByProcessTree(
   rootPids: number[],
 ): Promise<Map<number, number>> {
   const rss = new Map<number, number>();
@@ -219,21 +222,33 @@ export async function rssBytesByProcessTree(
     }),
   );
 
-  const out = new Map<number, number>();
+  const trees = new Map<number, number[]>();
   for (const root of rootPids) {
-    let total = 0;
     const seen = new Set<number>();
     const stack = [root];
     while (stack.length) {
       const pid = stack.pop()!;
       if (seen.has(pid)) continue; // guard against cycles / repeated roots
       seen.add(pid);
-      total += rss.get(pid) ?? 0;
       const kids = children.get(pid);
       if (kids) for (const k of kids) stack.push(k);
     }
-    out.set(root, total);
+    trees.set(root, [...seen]);
   }
+  // (PSS only for the processes in a tree: smaps_rollup costs more than stat)
+  const pss = new Map<number, number>();
+  await Promise.all(
+    [...new Set([...trees.values()].flat())].map(async (pid) => {
+      try {
+        const m = /^Pss:\s+(\d+) kB/m.exec(await fs.readFile(`/proc/${pid}/smaps_rollup`, "utf8"));
+        if (m) pss.set(pid, Number(m[1]) * 1024);
+      } catch {
+        /* gone, or not ours: its RSS stands */
+      }
+    }),
+  );
+  const out = new Map<number, number>();
+  for (const [root, pids] of trees) out.set(root, pids.reduce((n, pid) => n + (pss.get(pid) ?? rss.get(pid) ?? 0), 0));
   return out;
 }
 

@@ -51,6 +51,8 @@ export type LiveTerminal = {
   tokens?: SessionTokens | null; // cumulative session tokens (Claude only)
   /** claude-background: what's running, e.g. "1 shell", "2 agents" */
   background?: string | null;
+  /** Memory (PSS) of the pane's process tree: its shell and everything it started. */
+  memBytes?: number;
 };
 export const liveTerminals = new Subject<LiveTerminal[]>([], {
   name: "liveTerminals",

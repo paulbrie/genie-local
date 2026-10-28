@@ -35,11 +35,13 @@ import {
   sameGeom,
 } from "@/lib/term-geometry";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { formatBytes } from "@/lib/format";
 import { useSpeechInput } from "@/lib/use-speech-input";
 import {
   closeTerminal,
   dock,
   hydrateDock,
+  liveTerminals,
   minimizeTerminal,
   openTerminal,
   reconcileTerminals,
@@ -302,6 +304,7 @@ export function TerminalDock() {
             status?: TermStatus;
             background?: string | null;
             tokens?: TokenMeter | null;
+            memBytes?: number;
           }[] = json.terminals ?? [];
           reconcileTerminals(list.map((t) => t.name));
           for (const t of list) {
@@ -313,6 +316,7 @@ export function TerminalDock() {
               status: t.status ?? "idle",
               tokens: t.tokens ?? null,
               background: t.background ?? null,
+              memBytes: t.memBytes ?? 0,
             })),
           );
         }
@@ -1140,6 +1144,9 @@ function TerminalView({
   // stays visible after a turn finishes (the CLI only prints its meter while
   // working).
   const [tokens, setTokens] = useState<TokenMeter | null>(null);
+  // (from the dock's poll of every session: the per-window poll doesn't measure memory)
+  const [live] = useSubject(liveTerminals);
+  const memBytes = live.find((t) => t.name === name)?.memBytes ?? 0;
   const [conn, setConn] = useState<ConnState>("connecting");
   const containerRef = useRef<HTMLDivElement>(null);
   const base = `${API}/${encodeURIComponent(name)}`;
@@ -1408,6 +1415,11 @@ function TerminalView({
                 className="font-mono"
               >
                 · {fmtTokens(tokens.total)} tokens
+              </span>
+            )}
+            {memBytes > 0 && (
+              <span title="Memory used by this terminal and everything it started (PSS)" className="font-mono" data-testid="terminal-mem">
+                · {formatBytes(memBytes)}
               </span>
             )}
           </span>

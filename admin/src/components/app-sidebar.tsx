@@ -18,6 +18,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  MemoryStick,
   UsersRound,
   MessagesSquare,
   Network,
@@ -488,17 +489,28 @@ export function AppSidebar() {
                             closeMobile();
                           }}
                           title={
-                            t.tokens
+                            (t.tokens
                               ? `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""} · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session`
-                              : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`
+                              : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`) +
+                            (t.memBytes ? ` · ${shortBytes(t.memBytes)} in memory` : "")
                           }
-                          className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                          className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                         >
                           <TermDot status={t.status} />
-                          <span className="truncate">{t.name}</span>
+                          <span className="min-w-0 truncate">{t.name}</span>
                           {t.tokens && t.tokens.total > 0 && (
                             <span className="ml-auto shrink-0 font-mono tabular-nums opacity-70">
                               {fmtTokens(t.tokens.total)}
+                            </span>
+                          )}
+                          {/* what it and everything it started have in memory (PSS) */}
+                          {!!t.memBytes && (
+                            <span
+                              className={`flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums opacity-70 ${t.tokens && t.tokens.total > 0 ? "" : "ml-auto"}`}
+                              data-testid={`terminal-mem-${t.name}`}
+                            >
+                              <MemoryStick className="size-2.5" />
+                              {shortBytes(t.memBytes)}
                             </span>
                           )}
                         </button>
