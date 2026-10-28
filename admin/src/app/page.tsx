@@ -1,5 +1,6 @@
 import { AutoRefresh } from "@/components/auto-refresh";
 import { DashboardOverview } from "@/components/dashboard-overview";
+import { ProjectDiskUsage } from "@/components/project-disk-usage";
 import { getDashboardMetrics } from "@/lib/dashboard-metrics";
 
 // Live numbers from every area: never statically cached.
@@ -17,6 +18,7 @@ export default async function Home() {
         </p>
       </header>
       <DashboardOverview m={metrics} />
+      <ProjectDiskUsage />
       <AutoRefresh ms={15_000} />
     </main>
   );
