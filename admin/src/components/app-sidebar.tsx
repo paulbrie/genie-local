@@ -376,8 +376,14 @@ export function AppSidebar() {
             item.href === "/docker" && dockerStats?.running
               ? `${dockerStats.running} · ${fmtBytes(dockerStats.memBytes)}`
               : badge;
+          // Boards and Terminals fold their sub-items like Projects (the same remembered closedGroups)
+          const subCount =
+            item.href === "/boards" ? boards.length : item.href === "/terminals" ? workingTerms.length : 0;
+          const foldable = !rail && subCount > 0;
+          const folded = foldable && closedGroups.includes(item.href);
           return (
             <div key={item.href}>
+              <div className="flex items-center">
               <Link
                 href={item.href}
                 onClick={closeMobile}
@@ -387,7 +393,7 @@ export function AppSidebar() {
                     ? `${item.label}${badge ? ` (${badge})` : ""}`
                     : undefined
                 }
-                className={`relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
+                className={`relative flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
                   rail ? "justify-center" : ""
                 } ${
                   active
@@ -408,6 +414,19 @@ export function AppSidebar() {
                     </span>
                   ))}
               </Link>
+              {foldable && (
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(item.href)}
+                  aria-expanded={!folded}
+                  aria-label={`${folded ? "Unfold" : "Fold"} ${item.label}`}
+                  title={folded ? "Unfold" : "Fold"}
+                  className="mr-1 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100"
+                >
+                  <ChevronDown className={`size-3.5 transition-transform ${folded ? "-rotate-90" : ""}`} />
+                </button>
+              )}
+              </div>
 
               {/* Live agent/pipeline runs, as sub-items under Agents. Clicking
                   opens (or un-minimizes) the run's window in the global dock. */}
@@ -445,7 +464,7 @@ export function AppSidebar() {
               )}
 
               {/* The boards last opened here, as sub-items under Boards. */}
-              {item.href === "/boards" && !rail && boards.length > 0 && (
+              {item.href === "/boards" && !rail && !folded && boards.length > 0 && (
                 <div className="mt-px flex flex-col gap-px">
                   {boards.map((b) => {
                     const here = pathname === `/boards/${b.id}`;
@@ -474,6 +493,7 @@ export function AppSidebar() {
                   right-click: Open / Delete. */}
               {item.href === "/terminals" &&
                 !rail &&
+                !folded &&
                 workingTerms.length > 0 && (
                   <div className="mt-px flex flex-col gap-px">
                     {workingTerms.map((t) => (
