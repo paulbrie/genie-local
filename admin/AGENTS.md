@@ -150,6 +150,15 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 - Dashboard (`src/app/page.tsx`) and detail (`src/app/projects/[slug]/page.tsx`)
   are `dynamic = 'force-dynamic'` (they read live signals every load). `params`
   is a `Promise` — `await` it.
+- **Review before push** (a project's Git tab). Per project: branches (globs), whose pushes
+  (agents = shells with `CLAUDECODE` set, people, both), block-at severity, effort, skipped files,
+  timeout. Saved to `/opt/project/.review/config.json` (by repo; `REVIEW_DIR` overrides) and a
+  `pre-push` hook is installed in each of the project's repos (a repo's own hook is kept as
+  `pre-push.genie-chained` and runs first; a repo with `core.hooksPath`, e.g. husky, gets the line
+  to add by hand). The hook runs `scripts/review-hook.mjs`: `claude -p` with read-only tools and a
+  JSON schema reviews the pushed range, findings at or above the setting stop the push, results go
+  to `.review/results/` (shown on the Git tab). It fails open (busy, timeout, no Claude);
+  `REVIEW=skip git push` overrides and is logged. Decisions: `src/lib/code-review/core.mjs` (tested).
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
   reactions, live cursors, follow mode). Two more object types: a **link** (its own card with address, title and note —

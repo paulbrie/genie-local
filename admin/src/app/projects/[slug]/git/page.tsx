@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 
+import { CodeReviewPanel } from "@/components/code-review-panel";
 import { GitGraphView } from "@/components/git-graph";
 import { getProject } from "@/lib/project-page";
 
@@ -18,10 +19,13 @@ export default async function ProjectGitPage({
   const detail = await getProject(slug);
   if (!detail || !detail.apps.some(({ app: a }) => a.isGit)) notFound();
   return (
-    <GitGraphView
-      projectSlug={detail.project.slug}
-      initialApp={Array.isArray(app) ? app[0] : app}
-      initialView={Array.isArray(view) ? view[0] : view}
-    />
+    <div className="space-y-3">
+      <CodeReviewPanel slug={detail.project.slug} />
+      <GitGraphView
+        projectSlug={detail.project.slug}
+        initialApp={Array.isArray(app) ? app[0] : app}
+        initialView={Array.isArray(view) ? view[0] : view}
+      />
+    </div>
   );
 }
