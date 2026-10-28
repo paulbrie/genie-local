@@ -4,11 +4,12 @@ import { useSelectedLayoutSegments } from "next/navigation";
 
 /**
  * The project page's frame: the usual reading width, but the whole window for
- * a commit (/git/<hash>), where diffs need the room.
+ * a commit (/git/<hash>), where diffs need the room, and for the Files tab's
+ * explorer (folders, files and the editor side by side).
  */
 export function ProjectFrame({ children }: { children: React.ReactNode }) {
   const segments = useSelectedLayoutSegments();
-  const wide = segments[0] === "git" && segments.length > 1;
+  const wide = (segments[0] === "git" && segments.length > 1) || segments[0] === "files";
   return (
     <main className={`mx-auto w-full flex-1 space-y-6 p-6 ${wide ? "max-w-none" : "max-w-5xl"}`}>
       {children}

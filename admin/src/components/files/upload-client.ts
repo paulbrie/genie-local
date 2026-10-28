@@ -94,7 +94,7 @@ export async function uploadFile(
   file: File,
   dir: string,
   name: string,
-  opts: { overwrite?: boolean; signal: AbortSignal; onProgress: (p: UploadProgress) => void },
+  opts: { overwrite?: boolean; project?: string; signal: AbortSignal; onProgress: (p: UploadProgress) => void },
 ): Promise<string> {
   const api = `${BASE_PATH}/api/files/upload`, key = fileKey(dir, file, name);
   let id: string | null = remembered()[key] ?? null, offset = 0, chunkBytes = 8 * 1024 * 1024;
@@ -106,7 +106,7 @@ export async function uploadFile(
   if (!id) {
     const s = await json<{ id: string; chunkBytes: number }>(await fetch(api, {
       method: "POST", headers: { "Content-Type": "application/json" }, signal: opts.signal,
-      body: JSON.stringify({ dir, name, size: file.size, overwrite: !!opts.overwrite }),
+      body: JSON.stringify({ dir, name, size: file.size, overwrite: !!opts.overwrite, project: opts.project }),
     }));
     id = s.id;
     chunkBytes = s.chunkBytes;

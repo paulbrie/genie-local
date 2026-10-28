@@ -22,6 +22,19 @@ export function writeRoots(): string[] {
   return list(process.env.ADMIN_FILES_WRITE_ROOTS, ["/opt/project", "/home/genie", "/tmp"]);
 }
 
+/**
+ * The roots of a request: the explorer scoped to one project (its Files tab, `project=<slug>`) sees that project's
+ * folder alone (PROJECTS_ROOT/<slug>, itself inside fileRoots()); otherwise fileRoots(). Every path of the request is
+ * then checked against these, so the project view can't reach above its folder whatever the page asks for.
+ */
+export function scopeRoots(project?: string | null): string[] {
+  if (!project) return fileRoots();
+  if (project.startsWith(".")) throw new PathError("bad project");
+  const dir = path.join(path.resolve(process.env.PROJECTS_ROOT ?? "/opt/project/projects"), checkName(project));
+  if (!rootOf(dir, fileRoots())) throw new PathError("outside the explorer's roots", 403);
+  return [dir];
+}
+
 /** kernel pseudo-filesystems: listed, never read (their files are endless or change as read) */
 const PSEUDO = ["/proc", "/sys"];
 export const isPseudo = (abs: string): boolean => PSEUDO.some((p) => isWithin(abs, p));

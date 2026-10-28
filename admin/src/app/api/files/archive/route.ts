@@ -1,4 +1,4 @@
-// GET /api/files/archive?path=<folder>: the folder as a .tar.gz, streamed from `tar` (never built in memory or on
+// GET /api/files/archive?path=<folder>[&project=<slug>]: the folder as a .tar.gz, streamed from `tar` (never built in memory or on
 // disk). Credential files are left out by the same rules the listing flags them with (isSecretPath): a folder download
 // mustn't carry out what a single download needs a confirm for. Rebuildable bulk (node_modules, Next build dirs,
 // caches) is left out too. Every archive is in the audit log.
@@ -8,7 +8,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
 
-import { isPseudo, resolveExisting } from "@/lib/files/guard";
+import { isPseudo, resolveExisting, scopeRoots } from "@/lib/files/guard";
 import { audit } from "@/lib/files/ops";
 import { errorResponse, whoOf } from "../shared";
 
@@ -27,7 +27,8 @@ const BULK_EXCLUDES = ["node_modules", ".next", ".next-*", ".turbo", ".cache"];
 
 export async function GET(req: NextRequest) {
   try {
-    const t = await resolveExisting(req.nextUrl.searchParams.get("path") ?? "");
+    const q = req.nextUrl.searchParams;
+    const t = await resolveExisting(q.get("path") ?? "", scopeRoots(q.get("project")));
     if (isPseudo(t.abs)) return NextResponse.json({ error: "a kernel folder (/proc, /sys): not archived" }, { status: 403 });
     if (!(await fs.stat(t.abs)).isDirectory()) return NextResponse.json({ error: "not a folder" }, { status: 400 });
     const parent = path.dirname(t.abs), name = path.basename(t.abs) || "root";

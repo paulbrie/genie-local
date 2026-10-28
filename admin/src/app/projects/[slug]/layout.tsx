@@ -12,7 +12,7 @@ import { readScripts } from "@/lib/signals";
 
 /**
  * A project: its header and the tab bar. Each tab is its own page
- * (/projects/<slug>/scripts, /tasks, /notes, /git, /git/<hash>).
+ * (/projects/<slug>/scripts, /tasks, /notes, /memory, /files, /git, /git/<hash>).
  */
 export default async function ProjectLayout({
   children,
@@ -37,6 +37,7 @@ export default async function ProjectLayout({
     { id: "tasks", label: `Tasks (${tasks.length})` },
     { id: "notes", label: `Notes (${notes.length})` },
     { id: "memory", label: "Memory" },
+    { id: "files", label: "Files" },
     ...(apps.some(({ app }) => app.isGit) ? [{ id: "git", label: "Git" }] : []),
   ];
 

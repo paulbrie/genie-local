@@ -32,3 +32,6 @@ out/
 .DS_Store
 Thumbs.db
 *.swp
+
+# review-before-push settings, results and cache (admin/src/lib/code-review)
+/.review/

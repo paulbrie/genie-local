@@ -1,4 +1,4 @@
-// GET /api/files/raw?path=…[&download=1][&confirm=1]: a file streamed (never read whole into memory), inline for the
+// GET /api/files/raw?path=…[&download=1][&confirm=1][&project=<slug>]: a file streamed (never read whole into memory), inline for the
 // preview of an image or a PDF, or as a download. A credential file goes out only as a download the page confirmed
 // (T243), and every download of one is in the audit log.
 import { createReadStream, promises as fs } from "node:fs";
@@ -6,7 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { NextRequest, NextResponse } from "next/server";
 
-import { isPseudo, resolveExisting } from "@/lib/files/guard";
+import { isPseudo, resolveExisting, scopeRoots } from "@/lib/files/guard";
 import { isSecretPath } from "@/lib/files/listing";
 import { audit } from "@/lib/files/ops";
 import { errorResponse, whoOf } from "../shared";
@@ -21,7 +21,7 @@ const TYPES: Record<string, string> = {
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams;
   try {
-    const t = await resolveExisting(q.get("path") ?? "");
+    const t = await resolveExisting(q.get("path") ?? "", scopeRoots(q.get("project")));
     if (isPseudo(t.abs)) return NextResponse.json({ error: "a kernel file (/proc, /sys): not read from here" }, { status: 403 });
     const st = await fs.stat(t.abs);
     if (!st.isFile()) return NextResponse.json({ error: "not a regular file" }, { status: 400 });
