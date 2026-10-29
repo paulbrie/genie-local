@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Boxes } from "lucide-react";
 import { useSubject } from "subjecto/react";
@@ -14,17 +15,27 @@ import { liveTerminals } from "@/store/terminals";
 /**
  * "Projects 9.5 GB" in the top bar: the memory every project's processes and
  * containers use together, and on hover (or focus) each project's share, its
- * agents apart, and each terminal's. The breakdown is fixed-positioned: the bar's metrics scroll
- * sideways and would clip it.
+ * agents apart, and each terminal's. The breakdown is portalled to <body>: inside the top bar it
+ * sat in the bar's stacking context (its backdrop-blur makes one), under whatever the page drew
+ * later, whatever its z-index; and fixed-positioned, as the bar's metrics scroll sideways. It
+ * closes a moment after the pointer leaves, so the pointer can cross into it and scroll it.
  */
 export function ProjectsMemoryBadge() {
   const [status] = useSubject(projectMemory);
   const [terms] = useSubject(liveTerminals);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const closing = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const keep = () => clearTimeout(closing.current);
+  const close = () => {
+    clearTimeout(closing.current);
+    closing.current = setTimeout(() => setAt(null), 150);
+  };
+  useEffect(() => () => clearTimeout(closing.current), []);
   if (!status) return null;
   const total = status.projects.reduce((n, p) => n + p.bytes, 0);
   const agents = status.projects.reduce((n, p) => n + p.agentBytes, 0);
   const show = (e: React.SyntheticEvent<HTMLElement>) => {
+    keep();
     const r = e.currentTarget.getBoundingClientRect();
     // (its right edge under the badge's: the badge sits near the right of the bar)
     setAt({ x: window.innerWidth - r.right, y: r.bottom + 6 });
@@ -33,20 +44,22 @@ export function ProjectsMemoryBadge() {
     <div
       className="flex shrink-0 items-center"
       onMouseEnter={show}
-      onMouseLeave={() => setAt(null)}
+      onMouseLeave={close}
       onFocus={show}
-      onBlur={() => setAt(null)}
+      onBlur={close}
     >
       <Link href="/projects" className="flex items-center gap-1.5 rounded px-1 text-xs whitespace-nowrap hover:bg-accent/50" data-testid="projects-memory">
         <Boxes className="size-3.5 text-muted-foreground" />
         <span className="font-medium text-muted-foreground">Projects</span>
         <span className="font-mono tabular-nums">{formatBytes(total)}</span>
       </Link>
-      {at && (
+      {at && createPortal(
         <div
           role="tooltip"
-          style={{ right: Math.max(8, at.x), top: at.y, zIndex: Z_GLOBAL_CONTROLS }}
-          className="fixed w-80 max-w-[calc(100vw-1rem)] rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-xl"
+          onMouseEnter={keep}
+          onMouseLeave={close}
+          style={{ right: Math.max(8, at.x), top: at.y, zIndex: Z_GLOBAL_CONTROLS, maxHeight: `calc(100vh - ${at.y + 8}px)` }}
+          className="fixed w-80 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border bg-popover p-2 text-xs text-popover-foreground shadow-xl"
         >
           <div className="mb-1 flex justify-between text-muted-foreground">
             <span>Memory by project</span>
@@ -88,7 +101,8 @@ export function ProjectsMemoryBadge() {
               Agents (Claude sessions) {formatBytes(agents)}, not in the total.
             </p>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
