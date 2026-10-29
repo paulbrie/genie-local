@@ -37,3 +37,5 @@ Thumbs.db
 
 # review-before-push settings, results and cache (admin/src/lib/code-review)
 /.review/
+# this server's genie identity for Sign in with Genie (written by genie, not secret)
+/.genie-instance.json
