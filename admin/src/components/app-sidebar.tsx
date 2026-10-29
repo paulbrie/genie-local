@@ -403,7 +403,9 @@ export function AppSidebar() {
               >
                 <Icon className="size-[15px] shrink-0" />
                 {!rail && <span className="truncate">{item.label}</span>}
-                {badge != null &&
+                {/* a foldable group counts what it lists, plainly, as Projects does; the pill is for live counts on plain rows and the rail */}
+                {foldable && <span className="ml-auto text-xs tabular-nums opacity-60">{subCount}</span>}
+                {badge != null && !foldable &&
                   (rail ? (
                     <span className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
                       {badge}
