@@ -220,3 +220,40 @@ export async function switchBranch(
     return { dir, from, to: branch, head };
   });
 }
+
+/**
+ * Delete a local branch (`git branch -d`, or `-D` with `force`). Refuses when
+ * it is checked out (in the main checkout or a worktree); without `force`, git
+ * itself refuses a branch whose commits nothing else has (`unmerged` is then
+ * how many: the caller asks before forcing).
+ */
+export async function deleteBranch(
+  repoDir: string,
+  branch: string,
+  force: boolean,
+): Promise<{ deleted: true; head: string } | { deleted: false; unmerged: number }> {
+  return withRepoLock("branch delete", async () => {
+    await checkBranch(repoDir, branch);
+    const blocks = (await git(repoDir, ["worktree", "list", "--porcelain"])).trim().split(/\n\n+/);
+    const where = blocks.find((b) => /^branch refs\/heads\/(.+)$/m.exec(b)?.[1] === branch);
+    if (where) {
+      const dir = /^worktree (.+)$/m.exec(where)?.[1];
+      throw new Error(`${branch} is checked out ${where === blocks[0] ? "in the main checkout" : `in the worktree ${dir}`}: switch away first`);
+    }
+    const head = (await git(repoDir, ["rev-parse", `refs/heads/${branch}`])).trim();
+    const res = await gitStatus(repoDir, ["branch", force ? "-D" : "-d", "--", branch]);
+    if (res.code !== 0) {
+      if (!force && /not fully merged/.test(res.err)) {
+        // commits on it that no other local branch has
+        const others = (await git(repoDir, ["for-each-ref", "--format=%(refname)", "refs/heads"]))
+          .split("\n")
+          .filter((r) => r && r !== `refs/heads/${branch}`);
+        const unmerged = Number((await git(repoDir, ["rev-list", "--count", head, "--not", ...others])).trim()) || 0;
+        return { deleted: false, unmerged };
+      }
+      throw new Error((res.err || res.out).trim().split("\n").slice(0, 6).join(" ") || "git branch -d failed");
+    }
+    console.log(`[git-branch] deleted ${branch} (was ${head})${force ? " (forced)" : ""}`);
+    return { deleted: true, head };
+  });
+}

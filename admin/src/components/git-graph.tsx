@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, RefreshCw, Upload } from "lucide-react";
+import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -10,6 +10,14 @@ import { GitCommitDialog } from "@/components/git-commit-dialog";
 import { GitWorktrees } from "@/components/git-worktrees";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -206,6 +214,42 @@ export function GitGraphView({
     }
   };
 
+  // Delete a local branch (a branch label's menu): git branch -d; unmerged commits are asked about, then -D.
+  const removeBranch = async (branch: string) => {
+    if (!(await confirmDialog(`Delete the local branch ${branch}?`, { confirmLabel: "Delete", destructive: true }))) return;
+    const del = async (force: boolean) => {
+      const r = await fetch(`${BASE_PATH}/api/git/branch`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: projectSlug, app, branch, force }),
+      });
+      const j = (await r.json()) as { deleted?: boolean; head?: string; unmerged?: number; error?: string };
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      return j;
+    };
+    try {
+      let j = await del(false);
+      if (!j.deleted) {
+        const n = j.unmerged ?? 0;
+        if (
+          !(await confirmDialog(
+            n
+              ? `${n} commit${n === 1 ? " on it is" : "s on it are"} on no other local branch: deleting it loses them, unless they are pushed or merged somewhere.`
+              : "Its commits are all on other local branches, but not merged into the checked-out branch (or its upstream): nothing is lost.",
+            { title: `${branch} is not merged`, confirmLabel: "Delete anyway", destructive: true },
+          ))
+        )
+          return;
+        j = await del(true);
+      }
+      toast.success(`Deleted ${branch} (was ${String(j.head).slice(0, 7)})`);
+      showGraph(await fetchGraphOrAll(projectSlug, app, view === `branch:${branch}` ? ALL : view));
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      toast.error(`Not deleted: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const load = (appSlug: string, nextView = ALL) => {
     setLoading(true);
     setError(null);
@@ -247,6 +291,20 @@ export function GitGraphView({
     !!mainWt &&
     mainWt.branch !== graph.view.branch &&
     !views.worktrees.some((w) => w.branch === (graph.view as { branch: string }).branch);
+  // Where each local branch is checked out (it can't be switched to or deleted then).
+  const checkedOut = new Map(views.worktrees.filter((w) => w.branch).map((w) => [w.branch!, w]));
+  const branchMenu: BranchMenu = {
+    local: new Set(views.branches),
+    where: (b) => {
+      const w = checkedOut.get(b);
+      return w ? (w.main ? "the main checkout" : `the worktree ${folder(w.path)}`) : null;
+    },
+    busy: switching,
+    checkout: (b) => {
+      if (mainWt) void checkout(b, mainWt.branch, mainWt.path);
+    },
+    remove: (b) => void removeBranch(b),
+  };
   const svgWidth = PAD_X * 2 + Math.max(graph.columns, 1) * COL_W;
   const svgHeight = Math.max(graph.rows.length * ROW_H, ROW_H);
 
@@ -438,6 +496,7 @@ export function GitGraphView({
               <CommitRow
                 key={row.commit.hash}
                 row={row}
+                menu={branchMenu}
                 href={`/projects/${encodeURIComponent(projectSlug)}/git/${row.commit.hash}${
                   app ? `?app=${encodeURIComponent(app)}` : ""
                 }`}
@@ -450,7 +509,43 @@ export function GitGraphView({
   );
 }
 
-function CommitRow({ row, href }: { row: GraphRow; href: string }) {
+type BranchMenu = {
+  local: Set<string>;
+  /** where the branch is checked out, or null */
+  where: (branch: string) => string | null;
+  busy: boolean;
+  checkout: (branch: string) => void;
+  remove: (branch: string) => void;
+};
+
+/** A local branch's label, with Check out and Delete on right-click. */
+function BranchBadge({ name, variant, menu }: { name: string; variant: "default" | "secondary"; menu: BranchMenu }) {
+  const where = menu.where(name);
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={<span />} className="shrink-0" title="Right-click: check out or delete">
+        <Badge variant={variant}>{name}</Badge>
+      </ContextMenuTrigger>
+      {/* the menu is portalled, but React events still bubble to the row's link */}
+      <ContextMenuContent className="w-56" onClick={(e) => e.stopPropagation()}>
+        <ContextMenuLabel className="flex items-center gap-2 font-mono">
+          <GitBranch className="size-3.5 shrink-0" />
+          <span className="truncate">{name}</span>
+        </ContextMenuLabel>
+        {where && <ContextMenuLabel className="pt-0 font-normal">checked out in {where}</ContextMenuLabel>}
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled={!!where || menu.busy} onClick={() => menu.checkout(name)}>
+          <ArrowRightLeft /> Check out
+        </ContextMenuItem>
+        <ContextMenuItem variant="destructive" disabled={!!where} onClick={() => menu.remove(name)}>
+          <Trash2 /> Delete…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function CommitRow({ row, href, menu }: { row: GraphRow; href: string; menu: BranchMenu }) {
   const { commit } = row;
   return (
     <li id={`commit-${commit.hash}`} style={{ height: ROW_H }}>
@@ -458,21 +553,25 @@ function CommitRow({ row, href }: { row: GraphRow; href: string }) {
         href={href}
         className="flex h-full w-full items-center gap-2 px-2 text-left text-sm hover:bg-muted/60"
       >
-        {commit.refs.map((ref) => (
-          <Badge
-            key={ref.name}
-            variant={
-              ref.kind === "tag"
-                ? "outline"
-                : ref.kind === "head"
-                  ? "default"
-                  : "secondary"
-            }
-            className="shrink-0"
-          >
-            {ref.name}
-          </Badge>
-        ))}
+        {commit.refs.map((ref) =>
+          (ref.kind === "branch" || ref.kind === "head") && menu.local.has(ref.name) ? (
+            <BranchBadge key={ref.name} name={ref.name} variant={ref.kind === "head" ? "default" : "secondary"} menu={menu} />
+          ) : (
+            <Badge
+              key={ref.name}
+              variant={
+                ref.kind === "tag"
+                  ? "outline"
+                  : ref.kind === "head"
+                    ? "default"
+                    : "secondary"
+              }
+              className="shrink-0"
+            >
+              {ref.name}
+            </Badge>
+          ),
+        )}
         <span className="truncate">{commit.subject}</span>
         <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
           {commit.abbrev}
