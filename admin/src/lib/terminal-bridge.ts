@@ -13,6 +13,7 @@
  */
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { BASE_PATH } from "@/lib/config";
 
@@ -207,6 +208,11 @@ function connect(inst: Instance) {
   ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
 }
 
+/** Links clicked in a terminal open in a new tab, never over the admin page. */
+function openLinkInNewTab(_event: MouseEvent, uri: string) {
+  window.open(uri, "_blank", "noopener,noreferrer");
+}
+
 function scheduleReconnect(inst: Instance) {
   if (inst.disposed || inst.reconnectTimer) return;
   inst.reconnectTimer = setTimeout(() => {
@@ -231,10 +237,15 @@ export function createTerminal(
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 10000,
+    // OSC 8 hyperlinks (Claude prints these): without a handler xterm asks
+    // confirm() first.
+    linkHandler: { activate: openLinkInNewTab },
   });
 
   const fit = new FitAddon();
   terminal.loadAddon(fit);
+  // Plain URLs in the output.
+  terminal.loadAddon(new WebLinksAddon(openLinkInNewTab));
   terminal.open(container);
 
   // Canvas renderer: ~10× faster than DOM for chatty TUI output. Async because
