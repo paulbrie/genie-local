@@ -27,6 +27,7 @@ import {
   PanelLeftOpen,
   FolderOpen,
   FolderKanban,
+  FolderPlus,
   ScrollText,
   Server,
   Share2,
@@ -42,9 +43,11 @@ import { useSubject } from "subjecto/react";
 import type { WispMotion } from "@/brand/spiridus";
 import { Lockup, Wisp } from "@/components/brand/wisp";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
+import { NewProjectDialog } from "@/components/new-project-dialog";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
@@ -771,8 +774,9 @@ function ProjectsGroup({
 }) {
   const [list, setList] = useState<ProjectNavItem[] | null>(null);
   const [memory] = useSubject(projectMemory);
-  // Bumped after a script is started / stopped from a project's menu.
+  // Bumped after a script is started / stopped from a project's menu, or a project is created.
   const [reload, setReload] = useState(0);
+  const [creating, setCreating] = useState(false);
   useEffect(() => {
     let active = true;
     const load = async () => {
@@ -801,9 +805,24 @@ function ProjectsGroup({
   const rowClass = (on: boolean) =>
     on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground";
 
+  // Right-click on Projects (the row, or its icon in the rail): New project.
+  const withMenu = (trigger: React.ReactNode) => (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger>{trigger}</ContextMenuTrigger>
+        <ContextMenuContent className="w-44">
+          <ContextMenuItem onClick={() => setCreating(true)}>
+            <FolderPlus /> New project…
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {creating && <NewProjectDialog onClose={() => setCreating(false)} onCreated={() => setReload((n) => n + 1)} />}
+    </>
+  );
+
   // The icon rail has no room for a dozen names: just the Projects page.
   if (rail)
-    return (
+    return withMenu(
       <Link
         href={item.href}
         onClick={onNavigate}
@@ -812,33 +831,35 @@ function ProjectsGroup({
         className={`flex items-center justify-center rounded-md px-2.5 py-1.5 transition-colors ${rowClass(active || pathname.startsWith("/projects/"))}`}
       >
         <Icon className="size-[15px] shrink-0" />
-      </Link>
+      </Link>,
     );
 
   return (
     <div>
-      <div className={`flex items-center rounded-md transition-colors ${rowClass(active)}`}>
-        <Link
-          href={item.href}
-          onClick={onNavigate}
-          aria-current={active ? "page" : undefined}
-          className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
-        >
-          <Icon className="size-[15px] shrink-0" />
-          <span className="truncate">{item.label}</span>
-          {list && <span className="ml-auto text-xs tabular-nums opacity-60">{list.length}</span>}
-        </Link>
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
-          title={open ? "Fold" : "Unfold"}
-          className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
-        >
-          <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
-        </button>
-      </div>
+      {withMenu(
+        <div className={`flex items-center rounded-md transition-colors ${rowClass(active)}`}>
+          <Link
+            href={item.href}
+            onClick={onNavigate}
+            aria-current={active ? "page" : undefined}
+            className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
+          >
+            <Icon className="size-[15px] shrink-0" />
+            <span className="truncate">{item.label}</span>
+            {list && <span className="ml-auto text-xs tabular-nums opacity-60">{list.length}</span>}
+          </Link>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
+            title={open ? "Fold" : "Unfold"}
+            className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+          >
+            <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+          </button>
+        </div>,
+      )}
       {open && list && (
         <div className="mt-px flex flex-col gap-px">
           {list.map((p) => {
