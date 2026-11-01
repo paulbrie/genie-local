@@ -1,9 +1,9 @@
 import "server-only";
 
-import { desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
 
 import { db } from "@/db";
-import { apps, projects, statusSnapshots } from "@/db/schema";
+import { apps, notes, projects, statusSnapshots, tasks } from "@/db/schema";
 import { getArchivedSlugs } from "@/lib/data";
 import {
   collectAllProjects,
@@ -93,7 +93,42 @@ export async function scanAndPersist(): Promise<ProjectSignals[]> {
   ]);
   const visible = signals.filter((s) => !archived.has(s.slug));
   await Promise.all(visible.map(persistProject));
+  await pruneVanishedProjects(signals.map((s) => s.slug));
   return visible;
+}
+
+/**
+ * Drop registry rows whose directory is gone from disk (deleted or renamed
+ * outside the dashboard, e.g. from Files), so they leave the sidebar. A row
+ * with no tasks or notes is deleted; one that still has some is archived
+ * instead, so that work isn't cascaded away and can be restored.
+ */
+async function pruneVanishedProjects(onDisk: string[]): Promise<void> {
+  // An empty scan more likely means the projects root is unreadable than that
+  // every project was removed — don't wipe the registry on that.
+  if (onDisk.length === 0) return;
+  const gone = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.archived, false), notInArray(projects.slug, onDisk)));
+  if (gone.length === 0) return;
+  const ids = gone.map((p) => p.id);
+  const [taskOwners, noteOwners] = await Promise.all([
+    db.selectDistinct({ id: tasks.projectId }).from(tasks).where(inArray(tasks.projectId, ids)),
+    db.selectDistinct({ id: notes.projectId }).from(notes).where(inArray(notes.projectId, ids)),
+  ]);
+  const keep = new Set([...taskOwners, ...noteOwners].map((r) => r.id));
+  const toArchive = ids.filter((id) => keep.has(id));
+  const toDelete = ids.filter((id) => !keep.has(id));
+  if (toArchive.length > 0) {
+    await db
+      .update(projects)
+      .set({ archived: true, updatedAt: new Date() })
+      .where(inArray(projects.id, toArchive));
+  }
+  if (toDelete.length > 0) {
+    await db.delete(projects).where(inArray(projects.id, toDelete));
+  }
 }
 
 /** Re-scan a single project by slug. */
