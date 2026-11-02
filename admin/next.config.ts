@@ -45,6 +45,10 @@ const nextConfig: NextConfig = {
   // without this, client chunks fail to load and every client component hangs
   // on "loading…". (Dev-only setting; ignored by `next start`.)
   allowedDevOrigins: PUBLIC_HOSTS,
+  // ws, bundled, gets a stub for its optional `bufferutil` and every client frame
+  // of 48+ bytes throws "b.mask is not a function" (the Slack bot's Socket Mode
+  // acks). Loaded from node_modules it works, as in server.mjs.
+  serverExternalPackages: ["ws"],
   experimental: {
     // The app is reached via a proxy on a different host/port than the app's
     // own origin, so allow Server Actions from the public domain (CSRF guard).

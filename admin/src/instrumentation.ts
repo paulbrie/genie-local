@@ -9,6 +9,9 @@ export async function register() {
   // .env.local, and two sockets for one Slack app would split its events between them.
   if (process.env.NEXT_PHASE === "phase-production-build") return;
   if (process.env.NODE_ENV !== "production" && process.env.SLACK_ON_DEV !== "1") return;
+  // Should ws ever be bundled again (next.config.ts), its bufferutil stub would break every frame the bot sends:
+  // this makes ws skip bufferutil altogether. Read when ws loads, so before the import.
+  process.env.WS_NO_BUFFER_UTIL ??= "1";
   const { startSlackBot } = await import("./lib/slack/bot");
   // Don't hold up the server: the bot signs in and connects on its own.
   void startSlackBot();
