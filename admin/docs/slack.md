@@ -62,7 +62,13 @@ find your own id.
    # SLACK_ALERTS=off                     # optional: commands and replies only, no alerts
    ```
 
-5. `sudo admin-ctl deploy`, or just restart `admin.service` if nothing else
+5. If genie's egress firewall is on (`/etc/genie/firewall-allow.txt`, the
+   Firewall page), allow `slack.com`, `wss-primary.slack.com`,
+   `wss-backup.slack.com` and `hooks.slack.com`, then run `sudo genie-firewall`.
+   Without them the journal shows `[slack] not started: fetch failed
+   (ECONNREFUSED)`. The bot keeps retrying (up to every 10 min), so it connects
+   once they're allowed, with no restart needed.
+6. `sudo admin-ctl deploy`, or just restart `admin.service` if nothing else
    changed. `journalctl -u admin.service | grep '\[slack\]'` should show
    `signed in to <workspace>` and `socket: connected`.
 

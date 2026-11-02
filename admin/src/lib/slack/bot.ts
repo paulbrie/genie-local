@@ -525,7 +525,7 @@ function unknownText(user: string): string {
 // One bot per process (dev hot-reloads re-run instrumentation).
 const g = globalThis as unknown as { __slackBot?: Bot };
 
-/** Starts the bot when it's configured; logs and returns otherwise. Never throws. */
+/** Starts the bot when it's configured (retrying until Slack answers); logs and returns otherwise. Never throws. */
 export async function startSlackBot(): Promise<void> {
   if (g.__slackBot) return;
   const token = process.env.SLACK_BOT_TOKEN?.trim();
@@ -548,11 +548,18 @@ export async function startSlackBot(): Promise<void> {
     terminalsUrl,
   );
   g.__slackBot = bot;
-  try {
-    await bot.start();
-  } catch (e) {
-    log(`not started: ${(e as Error).message}`);
-    bot.stop();
-    g.__slackBot = undefined;
+  // Slack unreachable (the egress firewall, a network blip) or a token it refuses: keep trying, less and less often,
+  // so the bot comes up once that's fixed without another restart.
+  for (let wait = 30_000; ; wait = Math.min(wait * 2, 10 * 60_000)) {
+    try {
+      await bot.start();
+      return;
+    } catch (e) {
+      const err = e as Error & { cause?: { code?: string; message?: string } };
+      const why = err.cause ? `${err.message} (${err.cause.code ?? err.cause.message})` : err.message;
+      log(`not started: ${why}; retrying in ${Math.round(wait / 1000)}s`);
+      bot.stop();
+      await new Promise((r) => setTimeout(r, wait).unref());
+    }
   }
 }
