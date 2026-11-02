@@ -39,3 +39,5 @@ Thumbs.db
 /.review/
 # this server's genie identity for Sign in with Genie (written by genie, not secret)
 /.genie-instance.json
+# the Slack bot's threads (message → terminal) and muted terminals (admin/src/lib/slack)
+/.slack/

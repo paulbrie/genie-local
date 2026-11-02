@@ -195,6 +195,14 @@ for the hot-reload instance) and requires a login.
   a queue/concurrency limit, timeouts, retention and an optional completion
   webhook. See [Agents and pipelines](#agents-and-pipelines).
 
+### Slack
+- An optional Slack bot (Socket Mode, so no inbound route). It alerts when a Claude
+  terminal finishes or waits on you, with buttons for the choices. Replies in an
+  alert's thread are typed into that terminal. `/genie` (or a DM) gives `status`,
+  `show`, `send`, `key`, `ask`, `mute`, and project tasks (`tasks`, `task add`,
+  `task done`). Only the Slack users in `SLACK_ALLOWED_USERS` can use it. Setup and
+  details: [`admin/docs/slack.md`](admin/docs/slack.md).
+
 ### UI
 - shadcn/ui on Base UI, Tailwind 4, light/dark theme, collapsible sidebar,
   mobile layout, `subjecto` stores for UI state.
@@ -760,6 +768,9 @@ Where values come from:
 | `RAILWAY_API_TOKEN` | unset (Railway page shows "not configured") | Account-scoped Railway API token. |
 | `RAILWAY_API_URL` | `https://backboard.railway.com/graphql/v2` | Railway GraphQL endpoint. |
 | `DIAGRAMS_API_KEY` | unset (disabled) | When set, `/api/diagrams*` also accepts `x-api-key: <value>` without a session. |
+| `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | unset (no bot) | The Slack bot's `xoxb-` and `xapp-` tokens; see [`admin/docs/slack.md`](admin/docs/slack.md). |
+| `SLACK_ALLOWED_USERS` | unset (answers no one) | Slack user ids allowed to use the bot, comma-separated. |
+| `SLACK_CHANNEL` | unset (DMs) | Channel id for alerts; unset sends them as a DM to each allowed user. `SLACK_ALERTS=off` turns alerts off. |
 
 ### Agents runner (all optional)
 

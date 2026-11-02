@@ -161,6 +161,15 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   The Kokoro container is provisioned by `deploy/install.sh` (§11b, `INSTALL_TTS`,
   Docker `--restart unless-stopped` — no systemd unit). Curated voice list +
   picker: `KOKORO_VOICES` in `src/store/voice.ts`, `terminal-voice-controls.tsx`.
+- **Slack bot** (`src/lib/slack/`, docs in `docs/slack.md`). Runs in the prod
+  process only, started by `src/instrumentation.ts` (`SLACK_ON_DEV=1` runs it on
+  dev). It uses Socket Mode over `ws` with `fetch` for the Web API, no Slack SDK
+  (`socket.ts`). `core.ts` is pure and tested: commands, the 2-poll alert
+  detection, pane excerpts, choice buttons. `bot.ts` wires it to terminals.ts,
+  data.ts and `askAboutTerminals` (`src/lib/terminal-qa.ts`, shared with
+  `/api/ask`). It only answers `SLACK_ALLOWED_USERS`. `SLACK_BOT_TOKEN` and
+  `SLACK_APP_TOKEN` are in every SECRET_ENV list, so keep them there when
+  adding one.
 - Dashboard (`src/app/page.tsx`) and detail (`src/app/projects/[slug]/page.tsx`)
   are `dynamic = 'force-dynamic'` (they read live signals every load). `params`
   is a `Promise` — `await` it.
