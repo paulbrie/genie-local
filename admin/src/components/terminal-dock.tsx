@@ -46,10 +46,8 @@ import {
   openTerminal,
   reconcileTerminals,
   renameTerminal,
-  restoreTerminal,
   setLiveTerminals,
   setTerminalStatus,
-  termStatus,
   type TermStatus,
 } from "@/store/terminals";
 import {
@@ -64,7 +62,7 @@ import {
   setTerminalFontSize,
   writeToPty,
 } from "@/lib/terminal-bridge";
-import { Z_GLOBAL_CONTROLS, Z_GLOBAL_OVERLAY, Z_TERMINAL_WINDOWS } from "@/lib/z-layers";
+import { Z_GLOBAL_OVERLAY, Z_TERMINAL_WINDOWS } from "@/lib/z-layers";
 import { confirmDialog } from "@/lib/ask";
 
 const API = `${BASE_PATH}/api/terminals`;
@@ -275,7 +273,6 @@ async function renameSession(oldName: string, next: string): Promise<boolean> {
 export function TerminalDock() {
   const pathname = usePathname();
   const [{ open, minimized }] = useSubject(dock);
-  const [statuses] = useSubject(termStatus);
   const isMobile = useIsMobile();
   // Windows stack in their own band, above anything a page draws.
   const zTop = useRef(Z_TERMINAL_WINDOWS);
@@ -380,39 +377,6 @@ export function TerminalDock() {
         />
       ))}
 
-      {minimized.length > 0 && (
-        <div style={{ zIndex: Z_GLOBAL_CONTROLS }} className="fixed bottom-3 left-1/2 flex max-w-[92vw] -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-full border bg-background/95 px-2 py-1.5 shadow-2xl ring-1 ring-foreground/10 backdrop-blur">
-          <span className="px-1 text-xs text-muted-foreground">Minimized</span>
-          {minimized.map((name) => (
-            <span
-              key={name}
-              className="flex items-center gap-1 rounded-full border bg-muted/60 py-0.5 pr-0.5 pl-2 text-xs"
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  restoreTerminal(name);
-                  activate(name);
-                }}
-                title={`Restore ${name} — ${statusLabel(statuses[name] ?? "idle")}`}
-                className="flex items-center gap-1.5 font-medium hover:underline"
-              >
-                <TermStatusDot status={statuses[name] ?? "idle"} />
-                <span className="max-w-[10rem] truncate">{name}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => closeTerminal(name)}
-                aria-label={`Close ${name}`}
-                title="Close window (session keeps running)"
-                className="rounded-full p-0.5 opacity-60 hover:bg-foreground/10 hover:opacity-100"
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
     </>
   );
 }
