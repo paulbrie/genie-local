@@ -425,6 +425,8 @@ function pageSnapshot({ maxText }) {
     if (r.width < 1 || r.height < 1) return null;
     const cs = getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) === 0) return null;
+    // an ancestor's opacity: 0 or display: none hides it too (opacity isn't inherited)
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return null;
     return r;
   };
   const nameOf = (el) => {
@@ -473,7 +475,8 @@ function pageSnapshot({ maxText }) {
     }
     const r = visible(el);
     if (!r) continue;
-    const off = r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw ? " (offscreen)" : "";
+    // edges count as out: an off-canvas drawer (fixed, right: 0, translateX(100%)) starts exactly at x = vw
+    const off = r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw ? " (offscreen)" : "";
     if (/^H[1-3]$/.test(el.tagName)) {
       out.push(`${"#".repeat(Number(el.tagName[1]))} ${el.innerText.replace(/\s+/g, " ").trim().slice(0, 100)}${off}`);
       continue;
@@ -531,6 +534,9 @@ function pageLocate({ ref, selector, text, nth }) {
   el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
   const r = el.getBoundingClientRect();
   const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  // scrolling can't bring in what's fixed off-canvas (a closed drawer menu): a click there would hit nothing
+  if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight)
+    throw new Error(`that ${el.tagName.toLowerCase()} is outside the viewport even after scrolling (a closed menu or drawer?): open what holds it first`);
   const top = document.elementFromPoint(x, y);
   const covered = top && top !== el && !el.contains(top) && !top.contains(el) ? top.tagName.toLowerCase() + (top.id ? `#${top.id}` : "") : null;
   const label = (el.getAttribute("aria-label") || el.innerText || el.value || el.getAttribute("placeholder") || el.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 40);

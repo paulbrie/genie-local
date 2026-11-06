@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
+import { browserBridge } from "@/lib/browsers/db";
 import { extLink } from "@/lib/browsers/ext";
 import { PROJECTS_ROOT, resolveProjectPath } from "@/lib/signals";
 import { sendBrief, startAgent } from "@/lib/task-delegate";
@@ -33,8 +34,13 @@ export async function POST(req: NextRequest) {
 
   // One line: a newline typed into a terminal would submit there and then.
   const said = text.replace(/\s*\n\s*/g, " ");
+  // Only a tab the person shared (or Spiridus opened) can be driven: say which, so the agent doesn't assume it can.
+  const shared = page?.tabId != null && !!browserBridge()?.get(link.id)?.tabs.some((t) => t.id === page.tabId);
+  const reach = shared
+    ? "the browsers MCP tools can read and drive that tab"
+    : "that tab is not shared with Spiridus, so the browsers MCP tools can't reach it: ask them to share it from the extension's popup, or open the page in a new tab with browser_open";
   const where = page
-    ? ` (Said from ${link.name}'s Chrome, tab ${page.tabId ?? "?"}: "${page.title.replace(/\s+/g, " ")}" ${page.url}. It is Spiridus browser #${link.id}: the browsers MCP tools can read and drive that tab.)`
+    ? ` (Said from ${link.name}'s Chrome, tab ${page.tabId ?? "?"}: "${page.title.replace(/\s+/g, " ")}" ${page.url}. It is Spiridus browser #${link.id}: ${reach}.)`
     : "";
   const brief = said + where;
 
