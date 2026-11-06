@@ -376,6 +376,29 @@ export const boardSnapshots = pgTable(
   (t) => [index("board_snapshots_board_time").on(t.boardId, t.createdAt)],
 );
 
+/**
+ * A browser paired with the Spiridus Chrome extension (/browsers, server/browser-bridge.mjs).
+ * The extension keeps `token` (shown once, at pairing) and says hello with it on every
+ * connection; only its SHA-256 is stored. Revoking sets `revoked_at` and drops the socket.
+ */
+export const browserLinks = pgTable(
+  "browser_links",
+  {
+    id: serial("id").primaryKey(),
+    // What the person named it in the extension ("Paul's laptop").
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    // Who made the pairing code (an email, or "admin" for the shared login).
+    createdBy: text("created_by"),
+    // The extension's last hello: user agent, platform, extension version.
+    info: jsonb("info").notNull().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("browser_links_token_hash_key").on(t.tokenHash)],
+);
+
 export type Connection = typeof connections.$inferSelect;
 export type SavedQuery = typeof savedQueries.$inferSelect;
 export type Diagram = typeof diagrams.$inferSelect;
@@ -393,3 +416,4 @@ export type AdminLogin = typeof adminLogins.$inferSelect;
 export type AdminSession = typeof adminSessions.$inferSelect;
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type ProjectRecipe = typeof projectRecipes.$inferSelect;
+export type BrowserLink = typeof browserLinks.$inferSelect;

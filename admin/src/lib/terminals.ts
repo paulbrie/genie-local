@@ -323,7 +323,7 @@ function isNoServer(err: unknown): boolean {
 
 // The first tmux call starts the tmux server, whose environment every shell in
 // every admin terminal then inherits — keep the admin's own secrets out of it.
-const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
+const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "BROWSERS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
 function tmuxEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of SECRET_ENV) delete env[key];

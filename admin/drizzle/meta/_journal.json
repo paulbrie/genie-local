@@ -141,6 +141,13 @@
       "when": 1793208279738,
       "tag": "0019_genie_sign_in",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1793977560348,
+      "tag": "0020_browser_links",
+      "breakpoints": true
     }
   ]
 }

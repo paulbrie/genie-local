@@ -138,7 +138,7 @@ function childEnv(): NodeJS.ProcessEnv {
   }
   // Admin credentials stay out of agent runs (agents may browse untrusted
   // content; a prompt injection shouldn't find them in the environment).
-  for (const key of ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]) {
+  for (const key of ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "BROWSERS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]) {
     delete env[key];
   }
   env.FORCE_COLOR = "0";

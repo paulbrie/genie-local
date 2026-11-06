@@ -274,3 +274,40 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   · Images: `POST /api/boards/<id>/assets` saves to `BOARD_ASSETS_DIR`
     (`/opt/project/.board-assets/<id>/`), served by `/api/boards/assets/<id>/<file>`;
     raster types only.
+- **Browsers (`/browsers`) — people's own Chrome, driven from here** through the
+  Spiridus Bridge extension (`extension/`, Manifest V3, no build step).
+  · Pairing: "Pair a browser" makes a single-use code (10 min, in memory); the
+    person types it into the extension's popup. The extension's service worker
+    opens `<basePath>/browser-ws` and claims it; the hub (`server/browser-bridge.mjs`,
+    in server.mjs like boards) stores a `browser_links` row with only the token's
+    SHA-256 and hands the token back. It says hello with that token on every
+    reconnect. The socket's Origin is `chrome-extension://…` and has no cookie, so
+    server.mjs routes it with no Origin/cookie check: the code or token is its
+    whole auth (wrong codes are throttled per X-Real-IP). Unpairing (here, or the
+    popup) sets `revoked_at` and drops the socket. A DB error answers 1011, never
+    4401: 4401 makes the extension forget its token.
+  · Control: only tabs the person shared from the popup (or "Share every tab"),
+    plus tabs Spiridus opened itself. Everything goes through `chrome.debugger`
+    (real mouse/key events, Runtime.evaluate, Page.captureScreenshot, raw CDP), so
+    Chrome shows its "being debugged" bar; cancelling it unshares the tab. The
+    command list is at the top of `extension/background.js`.
+  · Agents: `/api/browsers` (list, with live tabs), `POST /api/browsers/pair-code`,
+    `PATCH|DELETE /api/browsers/<id>` (rename / unpair), `POST
+    /api/browsers/<id>/command` (`{ type, args, timeoutMs? }` → `{ ok, data|error }`),
+    `GET /api/browsers/<id>/events?after=&wait=` (console, errors, navigations,
+    dialogs). Auth: the session cookie, or `x-api-key: $BROWSERS_API_KEY`.
+    `scripts/browsers-mcp.mjs` wraps it as an MCP server (`browsers_list`,
+    `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`,
+    `browser_eval`, `browser_cdp`, …), credentials as for boards-mcp.
+  · In the page (`extension/overlay.js`, a content script in a closed shadow root): in shared tabs, the actor's cursor
+    gliding to what it clicks/types/scrolls with "<by> · <what>", a pill with the last action, a glow and a "… is
+    working here" badge (background.js `show()`; commands take `by`, which browsers-mcp sets to its terminal's name).
+    And, while paired, a chat bubble: talk to any Spiridus terminal (typed and submitted; Claude terminals through
+    `sendBrief`), see its screen live (`paneExcerpt`, as the Slack bot), answer its choices, or start a new talk
+    (`startAgent`, in a project). "Include this page" adds the tab, URL and browser id to the message. Its calls go
+    through the background to `/api/browsers/ext/{terminals,screen,talk,key}`, which take the pairing token
+    (`Authorization: Bearer`, `src/lib/browsers/ext.ts`) instead of a session: proxy-rules.ts lets that prefix past
+    the session and origin checks. The overlay ignores untrusted (page-made) events.
+  · `GET /api/browsers/extension` zips `extension/` with `config.js` rewritten to
+    the address it was downloaded from; people install it with Load unpacked.
+    Editing the extension means a re-download (or a reload of the unpacked folder).

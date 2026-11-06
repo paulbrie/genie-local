@@ -82,6 +82,16 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // And for browsers: agents drive the tabs people share through the Spiridus Bridge extension with BROWSERS_API_KEY.
+  const browsersKey = process.env.BROWSERS_API_KEY;
+  if (
+    browsersKey &&
+    path.startsWith("/api/browsers") &&
+    timingSafeEqual(req.headers.get("x-api-key") ?? "", browsersKey)
+  ) {
+    return NextResponse.next();
+  }
+
   // API → 401 JSON; pages → redirect to this instance's login page.
   if (path.startsWith("/api/")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });

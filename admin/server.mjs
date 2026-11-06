@@ -29,6 +29,8 @@ import { WebSocketServer } from "ws";
 
 import { handlePtyConnection, verifySessionToken, getCookie, reapOrphanedAttaches } from "./server/pty.mjs";
 import { flushBoards, handleBoardConnection } from "./server/boards.mjs";
+import { handleBrowserConnection } from "./server/browser-bridge.mjs";
+import { clientIpOf } from "./src/lib/activity-core.mjs";
 
 // Browser terminals of a previous run of this server are still attached to
 // their tmux sessions (see reapOrphanedAttaches): detach them.
@@ -49,6 +51,8 @@ const basePath = process.env.APP_BASE_PATH || "/admin";
 const PTY_PATH = `${basePath}/pty`;
 // Real-time whiteboards (/boards): one socket per open board, ?board=<id>.
 const BOARDS_PATH = `${basePath}/boards-ws`;
+// The Spiridus Bridge Chrome extension (server/browser-bridge.mjs): one socket per paired browser.
+const BROWSER_PATH = `${basePath}/browser-ws`;
 
 // Loopback by default: nginx is the only public entry point (and the only place
 // TLS + the Secure cookie flag are guaranteed). Override with HOST if needed.
@@ -84,6 +88,8 @@ const server = createServer((req, res) => handle(req, res));
 // noServer: we own the upgrade routing (Next HMR vs our /pty) below.
 const wss = new WebSocketServer({ noServer: true });
 const boardsWss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
+// Screenshots and page HTML come back through it, so frames can be large.
+const browserWss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 
 // Open terminal and board sockets are re-checked every so often: a session that has expired, or whose person was
 // disabled or removed on the Users page, is closed (4401) rather than kept until the tab goes away.
@@ -105,6 +111,14 @@ server.on("upgrade", (req, socket, head) => {
     pathname = new URL(req.url, "http://localhost").pathname;
   } catch {
     socket.destroy();
+    return;
+  }
+
+  // The extension's Origin is chrome-extension://…, and it has no admin_session cookie: it authenticates
+  // inside the socket, with a pairing code or the token it got for one (browser-bridge.mjs).
+  if (pathname === BROWSER_PATH) {
+    const ip = clientIpOf(req.headers["x-real-ip"], req.headers["x-forwarded-for"]) ?? req.socket.remoteAddress ?? "?";
+    browserWss.handleUpgrade(req, socket, head, (ws) => handleBrowserConnection(ws, String(ip)));
     return;
   }
 
@@ -163,5 +177,5 @@ for (const sig of ["SIGTERM", "SIGINT"]) {
 
 server.listen(port, hostname, () => {
   // eslint-disable-next-line no-console
-  console.log(`> admin server on :${port} (dev=${dev}) basePath=${basePath} pty=${PTY_PATH} boards=${BOARDS_PATH}`);
+  console.log(`> admin server on :${port} (dev=${dev}) basePath=${basePath} pty=${PTY_PATH} boards=${BOARDS_PATH} browsers=${BROWSER_PATH}`);
 });

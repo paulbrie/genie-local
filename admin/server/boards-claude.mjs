@@ -41,7 +41,7 @@ const FULL_CWD = process.env.BOARDS_CLAUDE_CWD || "/opt/project";
 const BROWSER_MCP = fileURLToPath(new URL("./boards-browser-mcp.mjs", import.meta.url));
 let browserRuns = 0;
 
-const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "RAILWAY_API_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
+const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "BROWSERS_API_KEY", "RAILWAY_API_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
 
 /** Every process below `root`, deepest included. Linux /proc only; [] elsewhere. */
 function descendantPids(root) {

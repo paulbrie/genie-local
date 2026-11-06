@@ -1,0 +1,69 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: light dark; --muted: #6b7280; --line: #d4d4d8; --ok: #16a34a; --bad: #dc2626; }
+      body { font: 13px/1.4 system-ui, sans-serif; width: 320px; margin: 0; padding: 12px; }
+      h1 { font-size: 14px; margin: 0 0 8px; display: flex; align-items: center; gap: 6px; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+      .dot.connected { background: var(--ok); }
+      .dot.connecting { background: #f59e0b; }
+      .muted { color: var(--muted); }
+      .err { color: var(--bad); margin: 6px 0; }
+      label { display: block; margin: 8px 0 2px; font-weight: 500; }
+      input[type="text"], input[type="url"] { width: 100%; box-sizing: border-box; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: transparent; color: inherit; }
+      button { font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
+      button.primary { background: #18181b; color: #fff; border-color: #18181b; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      .card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 10px; }
+      .tab { display: flex; gap: 6px; align-items: center; justify-content: space-between; margin: 4px 0; }
+      .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hidden { display: none; }
+      .switch { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1><span id="dot" class="dot"></span> Spiridus Bridge</h1>
+    <div id="statusLine" class="muted"></div>
+    <div id="error" class="err hidden"></div>
+
+    <form id="pairForm" class="hidden">
+      <p class="muted">On Spiridus, open <b>Browsers</b> and click <b>Pair a browser</b>; type the code shown there.</p>
+      <label for="server">Spiridus address</label>
+      <input id="server" type="url" placeholder="https://your-host/admin" required />
+      <label for="code">Code</label>
+      <input id="code" type="text" placeholder="ABCD-2345" autocomplete="off" required />
+      <label for="name">This browser's name</label>
+      <input id="name" type="text" placeholder="Work laptop" />
+      <div class="row"><button class="primary" id="pairBtn" type="submit">Pair</button></div>
+    </form>
+
+    <div id="paired" class="hidden">
+      <div class="card" id="thisTab">
+        <div class="tab"><span id="tabTitle"></span></div>
+        <div class="row"><button id="shareBtn" class="primary"></button></div>
+        <div id="tabNote" class="muted"></div>
+      </div>
+      <div class="card">
+        <div class="switch"><input id="shareAll" type="checkbox" /><label for="shareAll" style="margin:0">Share every tab</label></div>
+        <div class="muted">Spiridus can then read and act in any tab, including ones you open later.</div>
+        <div id="sharedList"></div>
+      </div>
+      <div class="card">
+        <label for="bubble" style="margin-top:0">Chat bubble (talk to Spiridus's terminals)</label>
+        <select id="bubble" style="width:100%;padding:5px 7px;border:1px solid var(--line);border-radius:6px;font:inherit;background:transparent;color:inherit">
+          <option value="all">On every page</option>
+          <option value="shared">Only in shared tabs</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="reconnect">Reconnect</button>
+        <button id="unpair">Unpair</button>
+      </div>
+    </div>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

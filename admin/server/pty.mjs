@@ -38,7 +38,7 @@ const enc = new TextEncoder();
 
 // Keep the admin's own secrets out of tmux (a fresh attach can start the tmux
 // server, and every terminal shell inherits its environment).
-const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
+const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "BROWSERS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
 function ptyEnv() {
   const env = { ...process.env, TERM: "xterm-256color" };
   for (const key of SECRET_ENV) delete env[key];
