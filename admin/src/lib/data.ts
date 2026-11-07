@@ -6,6 +6,7 @@ import { db } from "@/db";
 import {
   apps,
   notes,
+  projectProduction,
   projects,
   taskAttachments,
   taskComments,
@@ -42,6 +43,23 @@ export async function getArchivedSlugs(): Promise<Set<string>> {
     .from(projects)
     .where(eq(projects.archived, true));
   return new Set(rows.map((r) => r.slug));
+}
+
+/** A project's production details (its Production tab), or null when none are saved yet. */
+export async function getProduction(projectId: number) {
+  const [row] = await db.select().from(projectProduction).where(eq(projectProduction.projectId, projectId));
+  return row ?? null;
+}
+
+export async function setProduction(projectId: number, url: string, notes: string) {
+  await db
+    .insert(projectProduction)
+    .values({ projectId, url, notes, updatedAt: new Date() })
+    .onConflictDoUpdate({ target: projectProduction.projectId, set: { url, notes, updatedAt: new Date() } });
+}
+
+export async function clearProduction(projectId: number) {
+  await db.delete(projectProduction).where(eq(projectProduction.projectId, projectId));
 }
 
 export async function getNotes(projectId: number) {

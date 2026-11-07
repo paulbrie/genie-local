@@ -377,6 +377,19 @@ export const boardSnapshots = pgTable(
 );
 
 /**
+ * Where a project runs in production (its Production tab): the URL, and free notes
+ * (hosting, how it deploys, accounts…). One row per project; more fields can join it.
+ */
+export const projectProduction = pgTable("project_production", {
+  projectId: integer("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  notes: text("notes").notNull().default(""),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * A repo's GitHub remote and access token, set in its project's Git tab. `app` is the repo
  * within the project ('' = the project dir itself), as the Git tab's repo picker has it.
  * The URL becomes the repo's `origin`; the token (AES-GCM, src/lib/crypto.ts) is only ever
@@ -444,3 +457,4 @@ export type AdminUser = typeof adminUsers.$inferSelect;
 export type ProjectRecipe = typeof projectRecipes.$inferSelect;
 export type BrowserLink = typeof browserLinks.$inferSelect;
 export type GitCredential = typeof gitCredentials.$inferSelect;
+export type ProjectProduction = typeof projectProduction.$inferSelect;

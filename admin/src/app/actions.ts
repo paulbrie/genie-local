@@ -40,6 +40,9 @@ import {
 } from "@/lib/agent-runner";
 import {
   addNote,
+  clearProduction,
+  getProduction,
+  setProduction,
   addTask,
   addTaskComment,
   deleteNote,
@@ -169,6 +172,54 @@ export async function restoreProjectAction(slug: string) {
   await setProjectArchived(id, false);
   revalidatePath("/");
   revalidateProject();
+}
+
+// ── Production (the project's Production tab) ──
+
+const productionUrl = z
+  .string()
+  .trim()
+  .min(1, "the production URL is needed")
+  .max(2000)
+  .transform((u) => (/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : `https://${u}`))
+  .refine((u) => {
+    try {
+      return ["http:", "https:"].includes(new URL(u).protocol);
+    } catch {
+      return false;
+    }
+  }, "not a web address");
+
+export async function saveProductionAction(slug: string, url: string, notes: string) {
+  await requireAdmin();
+  const id = await requireProjectId(slug);
+  const parsed = productionUrl.safeParse(url);
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "invalid URL" };
+  await setProduction(id, new URL(parsed.data).toString(), z.string().max(20_000).parse(notes ?? ""));
+  revalidateProject();
+  return { ok: true as const };
+}
+
+export async function clearProductionAction(slug: string) {
+  await requireAdmin();
+  await clearProduction(await requireProjectId(slug));
+  revalidateProject();
+}
+
+/** Is the production URL up: its HTTP status (redirects followed) and how long it took. */
+export async function checkProductionAction(slug: string) {
+  await requireAdmin();
+  const row = await getProduction(await requireProjectId(slug));
+  if (!row) return { error: "no production URL saved" };
+  const started = Date.now();
+  try {
+    const res = await fetch(row.url, { redirect: "follow", signal: AbortSignal.timeout(15_000), headers: { "User-Agent": "Spiridus production check" } });
+    await res.body?.cancel();
+    return { status: res.status, ok: res.ok, ms: Date.now() - started, finalUrl: res.url };
+  } catch (e) {
+    const err = e as Error & { cause?: { code?: string; message?: string } };
+    return { error: err.name === "TimeoutError" ? "no answer within 15 s" : (err.cause?.code ?? err.cause?.message ?? err.message), ms: Date.now() - started };
+  }
 }
 
 export async function addNoteAction(slug: string, formData: FormData) {

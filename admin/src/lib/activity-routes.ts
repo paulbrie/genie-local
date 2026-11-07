@@ -32,6 +32,7 @@ export const PAGE_ROUTES = [
   "/projects/[slug]/git/[hash]",
   "/projects/[slug]/memory",
   "/projects/[slug]/notes",
+  "/projects/[slug]/production",
   "/projects/[slug]/scripts",
   "/projects/[slug]/tasks",
   "/railway",

@@ -6,13 +6,13 @@ import { ProjectFrame } from "@/components/project-frame";
 import { ProjectTabNav } from "@/components/project-tab-nav";
 import { RescanProjectButton } from "@/components/rescan-project-button";
 import { RestoreProjectButton } from "@/components/restore-project-button";
-import { getNotes, getTasks } from "@/lib/data";
+import { getNotes, getProduction, getTasks } from "@/lib/data";
 import { getProject } from "@/lib/project-page";
 import { readScripts } from "@/lib/signals";
 
 /**
  * A project: its header and the tab bar. Each tab is its own page
- * (/projects/<slug>/scripts, /tasks, /notes, /memory, /files, /git, /git/<hash>).
+ * (/projects/<slug>/scripts, /production, /tasks, /notes, /memory, /files, /git, /git/<hash>).
  */
 export default async function ProjectLayout({
   children,
@@ -26,14 +26,16 @@ export default async function ProjectLayout({
   if (!detail) notFound();
   const { project, apps } = detail;
 
-  const [notes, tasks, appScripts] = await Promise.all([
+  const [notes, tasks, production, appScripts] = await Promise.all([
     getNotes(project.id),
     getTasks(project.id),
+    getProduction(project.id),
     Promise.all(apps.map(({ app }) => readScripts(app.path))),
   ]);
   const scriptCount = appScripts.reduce((n, s) => n + Object.keys(s).length, 0);
   const tabs = [
     { id: "scripts", label: `Scripts (${scriptCount})` },
+    { id: "production", label: "Production" },
     { id: "tasks", label: `Tasks (${tasks.length})` },
     { id: "notes", label: `Notes (${notes.length})` },
     { id: "memory", label: "Memory" },
@@ -51,6 +53,14 @@ export default async function ProjectLayout({
           <h1 className="mt-1 text-2xl font-semibold tracking-tight">{project.slug}</h1>
           <p className="font-mono text-xs text-muted-foreground">
             {project.path} · {apps.length} {apps.length === 1 ? "app" : "apps"}
+            {production && (
+              <>
+                {" · "}
+                <a href={production.url} target="_blank" rel="noreferrer" className="hover:underline" title="Production">
+                  {production.url.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗
+                </a>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
