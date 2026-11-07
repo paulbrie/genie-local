@@ -173,6 +173,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 - Dashboard (`src/app/page.tsx`) and detail (`src/app/projects/[slug]/page.tsx`)
   are `dynamic = 'force-dynamic'` (they read live signals every load). `params`
   is a `Promise` — `await` it.
+- **GitHub remote per repo** (a project's Git tab → Remote). The URL (`owner/repo`, ssh or https,
+  normalized to https, credentials stripped) becomes the repo's `origin`; the personal access token
+  is stored AES-GCM in `git_credentials` (per project + repo, `src/lib/git-auth.ts`) and never sent
+  back. Push, Commit & push and Refresh hand it to git as an auth header for that host only, through
+  `GIT_CONFIG_COUNT/KEY/VALUE` in the environment (`gitRemoteEnv`), never in `.git/config`, the URL
+  or argv. Saving checks it with `git ls-remote`. `APP_ENC_KEY` may be hex or base64 (crypto.ts).
 - **Review before push** (a project's Git tab). Per project: branches (globs), whose pushes
   (agents = shells with `CLAUDECODE` set, people, both), block-at severity, effort, skipped files,
   timeout. Saved to `/opt/project/.review/config.json` (by repo; `REVIEW_DIR` overrides) and a

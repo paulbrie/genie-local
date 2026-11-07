@@ -8,16 +8,17 @@ import {
 
 /**
  * AES-256-GCM encryption for connection passwords at rest. Key comes from
- * APP_ENC_KEY (base64, 32 bytes) in .env.local. Output format:
+ * APP_ENC_KEY (32 bytes, base64 or hex) in .env.local. Output format:
  *   v1:<iv b64>:<authTag b64>:<ciphertext b64>
  */
 const KEY_B64 = process.env.APP_ENC_KEY;
 
 function key(): Buffer {
   if (!KEY_B64) throw new Error("APP_ENC_KEY is not set (see .env.local)");
-  const k = Buffer.from(KEY_B64, "base64");
+  // 32 bytes, base64- or hex-encoded (the installer writes 64 hex characters, which base64 would read as 48 bytes).
+  const k = /^[0-9a-f]{64}$/i.test(KEY_B64) ? Buffer.from(KEY_B64, "hex") : Buffer.from(KEY_B64, "base64");
   if (k.length !== 32) {
-    throw new Error("APP_ENC_KEY must be 32 bytes (base64-encoded)");
+    throw new Error("APP_ENC_KEY must be 32 bytes (base64- or hex-encoded)");
   }
   return k;
 }

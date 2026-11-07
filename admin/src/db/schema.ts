@@ -377,6 +377,30 @@ export const boardSnapshots = pgTable(
 );
 
 /**
+ * A repo's GitHub remote and access token, set in its project's Git tab. `app` is the repo
+ * within the project ('' = the project dir itself), as the Git tab's repo picker has it.
+ * The URL becomes the repo's `origin`; the token (AES-GCM, src/lib/crypto.ts) is only ever
+ * handed to git as an auth header for that host, in the environment (src/lib/git-auth.ts),
+ * never written into .git/config or the URL.
+ */
+export const gitCredentials = pgTable(
+  "git_credentials",
+  {
+    id: serial("id").primaryKey(),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    app: text("app").notNull().default(""),
+    remoteUrl: text("remote_url").notNull(),
+    tokenEnc: text("token_enc"),
+    // The token's last 4 characters, to tell which one is saved without decrypting it.
+    tokenHint: text("token_hint"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("git_credentials_project_app_key").on(t.projectId, t.app)],
+);
+
+/**
  * A browser paired with the Spiridus Chrome extension (/browsers, server/browser-bridge.mjs).
  * The extension keeps `token` (shown once, at pairing) and says hello with it on every
  * connection; only its SHA-256 is stored. Revoking sets `revoked_at` and drops the socket.
@@ -417,3 +441,4 @@ export type AdminSession = typeof adminSessions.$inferSelect;
 export type AdminUser = typeof adminUsers.$inferSelect;
 export type ProjectRecipe = typeof projectRecipes.$inferSelect;
 export type BrowserLink = typeof browserLinks.$inferSelect;
+export type GitCredential = typeof gitCredentials.$inferSelect;

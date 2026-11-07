@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { gitRemoteEnv } from "@/lib/git-auth";
 import { pushBranch } from "@/lib/git-commit";
 import { listRepos, parseView, resolveRepo } from "@/lib/git-graph";
 import { requireAdmin } from "@/lib/require-admin";
@@ -26,9 +27,10 @@ export async function POST(req: NextRequest) {
   }
   try {
     const b = Body.parse(await req.json());
-    const repo = await resolveRepo(b.project, b.app || ((await listRepos(b.project))[0]?.app ?? ""));
+    const app = b.app || ((await listRepos(b.project))[0]?.app ?? "");
+    const repo = await resolveRepo(b.project, app);
     if (!repo) throw new Error("no git repo");
-    return NextResponse.json(await pushBranch(repo, parseView(b.view)));
+    return NextResponse.json(await pushBranch(repo, parseView(b.view), await gitRemoteEnv(b.project, app)));
   } catch (err) {
     return fail(err instanceof z.ZodError ? "bad request" : err);
   }

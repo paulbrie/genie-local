@@ -115,6 +115,7 @@ export const API_ROUTES = [
   "/api/git/fetch",
   "/api/git/merge",
   "/api/git/push",
+  "/api/git/remote",
   "/api/git/worktrees",
   "/api/login",
   "/api/logout",

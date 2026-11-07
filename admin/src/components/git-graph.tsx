@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, KeyRound, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { GitRemoteDialog } from "@/components/git-remote-dialog";
 import { GitCommitDialog } from "@/components/git-commit-dialog";
 import { GitWorktrees } from "@/components/git-worktrees";
 import { Badge } from "@/components/ui/badge";
@@ -155,6 +156,7 @@ export function GitGraphView({
   // The repo picker (back to all branches) and the branch / worktree picker.
   // Commit (a dialog) and Push, in the checkout the view shows; then re-read in place.
   const [committing, setCommitting] = useState(false);
+  const [remoteOpen, setRemoteOpen] = useState(false);
   const [pushing, setPushing] = useState(false);
   const reread = async () => {
     try {
@@ -420,6 +422,19 @@ export function GitGraphView({
           />
         )}
         <div className="ml-auto flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8"
+            onClick={() => setRemoteOpen(true)}
+            title="This repo's GitHub URL (its origin) and the access token Push and Refresh use"
+          >
+            <KeyRound className="size-3.5" />
+            Remote
+          </Button>
+          {remoteOpen && (
+            <GitRemoteDialog projectSlug={projectSlug} app={app} onClose={() => setRemoteOpen(false)} onSaved={() => void reread()} />
+          )}
           <Button
             size="sm"
             variant="outline"

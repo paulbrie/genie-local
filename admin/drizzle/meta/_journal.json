@@ -148,6 +148,13 @@
       "when": 1793977560348,
       "tag": "0020_browser_links",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1793991029609,
+      "tag": "0021_git_credentials",
+      "breakpoints": true
     }
   ]
 }

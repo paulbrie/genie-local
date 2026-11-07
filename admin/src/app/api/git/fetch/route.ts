@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { gitRemoteEnv } from "@/lib/git-auth";
 import { listRepos, resolveRepo } from "@/lib/git-graph";
 import { requireAdmin } from "@/lib/require-admin";
 
@@ -30,7 +31,8 @@ export async function POST(req: NextRequest) {
     await run("git", ["fetch", "--all", "--prune", "--quiet"], {
       cwd: repo,
       timeout: 45_000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" },
+      // no prompts, and the repo's saved token, if any (git-auth.ts)
+      env: { ...process.env, ...(await gitRemoteEnv(b.project, app)) },
     });
     return NextResponse.json({ fetched: true });
   } catch (err) {

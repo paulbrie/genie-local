@@ -12,9 +12,9 @@ const run = promisify(execFile);
 const ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
 
 /** git with pathspecs taken literally (a file named ":(glob)*" is just that file). */
-async function git(cwd: string, args: string[], timeout = 20_000): Promise<string> {
+async function git(cwd: string, args: string[], timeout = 20_000, env: Record<string, string> = {}): Promise<string> {
   try {
-    return (await run("git", ["--literal-pathspecs", ...args], { cwd, timeout, env: ENV, maxBuffer: 8 * 1024 * 1024 }))
+    return (await run("git", ["--literal-pathspecs", ...args], { cwd, timeout, env: { ...ENV, ...env }, maxBuffer: 8 * 1024 * 1024 }))
       .stdout;
   } catch (e) {
     const x = e as { stderr?: string; stdout?: string; killed?: boolean };
@@ -67,11 +67,13 @@ export async function commitChanges(
  * Push the view's checkout's branch to origin, to the branch of the same name
  * (as git's push.default=simple: never into another branch, whatever the
  * upstream is), setting it as upstream when there's none. Never forced: when
- * origin has moved on, git refuses and says so.
+ * origin has moved on, git refuses and says so. `env`: the repo's saved token
+ * (git-auth.ts `gitRemoteEnv`), when it has one.
  */
 export async function pushBranch(
   repoDir: string,
   view: GraphView,
+  env: Record<string, string> = {},
 ): Promise<{ dir: string; branch: string; pushed: number; created: boolean }> {
   return withRepoLock("push", async () => {
     const dir = await dirOf(repoDir, view);
@@ -84,7 +86,7 @@ export async function pushBranch(
     );
     const ref = `refs/heads/${sync.branch}`;
     try {
-      await git(dir, ["push", "--porcelain", ...(hasUpstream ? [] : ["--set-upstream"]), "origin", `${ref}:${ref}`], 120_000);
+      await git(dir, ["push", "--porcelain", ...(hasUpstream ? [] : ["--set-upstream"]), "origin", `${ref}:${ref}`], 120_000, env);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (/\[rejected\]|non-fast-forward|fetch first/.test(msg)) {

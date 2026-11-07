@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { gitRemoteEnv } from "@/lib/git-auth";
 import { commitChanges, pushBranch } from "@/lib/git-commit";
 import { listRepos, parseView, resolveRepo } from "@/lib/git-graph";
 import { requireAdmin } from "@/lib/require-admin";
@@ -34,14 +35,15 @@ export async function POST(req: NextRequest) {
     return fail("bad request");
   }
   try {
-    const repo = await resolveRepo(b.project, b.app || ((await listRepos(b.project))[0]?.app ?? ""));
+    const app = b.app || ((await listRepos(b.project))[0]?.app ?? "");
+    const repo = await resolveRepo(b.project, app);
     if (!repo) throw new Error("no git repo");
     const view = parseView(b.view);
     const commit = await commitChanges(repo, view, b.message, b.paths);
     if (!b.push) return NextResponse.json(commit);
     // committed either way: a failed push is reported next to it
     try {
-      return NextResponse.json({ ...commit, push: await pushBranch(repo, view) });
+      return NextResponse.json({ ...commit, push: await pushBranch(repo, view, await gitRemoteEnv(b.project, app)) });
     } catch (err) {
       return NextResponse.json({ ...commit, pushError: err instanceof Error ? err.message : String(err) });
     }
