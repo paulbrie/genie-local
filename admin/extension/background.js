@@ -222,7 +222,11 @@ async function unpair() {
 }
 
 chrome.runtime.onStartup.addListener(() => connect());
-chrome.runtime.onInstalled.addListener(() => connect());
+chrome.runtime.onInstalled.addListener(async () => {
+  connect();
+  // Installed or updated: the open pages don't have the overlay (and its chat bubble) yet.
+  for (const t of await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] })) ensureOverlay(t.id);
+});
 chrome.alarms.create("bridge-keepalive", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
   // Wakes the worker if Chrome stopped it while it was offline, so it tries again.
@@ -248,6 +252,7 @@ async function setShared(tabId, on, how = "user") {
   await saveShared();
   emit(on ? "shared" : "unshared", tabId, { how });
   refreshBadges();
+  if (on) await ensureOverlay(tabId);
   pushOverlay(tabId);
   reportTabs();
 }
@@ -378,6 +383,7 @@ async function ensureAttached(tabId) {
     if (!/already attached/i.test(e?.message ?? "")) throw e;
   }
   attached.add(tabId);
+  ensureOverlay(tabId);
   await cdp(tabId, "Page.enable");
   await cdp(tabId, "Runtime.enable");
   reportTabs();
@@ -623,10 +629,29 @@ async function defaultTab() {
 
 // ------------------------------------------------------------------ the overlay (overlay.js)
 
+/**
+ * Make sure the tab has the overlay. Chrome only puts a manifest's content scripts into pages loaded after the
+ * extension was installed or updated, so tabs open from before (the usual case right after an update) get it here.
+ * overlay.js runs once per page, so a second injection is harmless.
+ */
+async function ensureOverlay(tabId) {
+  const there = await chrome.tabs.sendMessage(tabId, { kind: "overlay-ping" }).catch(() => null);
+  if (there?.ok) return true;
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["overlay.js"] });
+    return true;
+  } catch {
+    return false; // chrome:// pages, the Web Store, a tab still loading…
+  }
+}
+
 /** What Spiridus is doing, shown in the tab: its cursor glides to `at` with a few words. */
 function show(tabId, a, what, at) {
   const by = typeof a.by === "string" && a.by.trim() ? a.by.trim().slice(0, 40) : "Spiridus";
-  chrome.tabs.sendMessage(tabId, { kind: "action", by, what, x: at?.x, y: at?.y }).catch(() => {});
+  const msg = { kind: "action", by, what, x: at?.x, y: at?.y };
+  chrome.tabs.sendMessage(tabId, msg).catch(async () => {
+    if (await ensureOverlay(tabId)) chrome.tabs.sendMessage(tabId, msg).catch(() => {});
+  });
 }
 /** A beat for the cursor to get there before the click, so the person sees where it lands. */
 const glide = () => new Promise((r) => setTimeout(r, 300));

@@ -14,8 +14,21 @@
  * events the page makes up (`isTrusted` false) are ignored, so a page can't talk to your terminals.
  */
 (() => {
-  if (window.top !== window || window.__spiridusOverlay) return;
-  window.__spiridusOverlay = true;
+  if (window.top !== window) return;
+  // Once per page, but an update or reload of the extension leaves the old copy dead (its chrome.runtime gone):
+  // that one makes way for this one.
+  const prev = window.__spiridusOverlay;
+  if (prev?.alive()) return;
+  for (const old of document.querySelectorAll("spiridus-bridge")) old.remove();
+  window.__spiridusOverlay = {
+    alive: () => {
+      try {
+        return !!chrome.runtime?.id;
+      } catch {
+        return false;
+      }
+    },
+  };
 
   const ask = (msg) => chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: e?.message ?? String(e) }));
   const api = async (method, path, opts = {}) => {
@@ -177,8 +190,9 @@
     workTimer = setTimeout(renderBadge, 6100);
   }
 
-  chrome.runtime.onMessage.addListener((m) => {
-    if (m?.kind === "overlay-state") applyState(m);
+  chrome.runtime.onMessage.addListener((m, _sender, reply) => {
+    if (m?.kind === "overlay-ping") reply({ ok: true });
+    else if (m?.kind === "overlay-state") applyState(m);
     else if (m?.kind === "action") onAction(m);
   });
 

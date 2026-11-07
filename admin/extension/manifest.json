@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Spiridus Bridge",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lets your Spiridus admin (and its agents) see and drive the tabs you share with it.",
   "minimum_chrome_version": "116",
   "permissions": [
     "debugger",
     "tabs",
     "storage",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
