@@ -34,6 +34,10 @@
  *   event {kind, tabId?, data}
  *   ping {}
  *   unpair {}
+ *   state {state}                          (Spiridus Desktop: its displays, OS, what it may do)
+ *
+ * A claim says its `kind`: "chrome" (the extension) or "desktop" (Spiridus Desktop, admin/desktop: a whole
+ * computer, its screens, input, files and shell). Both share everything here; only the commands differ.
  */
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import pg from "pg";
@@ -99,7 +103,23 @@ function pushEvent(id, ev) {
 const cleanInfo = (v) => {
   const o = v && typeof v === "object" ? v : {};
   const str = (x, n = 300) => (typeof x === "string" ? x.slice(0, n) : undefined);
-  return { userAgent: str(o.userAgent), platform: str(o.platform, 60), version: str(o.version, 30) };
+  return {
+    userAgent: str(o.userAgent),
+    platform: str(o.platform, 60),
+    version: str(o.version, 30),
+    // Spiridus Desktop (admin/desktop) says these instead of a user agent
+    os: str(o.os, 80),
+    hostname: str(o.hostname, 120),
+    user: str(o.user, 80),
+  };
+};
+/** What a pairing is: the Chrome extension, or the Spiridus Desktop app (a whole computer). */
+const KINDS = new Set(["chrome", "desktop"]);
+/** A desktop's state as it reports it (its displays, what it may do), kept small. */
+const cleanState = (v) => {
+  const o = v && typeof v === "object" ? v : {};
+  const json = JSON.stringify(o);
+  return json.length > 20_000 ? {} : o;
 };
 
 class Browser {
@@ -110,8 +130,10 @@ class Browser {
     this.info = info;
     this.ip = ip;
     this.connectedAt = Date.now();
+    this.kind = link.kind ?? "chrome";
     this.tabs = [];
     this.unshared = 0;
+    this.state = {};
     this.pending = new Map();
     this.nextCmd = 1;
     this.seenAt = 0;
@@ -147,12 +169,14 @@ class Browser {
     return {
       id: this.id,
       name: this.name,
+      kind: this.kind,
       online: true,
       connectedAt: this.connectedAt,
       ip: this.ip,
       info: this.info,
       tabs: this.tabs,
       unsharedTabs: this.unshared,
+      state: this.state,
     };
   }
 }
@@ -199,7 +223,7 @@ export function handleBrowserConnection(ws, ip) {
         const info = cleanInfo(msg.info);
         let rows;
         try {
-          ({ rows } = await db().query("select id, name from browser_links where token_hash = $1 and revoked_at is null", [sha256(msg.token)]));
+          ({ rows } = await db().query("select id, name, kind from browser_links where token_hash = $1 and revoked_at is null", [sha256(msg.token)]));
         } catch {
           // Not 4401: that makes the extension forget its token, and this is only Spiridus having a moment.
           return refuse(1011, "Spiridus couldn't check the pairing just now");
@@ -224,11 +248,12 @@ export function handleBrowserConnection(ws, ip) {
         }
         codes.delete(code);
         const info = cleanInfo(msg.info);
-        const name = (typeof msg.name === "string" && msg.name.trim().slice(0, 80)) || "Chrome";
+        const kind = KINDS.has(msg.kind) ? msg.kind : "chrome";
+        const name = (typeof msg.name === "string" && msg.name.trim().slice(0, 80)) || (kind === "desktop" ? (info.hostname ?? "Computer") : "Chrome");
         const token = randomBytes(32).toString("base64url");
         const { rows } = await db().query(
-          "insert into browser_links (name, token_hash, created_by, info) values ($1, $2, $3, $4) returning id, name",
-          [name, sha256(token), entry.createdBy, info],
+          "insert into browser_links (name, token_hash, created_by, info, kind) values ($1, $2, $3, $4, $5) returning id, name, kind",
+          [name, sha256(token), entry.createdBy, info, kind],
         );
         browser = attach(ws, rows[0], info, ip);
         browser.send({ t: "paired", id: browser.id, name: browser.name, token });
@@ -245,6 +270,9 @@ export function handleBrowserConnection(ws, ip) {
       case "tabs":
         browser.tabs = Array.isArray(msg.tabs) ? msg.tabs.slice(0, 200) : [];
         browser.unshared = Number(msg.unshared) || 0;
+        return;
+      case "state":
+        browser.state = cleanState(msg.state);
         return;
       case "result": {
         const p = browser.pending.get(msg.id);

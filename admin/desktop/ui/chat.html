@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Talk to Spiridus</title><link rel="stylesheet" href="style.css">
+<style>
+  body { display: flex; flex-direction: column; height: 100vh; }
+  .head { display: flex; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .head svg { width: 20px; height: 20px; flex: none; }
+  .head select { flex: 1; }
+  .status { display: flex; gap: 6px; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .status i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  pre { flex: 1; margin: 0; overflow: auto; padding: 10px 12px; background: var(--soft); font: 11.5px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+  .new { flex: 1; padding: 12px; overflow: auto; }
+  .keys { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
+  .keys button { padding: 4px 9px; font-size: 12px; }
+  .keys button.choice { border-color: var(--accent); }
+  .compose { padding: 10px 12px 12px; border-top: 1px solid var(--line); margin-top: 8px; }
+  .compose textarea { resize: none; height: 70px; }
+  .compose .row label { flex: 1; display: flex; gap: 6px; align-items: center; margin: 0; font-weight: 400; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+  <div class="head"><span id="logo"></span><select id="pick"></select><button id="refresh" title="Refresh the list">↻</button></div>
+  <div class="status hidden" id="status"><i></i><span></span></div>
+  <pre id="screen" class="hidden"></pre>
+  <div class="new hidden" id="fresh">
+    <label for="project">Project (the new terminal starts in it)</label><select id="project"></select>
+    <label for="tname">Name (optional)</label><input id="tname" type="text" placeholder="talk-…" maxlength="64">
+    <p class="muted">A new Claude starts in its own terminal on Spiridus with what you write below as its first message.</p>
+  </div>
+  <div class="keys hidden" id="keys"></div>
+  <div class="compose">
+    <textarea id="text" placeholder="Write to the terminal… (Enter sends, Shift+Enter for a new line)"></textarea>
+    <div class="row"><label><input type="checkbox" id="withComputer" checked> About this computer</label><button class="primary" id="send">Send</button></div>
+    <div id="err" class="err hidden"></div>
+  </div>
+  <script type="module" src="chat.js"></script>
+</body>
+</html>

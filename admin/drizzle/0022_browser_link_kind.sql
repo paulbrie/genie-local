@@ -1,0 +1,1 @@
+ALTER TABLE "browser_links" ADD COLUMN "kind" text DEFAULT 'chrome' NOT NULL;

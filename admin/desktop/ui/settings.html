@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Spiridus Desktop</title><link rel="stylesheet" href="style.css"></head>
+<body style="padding: 18px">
+  <h1><span id="logo"></span> Spiridus Desktop</h1>
+  <div class="row" style="margin-top: 6px"><span id="dot" class="dot"></span><span id="status" class="muted"></span></div>
+  <div id="error" class="err hidden" style="margin-top: 6px"></div>
+
+  <form id="pairForm" class="card hidden">
+    <div class="muted">On Spiridus, open <b>Browsers</b>, click <b>Pair a browser</b> and type the code here. This computer can then be seen and controlled from Spiridus, by everyone signed in to it, and by its agents.</div>
+    <label for="server">Spiridus address</label>
+    <input id="server" type="url" placeholder="https://your-host/admin" required>
+    <label for="code">Code</label>
+    <input id="code" type="text" placeholder="ABCD-2345" autocomplete="off" required>
+    <label for="name">This computer's name</label>
+    <input id="name" type="text">
+    <div class="row"><button class="primary" id="pairBtn" type="submit">Pair</button></div>
+  </form>
+
+  <div id="paired" class="hidden">
+    <div class="card">
+      <div style="font-weight: 600">What Spiridus may do here</div>
+      <div class="muted">It can always see the screens. Switch off what it shouldn't do.</div>
+      <label class="switch"><input type="checkbox" id="allowInput"><span>Mouse, keyboard, clipboard, opening apps</span></label>
+      <label class="switch"><input type="checkbox" id="allowShell"><span>Run commands (a terminal, as <span id="user"></span>)</span></label>
+      <label class="switch"><input type="checkbox" id="allowFiles"><span>Read and write files</span></label>
+      <label class="switch"><input type="checkbox" id="paused"><span><b>Pause</b>: refuse everything until resumed</span></label>
+    </div>
+    <div class="card" id="perms">
+      <div style="font-weight: 600">Permissions</div>
+      <div class="muted" id="permsText"></div>
+    </div>
+    <div class="row">
+      <button id="chat">Talk to Spiridus…</button>
+      <button id="reconnect">Reconnect</button>
+      <span style="flex: 1"></span>
+      <button id="unpair">Unpair</button>
+    </div>
+    <p class="muted" style="margin-top: 14px">It starts when you log in and stays in the <span id="trayWord">tray</span>. Closing this window doesn't stop it; Quit in its menu does.</p>
+  </div>
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

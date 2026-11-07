@@ -7,7 +7,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { browserLinks } from "@/db/schema";
 
-export type ExtLink = { id: number; name: string; createdBy: string | null };
+export type ExtLink = { id: number; name: string; kind: string; createdBy: string | null };
 
 /**
  * The paired browser behind a request from the Spiridus Bridge extension
@@ -20,7 +20,7 @@ export async function extLink(req: Request): Promise<ExtLink | null> {
   if (!m) return null;
   const hash = createHash("sha256").update(m[1]).digest("hex");
   const [row] = await db
-    .select({ id: browserLinks.id, name: browserLinks.name, createdBy: browserLinks.createdBy })
+    .select({ id: browserLinks.id, name: browserLinks.name, kind: browserLinks.kind, createdBy: browserLinks.createdBy })
     .from(browserLinks)
     .where(and(eq(browserLinks.tokenHash, hash), isNull(browserLinks.revokedAt)));
   return row ?? null;

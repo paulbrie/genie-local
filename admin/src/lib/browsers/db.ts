@@ -18,15 +18,28 @@ export type BrowserTab = {
   attached?: boolean;
 };
 
+/** What Spiridus Desktop reports about its computer (admin/desktop). */
+export type DesktopState = {
+  displays?: { id: number; name: string; x: number; y: number; width: number; height: number; scale: number; primary: boolean }[];
+  os?: string;
+  hostname?: string;
+  user?: string;
+  paused?: boolean;
+  /** what this computer's owner lets Spiridus do here */
+  allow?: { input?: boolean; shell?: boolean; files?: boolean };
+};
+
 type Live = {
   id: number;
   name: string;
+  kind: "chrome" | "desktop";
   online: true;
   connectedAt: number;
   ip: string;
   info: Record<string, string | undefined>;
   tabs: BrowserTab[];
   unsharedTabs: number;
+  state: DesktopState;
 };
 
 export type BridgeEvent = { seq: number; at: number; kind: string; tabId?: number; data?: unknown };
@@ -49,6 +62,7 @@ export function browserBridge(): Hub | null {
 export type BrowserSummary = {
   id: number;
   name: string;
+  kind: "chrome" | "desktop";
   createdBy: string | null;
   createdAt: Date;
   lastSeenAt: Date | null;
@@ -57,6 +71,7 @@ export type BrowserSummary = {
   connectedAt: number | null;
   tabs: BrowserTab[];
   unsharedTabs: number;
+  state: DesktopState;
 };
 
 /** Every paired (not revoked) browser, connected ones first. */
@@ -73,6 +88,7 @@ export async function listBrowsers(): Promise<BrowserSummary[]> {
       return {
         id: r.id,
         name: r.name,
+        kind: (r.kind === "desktop" ? "desktop" : "chrome") as "chrome" | "desktop",
         createdBy: r.createdBy,
         createdAt: r.createdAt,
         lastSeenAt: r.lastSeenAt,
@@ -81,6 +97,7 @@ export async function listBrowsers(): Promise<BrowserSummary[]> {
         connectedAt: l?.connectedAt ?? null,
         tabs: l?.tabs ?? [],
         unsharedTabs: l?.unsharedTabs ?? 0,
+        state: l?.state ?? {},
       };
     })
     .sort((a, b) => Number(b.online) - Number(a.online));

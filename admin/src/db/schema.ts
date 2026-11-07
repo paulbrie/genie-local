@@ -411,6 +411,8 @@ export const browserLinks = pgTable(
     id: serial("id").primaryKey(),
     // What the person named it in the extension ("Paul's laptop").
     name: text("name").notNull(),
+    // "chrome" (the Spiridus Bridge extension) or "desktop" (the Spiridus Desktop app: a whole computer).
+    kind: text("kind").notNull().default("chrome"),
     tokenHash: text("token_hash").notNull(),
     // Who made the pairing code (an email, or "admin" for the shared login).
     createdBy: text("created_by"),

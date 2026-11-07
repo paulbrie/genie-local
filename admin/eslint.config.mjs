@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Spiridus Desktop's Rust build output
+    "desktop/src-tauri/target/**",
+    "desktop/src-tauri/gen/**",
   ]),
 ]);
 

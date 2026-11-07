@@ -6,7 +6,9 @@ import {
   ArrowRight,
   Camera,
   Download,
+  Globe,
   ListTree,
+  Monitor,
   Pencil,
   Plus,
   RotateCw,
@@ -21,14 +23,26 @@ import { Input } from "@/components/ui/input";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
+import { DesktopControl } from "@/components/browsers/desktop-control";
+import type { DesktopState } from "@/lib/browsers/db";
+
+// Spiridus Desktop's builds (admin/desktop, .github/workflows/desktop.yml): the latest, unsigned
+const DESKTOP_RELEASE = "https://github.com/paulbrie/genie-local/releases/download/desktop-latest";
+const DESKTOP_DOWNLOADS = [
+  { label: "macOS (Apple Silicon)", file: "Spiridus-Desktop-macos-arm64.dmg" },
+  { label: "macOS (Intel)", file: "Spiridus-Desktop-macos-x64.dmg" },
+  { label: "Windows", file: "Spiridus-Desktop-windows-x64-setup.exe" },
+];
 
 type Tab = { id: number; windowId: number; url: string; title: string; active: boolean; opened?: boolean; attached?: boolean };
 type Browser = {
   id: number;
   name: string;
+  kind: "chrome" | "desktop";
+  state: DesktopState;
   createdBy: string | null;
   lastSeenAt: string | null;
-  info: { userAgent?: string; platform?: string; version?: string };
+  info: { userAgent?: string; platform?: string; version?: string; os?: string; hostname?: string };
   online: boolean;
   tabs: Tab[];
   unsharedTabs: number;
@@ -137,11 +151,28 @@ export function BrowsersPanel() {
     <div className="flex flex-col gap-4">
       <section className="flex flex-wrap items-start gap-3">
         <Button onClick={newCode}>
-          <Plus /> Pair a browser
+          <Plus /> Pair a browser or computer
         </Button>
         <a href={`${API}/extension`} download className={buttonVariants({ variant: "outline" })}>
-          <Download /> Download the extension
+          <Download /> Chrome extension
         </a>
+        <details className="relative">
+          <summary className={cn(buttonVariants({ variant: "outline" }), "cursor-pointer list-none")}>
+            <Monitor /> Spiridus Desktop
+          </summary>
+          <div className="absolute z-10 mt-1 flex w-72 flex-col gap-1 rounded-lg border bg-background p-2 text-sm shadow-lg">
+            {DESKTOP_DOWNLOADS.map((d) => (
+              <a key={d.file} href={`${DESKTOP_RELEASE}/${d.file}`} className="rounded px-2 py-1 hover:bg-muted">
+                <Download className="mr-1.5 inline size-3.5" />
+                {d.label}
+              </a>
+            ))}
+            <p className="px-2 pt-1 text-xs text-muted-foreground">
+              Unsigned test builds. macOS: right-click the app → Open the first time, then allow Screen Recording and
+              Accessibility. Windows: More info → Run anyway.
+            </p>
+          </div>
+        </details>
         {pairing && left > 0 && (
           <div className="flex-1 rounded-lg border p-3 text-sm">
             <div className="flex items-center justify-between gap-3">
@@ -155,7 +186,12 @@ export function BrowsersPanel() {
                 <X />
               </Button>
             </div>
-            <ol className="mt-2 list-decimal space-y-0.5 pl-5 text-muted-foreground">
+            <p className="mt-2 text-muted-foreground">
+              <b>A computer</b>: open Spiridus Desktop, type this address and code:{" "}
+              <span className="font-mono">{typeof window !== "undefined" ? `${location.origin}${BASE_PATH}` : ""}</span>
+            </p>
+            <p className="mt-1 text-muted-foreground"><b>Chrome</b>:</p>
+            <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-muted-foreground">
               <li>Download the extension and unzip it.</li>
               <li>
                 In Chrome open <span className="font-mono">chrome://extensions</span>, switch on Developer mode, click{" "}
@@ -170,7 +206,7 @@ export function BrowsersPanel() {
 
       <section className="grid gap-4 lg:grid-cols-[280px_1fr]">
         <div className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-muted-foreground">Browsers</h2>
+          <h2 className="text-sm font-medium text-muted-foreground">Browsers and computers</h2>
           {browsers === null && <p className="text-sm text-muted-foreground">Loading…</p>}
           {browsers?.length === 0 && <p className="text-sm text-muted-foreground">None paired yet.</p>}
           {browsers?.map((b) => (
@@ -187,6 +223,7 @@ export function BrowsersPanel() {
             >
               <div className="flex items-center gap-2">
                 <StatusDot color={b.online ? "bg-emerald-500" : "bg-zinc-400"} pulse={b.online} label={b.online ? "connected" : "offline"} />
+                {b.kind === "desktop" ? <Monitor className="size-3.5 text-muted-foreground" /> : <Globe className="size-3.5 text-muted-foreground" />}
                 <span className="flex-1 truncate font-medium">{b.name}</span>
                 <button className="opacity-0 group-hover:opacity-100" onClick={(e) => (e.stopPropagation(), rename(b))} aria-label="Rename">
                   <Pencil className="size-3.5" />
@@ -196,9 +233,13 @@ export function BrowsersPanel() {
                 </button>
               </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                {browserLabel(b.info.userAgent)}
+                {b.kind === "desktop" ? [b.info.os, b.info.hostname].filter(Boolean).join(" · ") : browserLabel(b.info.userAgent)}
                 {b.online
-                  ? ` · ${b.tabs.length} shared tab${b.tabs.length === 1 ? "" : "s"}`
+                  ? b.kind === "desktop"
+                    ? b.state.paused
+                      ? " · paused"
+                      : ` · ${b.state.displays?.length ?? 0} display${b.state.displays?.length === 1 ? "" : "s"}`
+                    : ` · ${b.tabs.length} shared tab${b.tabs.length === 1 ? "" : "s"}`
                   : b.lastSeenAt
                     ? ` · seen ${new Date(b.lastSeenAt).toLocaleString()}`
                     : ""}
@@ -209,11 +250,15 @@ export function BrowsersPanel() {
 
         <div className="min-w-0">
           {!browser ? (
-            <p className="text-sm text-muted-foreground">Pick a browser.</p>
+            <p className="text-sm text-muted-foreground">Pick a browser or a computer.</p>
           ) : !browser.online ? (
             <p className="text-sm text-muted-foreground">
-              {browser.name} isn&apos;t connected: Chrome is closed, or its extension was removed or unpaired.
+              {browser.kind === "desktop"
+                ? `${browser.name} isn't connected: it's off or asleep, nobody is logged in, or Spiridus Desktop was quit or unpaired.`
+                : `${browser.name} isn't connected: Chrome is closed, or its extension was removed or unpaired.`}
             </p>
+          ) : browser.kind === "desktop" ? (
+            <DesktopControl id={browser.id} name={browser.name} state={browser.state} />
           ) : (
             <BrowserControl browser={browser} tabId={tabId} setTabId={setTabId} />
           )}

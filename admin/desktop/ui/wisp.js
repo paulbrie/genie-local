@@ -1,0 +1,2 @@
+// The Spiridus mark, for the pages' headers.
+export const WISP = '<svg viewBox="0 0 32 32" aria-hidden="true"><path fill="currentColor" d="M16 28.5c-4.4 0-8-3.4-8-7.8 0-5.6 4.6-8.6 8.4-12.4 1.6-1.6 2.4-3.4 2.2-5.3 3.8 1.6 5.4 5.6 5.4 10.2v7.5c0 4.4-3.6 7.8-8 7.8Z"/><ellipse fill="var(--bg)" cx="13.4" cy="19.5" rx="1.7" ry="2.3"/><ellipse fill="var(--bg)" cx="18.8" cy="19.5" rx="1.7" ry="2.3"/></svg>';

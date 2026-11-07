@@ -314,6 +314,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     through the background to `/api/browsers/ext/{terminals,screen,talk,key}`, which take the pairing token
     (`Authorization: Bearer`, `src/lib/browsers/ext.ts`) instead of a session: proxy-rules.ts lets that prefix past
     the session and origin checks. The overlay ignores untrusted (page-made) events.
+  · **Computers** (Spiridus Desktop, `desktop/`, see its README): a Tauri app for macOS/Windows on the same hub.
+    Its claim says `kind: "desktop"` (`browser_links.kind`), it reports `{t:"state"}` (displays, OS, user, what
+    its owner allows, paused), and takes its own commands (screenshot per display, click/type/key/scroll/drag in
+    display points, ui_tree, apps/open/focus, clipboard, run, ls/read/write). The Browsers page shows a desktop
+    panel (`desktop-control.tsx`); browsers-mcp has `desktop_*` tools; its chat window uses the ext routes with
+    `computer: true`. Builds: `.github/workflows/desktop.yml` → the `desktop-latest` pre-release.
   · `GET /api/browsers/extension` zips `extension/` with `config.js` rewritten to
     the address it was downloaded from; people install it with Load unpacked.
     Editing the extension means a re-download (or a reload of the unpacked folder).

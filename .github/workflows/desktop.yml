@@ -1,0 +1,68 @@
+# Spiridus Desktop (admin/desktop): unsigned test builds for macOS (Apple Silicon, Intel) and Windows on every
+# change, attached to the "desktop-latest" pre-release that Spiridus's Browsers page links to.
+name: Spiridus Desktop
+
+on:
+  push:
+    branches: [main]
+    paths: ["admin/desktop/**", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin, bundle: dmg, ext: dmg, out: Spiridus-Desktop-macos-arm64.dmg }
+          - { os: macos-latest, target: x86_64-apple-darwin, bundle: dmg, ext: dmg, out: Spiridus-Desktop-macos-x64.dmg }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, bundle: nsis, ext: exe, out: Spiridus-Desktop-windows-x64-setup.exe }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: admin/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "admin/desktop/src-tauri -> target"
+          key: ${{ matrix.target }}
+      - name: Build
+        run: npx --yes @tauri-apps/cli@2 build --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Collect
+        shell: bash
+        run: |
+          f=$(ls target/${{ matrix.target }}/release/bundle/${{ matrix.bundle }}/*.${{ matrix.ext }} | head -1)
+          mkdir -p ../out && cp "$f" "../out/${{ matrix.out }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: admin/desktop/out/${{ matrix.out }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Attach to the desktop-latest pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease \
+            --title "Spiridus Desktop (latest test build)" \
+            --notes "Unsigned test builds of admin/desktop, rebuilt on every change. macOS: right-click → Open (or System Settings → Privacy & Security → Open Anyway), then allow Screen Recording and Accessibility. Windows: More info → Run anyway."
+          gh release upload desktop-latest out/* --clobber

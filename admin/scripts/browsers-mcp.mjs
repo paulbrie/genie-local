@@ -79,15 +79,28 @@ async function browserId(a) {
   if (a.browser) return (lastBrowser = Number(a.browser));
   if (lastBrowser) return lastBrowser;
   const { browsers } = await api("");
-  const online = browsers.filter((b) => b.online);
+  const online = browsers.filter((b) => b.online && b.kind !== "desktop");
   if (online.length === 1) return (lastBrowser = online[0].id);
   if (!online.length) throw new Error("no browser is connected: pair one on Spiridus's Browsers page and keep Chrome open");
   throw new Error(`${online.length} browsers are connected (${online.map((b) => `${b.id} ${b.name}`).join(", ")}): pass browser`);
 }
 
+/** The computer a desktop_* tool means: the one given, else the only connected one. */
+let lastComputer = null;
+async function computerId(a) {
+  if (a.computer) return (lastComputer = Number(a.computer));
+  if (lastComputer) return lastComputer;
+  const { browsers } = await api("");
+  const online = browsers.filter((b) => b.online && b.kind === "desktop");
+  if (online.length === 1) return (lastComputer = online[0].id);
+  if (!online.length) throw new Error("no computer is connected: someone installs Spiridus Desktop and pairs it on Spiridus's Browsers page");
+  throw new Error(`${online.length} computers are connected (${online.map((b) => `${b.id} ${b.name}`).join(", ")}): pass computer`);
+}
+
 async function cmd(type, a = {}, timeoutMs) {
-  const { browser, ...args } = a;
-  const id = await browserId({ browser });
+  const { browser, computer, ...args } = a;
+  const id = type.startsWith("desktop:") ? await computerId({ computer }) : await browserId({ browser });
+  if (type.startsWith("desktop:")) type = type.slice(8);
   const r = await api(`/${id}/command`, { method: "POST", body: JSON.stringify({ type, args: { by: AGENT, ...args }, ...(timeoutMs ? { timeoutMs } : {}) }) });
   if (!r.ok) throw new Error(r.error);
   return r.data;
@@ -106,11 +119,24 @@ const where = {
   y: { type: "number" },
 };
 const obj = (properties, required) => ({ type: "object", properties, ...(required ? { required } : {}) });
+const computerArg = { computer: { type: "number", description: "computer id (browsers_list); default: the only connected one" } };
+const pointArgs = { ...computerArg, display: { type: "number", description: "display id; default: the one of your last screenshot" }, x: { type: "number" }, y: { type: "number" } };
+/** per computer and display: the display's points per pixel of the last screenshot of it */
+const shots = new Map();
+/** x, y (and toX, toY) from screenshot pixels to the display's points, as Spiridus Desktop takes them */
+async function points(a) {
+  const id = await computerId(a);
+  const display = a.display ?? shots.get(`${id}:main`);
+  const k = shots.get(`${id}:${display}`) ?? 1;
+  const out = { ...a, ...(display != null ? { display } : {}) };
+  for (const f of ["x", "y", "toX", "toY"]) if (typeof a[f] === "number") out[f] = Math.round(a[f] * k);
+  return out;
+}
 
 const TOOLS = [
   {
     name: "browsers_list",
-    description: "The browsers paired with Spiridus (the Spiridus Bridge extension): which are connected, and the tabs each shares with you.",
+    description: "The browsers (the Spiridus Bridge extension) and computers (Spiridus Desktop) paired with Spiridus: which are connected, the tabs each browser shares, each computer's displays.",
     inputSchema: obj({}),
     run: async () => {
       const { browsers } = await api("");
@@ -118,9 +144,13 @@ const TOOLS = [
       return text(
         browsers
           .map((b) =>
-            [`#${b.id} ${b.name} — ${b.online ? "connected" : "offline"}${b.online && b.unsharedTabs ? ` (${b.unsharedTabs} tabs not shared)` : ""}`]
-              .concat(b.tabs.map((t) => `   tab ${t.id}${t.active ? " (active)" : ""}${t.opened ? " (opened by Spiridus)" : ""}: ${t.title} — ${t.url}`))
-              .join("\n"),
+            b.kind === "desktop"
+              ? [`#${b.id} ${b.name} — computer, ${b.online ? "connected" : "offline"}${b.state?.paused ? ", PAUSED by its owner" : ""} (${[b.info?.os, b.state?.user && `as ${b.state.user}`].filter(Boolean).join(", ")})`]
+                  .concat((b.state?.displays ?? []).map((d) => `   display ${d.id}${d.primary ? " (main)" : ""}: ${d.width}×${d.height} points`))
+                  .join("\n")
+              : [`#${b.id} ${b.name} — ${b.online ? "connected" : "offline"}${b.online && b.unsharedTabs ? ` (${b.unsharedTabs} tabs not shared)` : ""}`]
+                  .concat(b.tabs.map((t) => `   tab ${t.id}${t.active ? " (active)" : ""}${t.opened ? " (opened by Spiridus)" : ""}: ${t.title} — ${t.url}`))
+                  .join("\n"),
           )
           .join("\n"),
       );
@@ -237,6 +267,84 @@ const TOOLS = [
       if (!r.events.length) return text("Nothing new.");
       return text(r.events.map((e) => `${new Date(e.at).toISOString().slice(11, 19)} ${e.kind}${e.tabId ? ` [tab ${e.tabId}]` : ""} ${JSON.stringify(e.data ?? {})}`).join("\n"));
     },
+  },
+
+  // ------------------------------------------------ computers (Spiridus Desktop, admin/desktop)
+  {
+    name: "desktop_screenshot",
+    description: "A screenshot of a paired computer's display. x, y for desktop_click and the like are pixels of this picture (converted for you); its size is said with it.",
+    inputSchema: obj({ ...computerArg, display: { type: "number", description: "display id (browsers_list); default: the main one" } }),
+    run: async (a) => {
+      const s = await cmd("desktop:screenshot", { ...a, maxWidth: 1568, quality: 70 }, 40_000);
+      shots.set(`${lastComputer}:${s.display}`, s.width / s.imageWidth);
+      shots.set(`${lastComputer}:main`, s.display);
+      const [, mimeType, data] = s.dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+      return [{ type: "image", mimeType, data }, { type: "text", text: `display ${s.display}: this picture is ${s.imageWidth}×${s.imageHeight}; x, y for clicks are pixels of it` }];
+    },
+  },
+  {
+    name: "desktop_click",
+    description: "Click on a paired computer (real mouse events): at x, y (pixels of your last desktop_screenshot of that display), or an element's ref from desktop_ui. Shows the person your cursor first.",
+    inputSchema: obj({ ...pointArgs, ref: { type: "string", description: "an element ref from desktop_ui (instead of x, y)" }, button: { type: "string", enum: ["left", "right", "middle"] }, count: { type: "number", description: "2 for a double click" }, move: { type: "boolean", description: "only move the mouse there" } }),
+    run: async ({ move, ...a }) => text(await cmd(move ? "desktop:move" : "desktop:click", await points(a))),
+  },
+  {
+    name: "desktop_drag",
+    description: "Drag with the left button from x, y to toX, toY (pixels of your last screenshot).",
+    inputSchema: obj({ ...pointArgs, toX: { type: "number" }, toY: { type: "number" } }, ["x", "y", "toX", "toY"]),
+    run: async (a) => text(await cmd("desktop:drag", await points(a))),
+  },
+  {
+    name: "desktop_scroll",
+    description: "Turn the mouse wheel (notches; dy > 0 scrolls down), at x, y or where the mouse is.",
+    inputSchema: obj({ ...pointArgs, dy: { type: "number" }, dx: { type: "number" } }),
+    run: async (a) => text(await cmd("desktop:scroll", await points(a))),
+  },
+  {
+    name: "desktop_type",
+    description: "Type text on a paired computer, where its keyboard focus is (click a field first).",
+    inputSchema: obj({ ...computerArg, text: { type: "string" } }, ["text"]),
+    run: async (a) => text(await cmd("desktop:type", a)),
+  },
+  {
+    name: "desktop_key",
+    description: "Press keys: \"enter\", \"esc\", \"tab\", \"cmd+c\", \"ctrl+shift+esc\", \"alt+f4\", \"f5\"…; several separated by spaces. cmd = the Command key on macOS, the Windows key on Windows.",
+    inputSchema: obj({ ...computerArg, key: { type: "string" } }, ["key"]),
+    run: async (a) => text(await cmd("desktop:key", a)),
+  },
+  {
+    name: "desktop_ui",
+    description: "The front window's UI elements on a paired computer (macOS Accessibility, Windows UI Automation), one per line with a ref ([e12] Button \"Save\") to click with desktop_click {ref}. More reliable than coordinates.",
+    inputSchema: obj({ ...computerArg }),
+    run: async (a) => {
+      const t = await cmd("desktop:ui_tree", a, 45_000);
+      return text(`${[t.app, t.window].filter(Boolean).join(" · ")}\n${t.elements}`);
+    },
+  },
+  {
+    name: "desktop_apps",
+    description: "On a paired computer: list the running apps, open one (an app's name, a path or a URL), or bring one to the front.",
+    inputSchema: obj({ ...computerArg, open: { type: "string" }, focus: { type: "string" } }),
+    run: async ({ open, focus, ...a }) =>
+      text(open ? await cmd("desktop:open", { ...a, target: open }) : focus ? await cmd("desktop:focus", { ...a, app: focus }) : await cmd("desktop:apps", a)),
+  },
+  {
+    name: "desktop_clipboard",
+    description: "Read a paired computer's clipboard, or set it (text).",
+    inputSchema: obj({ ...computerArg, text: { type: "string", description: "set it to this; leave out to read it" } }),
+    run: async ({ text: t, ...a }) => text(t === undefined ? await cmd("desktop:clipboard_get", a) : await cmd("desktop:clipboard_set", { ...a, text: t })),
+  },
+  {
+    name: "desktop_run",
+    description: "Run a shell command on a paired computer (zsh/sh -lc; PowerShell on Windows) as its logged-in user. Answers its exit code, stdout and stderr.",
+    inputSchema: obj({ ...computerArg, command: { type: "string" }, cwd: { type: "string" }, timeoutMs: { type: "number", description: "default 60000, max 170000" } }, ["command"]),
+    run: async (a) => text(await cmd("desktop:run", a, Math.min(Number(a.timeoutMs) || 60_000, 170_000) + 5000)),
+  },
+  {
+    name: "desktop_files",
+    description: "Files on a paired computer: ls a folder, read a file (text, or base64 when binary), or write one (text or base64; append to add).",
+    inputSchema: obj({ ...computerArg, action: { type: "string", enum: ["ls", "read", "write"] }, path: { type: "string", description: "~ is the home folder" }, text: { type: "string" }, base64: { type: "string" }, append: { type: "boolean" }, max: { type: "number", description: "read: bytes (default 1 MB)" } }, ["action", "path"]),
+    run: async ({ action, ...a }) => text(await cmd(`desktop:${action}`, a, 120_000)),
   },
 ];
 const seen = new Map();

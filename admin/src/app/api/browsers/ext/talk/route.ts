@@ -18,6 +18,8 @@ const schema = z.object({
   name: z.string().trim().min(1).max(64).optional(),
   // the tab it was said from, so the agent knows where "this page" is (and can drive it with the browsers MCP)
   page: z.object({ url: z.string().max(2000), title: z.string().max(300), tabId: z.number().int().optional() }).optional(),
+  // said from Spiridus Desktop's chat, about that computer ("this screen")
+  computer: z.boolean().optional(),
 });
 
 /**
@@ -30,7 +32,7 @@ export async function POST(req: NextRequest) {
   if (!link) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const parsed = schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "invalid input" }, { status: 400 });
-  const { text, terminal, project, name, page } = parsed.data;
+  const { text, terminal, project, name, page, computer } = parsed.data;
 
   // One line: a newline typed into a terminal would submit there and then.
   const said = text.replace(/\s*\n\s*/g, " ");
@@ -39,9 +41,12 @@ export async function POST(req: NextRequest) {
   const reach = shared
     ? "the browsers MCP tools can read and drive that tab"
     : "that tab is not shared with Spiridus, so the browsers MCP tools can't reach it: ask them to share it from the extension's popup, or open the page in a new tab with browser_open";
-  const where = page
-    ? ` (Said from ${link.name}'s Chrome, tab ${page.tabId ?? "?"}: "${page.title.replace(/\s+/g, " ")}" ${page.url}. It is Spiridus browser #${link.id}: ${reach}.)`
-    : "";
+  const where =
+    computer && link.kind === "desktop"
+      ? ` (Said from the computer "${link.name}", Spiridus device #${link.id}: the browsers MCP desktop_* tools can see its screen and drive it.)`
+      : page
+        ? ` (Said from ${link.name}'s Chrome, tab ${page.tabId ?? "?"}: "${page.title.replace(/\s+/g, " ")}" ${page.url}. It is Spiridus browser #${link.id}: ${reach}.)`
+        : "";
   const brief = said + where;
 
   try {

@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 12px/1.3 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .glow { position: fixed; inset: 0; box-shadow: inset 0 0 0 4px #7c3aed, inset 0 0 40px rgba(124, 58, 237, .35); opacity: 0; transition: opacity .4s; }
+  .glow.on { opacity: 1; }
+  .badge { position: fixed; top: 34px; right: 12px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(10, 10, 10, .78); color: #fff; font-size: 11px; opacity: .85; }
+  .badge i { width: 8px; height: 8px; border-radius: 50%; background: #16a34a; }
+  .badge.paused i { background: #f59e0b; }
+  .badge.working { background: #7c3aed; opacity: 1; }
+  .cursor { position: fixed; left: 0; top: 0; transition: transform .28s ease-out, opacity .4s; opacity: 0; }
+  .cursor.on { opacity: 1; }
+  .cursor svg { width: 26px; height: 26px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+  .cursor span { position: absolute; left: 22px; top: 20px; white-space: nowrap; padding: 3px 9px; border-radius: 6px; background: #7c3aed; color: #fff; font-weight: 600; }
+  .ripple { position: fixed; width: 40px; height: 40px; margin: -20px 0 0 -20px; border-radius: 50%; border: 3px solid #7c3aed; animation: r .6s ease-out forwards; }
+  @keyframes r { from { transform: scale(.3); opacity: 1; } to { transform: scale(1.7); opacity: 0; } }
+  .trace { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); max-width: 70vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 7px 14px; border-radius: 999px; background: #7c3aed; color: #fff; font-size: 13px; box-shadow: 0 6px 18px rgba(0,0,0,.3); opacity: 0; transition: opacity .3s; }
+  .trace.on { opacity: 1; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="badge hidden"><i></i><span></span></div>
+  <div class="cursor"><svg viewBox="0 0 20 20"><path d="M2 2 L17 9 L10 11 L8 18 Z" fill="#7c3aed" stroke="white" stroke-width="1.5"/></svg><span></span></div>
+  <div class="trace"></div>
+  <script type="module">
+    // One of these over each display (overlay.rs): click-through, it only shows what Spiridus does.
+    const { listen } = window.__TAURI__.event;
+    const { invoke } = window.__TAURI__.core;
+    const me = Number(new URLSearchParams(location.search).get("display"));
+    const $ = (s) => document.querySelector(s);
+    let state = { paired: false, status: "idle", paused: false }, last = 0, actor = "Spiridus", tTrace, tWork;
+
+    function render() {
+      const working = Date.now() - last < 6000;
+      const on = state.paired && state.status === "connected";
+      const badge = $(".badge");
+      badge.classList.toggle("hidden", !on);
+      badge.classList.toggle("paused", state.paused);
+      badge.classList.toggle("working", working);
+      $(".badge span").textContent = state.paused ? "Spiridus · paused" : working ? `${actor} is controlling this computer` : "Spiridus can control this computer";
+      $(".glow").classList.toggle("on", on && working);
+      if (!working) $(".cursor").classList.remove("on");
+    }
+    listen("bridge-state", (e) => { state = e.payload; render(); });
+    invoke("get_state").then((s) => { state = s; render(); });
+
+    listen("action", ({ payload: a }) => {
+      last = Date.now();
+      actor = a.by || "Spiridus";
+      const here = a.display === me;
+      if (here && a.x != null) {
+        const c = $(".cursor");
+        c.style.transform = `translate(${a.x - 2}px, ${a.y - 2}px)`;
+        $(".cursor span").textContent = `${actor} · ${a.what}`;
+        c.classList.add("on");
+        if (/click/.test(a.what)) setTimeout(() => {
+          const r = document.createElement("div");
+          r.className = "ripple";
+          r.style.left = `${a.x}px`;
+          r.style.top = `${a.y}px`;
+          document.body.append(r);
+          setTimeout(() => r.remove(), 700);
+        }, 300);
+      }
+      // the line at the bottom: on the display it happens on, or on all when it's nowhere in particular
+      if (here || a.display == null) {
+        $(".trace").textContent = `${actor} · ${a.what}`;
+        $(".trace").classList.add("on");
+        clearTimeout(tTrace);
+        tTrace = setTimeout(() => $(".trace").classList.remove("on"), 3000);
+      }
+      render();
+      clearTimeout(tWork);
+      tWork = setTimeout(render, 6100);
+    });
+  </script>
+</body>
+</html>
