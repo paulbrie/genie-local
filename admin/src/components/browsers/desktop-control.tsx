@@ -21,6 +21,8 @@ type DesktopState = {
   user?: string;
   paused?: boolean;
   allow?: { input?: boolean; shell?: boolean; files?: boolean };
+  /** what macOS lets the app do (Screen Recording, Accessibility) */
+  permissions?: { screen?: boolean; accessibility?: boolean };
 };
 type Shot = { dataUrl: string; display: number; width: number; height: number };
 
@@ -64,6 +66,16 @@ export function DesktopControl({ id, name, state }: { id: number; name: string; 
           {[state.os, state.user && `as ${state.user}`].filter(Boolean).join(" · ")}
         </span>
         {state.paused && <Badge variant="destructive">paused by its owner</Badge>}
+        {state.permissions?.screen === false && (
+          <Badge variant="destructive" title="On the Mac: System Settings → Privacy & Security → Screen Recording → allow Spiridus Desktop, then reopen it">
+            can&apos;t see the screen (Screen Recording)
+          </Badge>
+        )}
+        {state.permissions?.accessibility === false && (
+          <Badge variant="destructive" title="On the Mac: System Settings → Privacy & Security → Accessibility → allow Spiridus Desktop">
+            no mouse/keyboard (Accessibility)
+          </Badge>
+        )}
         {allow.input === false && <Badge variant="secondary">no mouse/keyboard</Badge>}
         {allow.shell === false && <Badge variant="secondary">no commands</Badge>}
         {allow.files === false && <Badge variant="secondary">no files</Badge>}

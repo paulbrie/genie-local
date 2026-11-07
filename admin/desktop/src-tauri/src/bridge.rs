@@ -116,7 +116,7 @@ impl Bridge {
         self.send(json!({ "t": "state", "state": {
             "displays": actions::displays().unwrap_or_default(),
             "os": actions::os_name(), "hostname": actions::hostname(), "user": actions::username(),
-            "paused": c.paused, "allow": c.allow, "version": VERSION,
+            "paused": c.paused, "allow": c.allow, "version": VERSION, "permissions": actions::permissions(),
         }}));
     }
 
@@ -218,6 +218,18 @@ impl Bridge {
                 })
             };
 
+            // Our state again every minute: displays come and go, and on macOS the list is empty until Screen
+            // Recording is allowed, which can happen after we connected.
+            let reporter = {
+                let me = Arc::clone(&self);
+                tokio::spawn(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                        me.report_state();
+                    }
+                })
+            };
+
             let mut closed: Option<(u16, String)> = None;
             loop {
                 tokio::select! {
@@ -239,6 +251,7 @@ impl Bridge {
             }
             *self.out.lock().unwrap() = None;
             pinger.abort();
+            reporter.abort();
             writer.abort();
 
             let (code, reason) = closed.unwrap_or((1006, String::new()));

@@ -27,6 +27,8 @@ export type DesktopState = {
   paused?: boolean;
   /** what this computer's owner lets Spiridus do here */
   allow?: { input?: boolean; shell?: boolean; files?: boolean };
+  /** what macOS lets the app do (Screen Recording, Accessibility) */
+  permissions?: { screen?: boolean; accessibility?: boolean };
 };
 
 type Live = {

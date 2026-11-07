@@ -137,6 +137,43 @@ fn from_input(ix: f64, iy: f64) -> Option<(Display, f64, f64)> {
     })
 }
 
+// ---------------------------------------------------------------- macOS permissions
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> u8;
+}
+
+/// What the OS lets this app do: see the screen (macOS Screen Recording), drive input and read the UI
+/// (macOS Accessibility). Elsewhere both are simply true.
+pub fn permissions() -> Value {
+    #[cfg(target_os = "macos")]
+    {
+        let (screen, access) = unsafe { (CGPreflightScreenCaptureAccess(), AXIsProcessTrusted() != 0) };
+        json!({ "screen": screen, "accessibility": access })
+    }
+    #[cfg(not(target_os = "macos"))]
+    json!({ "screen": true, "accessibility": true })
+}
+
+/// Without Screen Recording, macOS still hands back a picture: the wallpaper, the menu bar and our own windows,
+/// with every other app's windows left out. Say so instead (and ask macOS to show its prompt, once).
+fn screen_allowed() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !unsafe { CGPreflightScreenCaptureAccess() } {
+        unsafe { CGRequestScreenCaptureAccess() };
+        return Err("Spiridus Desktop may not see this screen yet: System Settings → Privacy & Security → Screen Recording → allow Spiridus Desktop, then quit and reopen it (without it macOS shows only the wallpaper)".into());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------- args
 
 fn num(a: &Value, k: &str) -> Option<f64> {
@@ -240,7 +277,7 @@ pub async fn run(b: &Arc<Bridge>, kind: &str, a: &Value) -> R {
     }
     let need = |ok: bool, what: &str| if ok { Ok(()) } else { Err(format!("{what} is switched off on this computer (its settings)")) };
     match kind {
-        "info" => Ok(json!({ "info": info(), "displays": displays()?, "allow": cfg.allow, "paused": cfg.paused })),
+        "info" => Ok(json!({ "info": info(), "displays": displays()?, "allow": cfg.allow, "paused": cfg.paused, "permissions": permissions() })),
         "displays" => Ok(json!(displays()?)),
         "screenshot" => screenshot(a).await,
         "click" | "move" | "drag" | "scroll" | "type" | "key" | "open" | "focus" | "clipboard_get" | "clipboard_set" => {
@@ -266,6 +303,7 @@ async fn screenshot(a: &Value) -> R {
     let id = a.get("display").and_then(|v| v.as_u64());
     let max_w = num(a, "maxWidth").unwrap_or(1600.0).clamp(200.0, 4000.0);
     let quality = num(a, "quality").unwrap_or(70.0).clamp(10.0, 95.0) as u8;
+    screen_allowed()?;
     tokio::task::spawn_blocking(move || {
         let (d, m) = pick(id)?;
         let img = m.capture_image().map_err(|e| format!("can't capture the screen: {e} (on macOS: System Settings → Privacy & Security → Screen Recording → allow Spiridus Desktop)"))?;

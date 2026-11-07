@@ -1,6 +1,6 @@
 [package]
 name = "spiridus-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Spiridus Desktop: lets your Spiridus admin and its agents see and drive this computer"
 edition = "2021"
 
