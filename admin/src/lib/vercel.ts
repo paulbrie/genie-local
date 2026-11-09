@@ -63,14 +63,23 @@ async function linked(slug: string) {
   return { token: decrypt(r.tokenEnc), teamId: r.teamId, projectId: r.vercelProjectId };
 }
 
-/** The account a token belongs to, and the teams it can work in. Throws when Vercel refuses it. */
+/**
+ * The account a token belongs to (null for a team's own token, which has no user: Vercel answers "user not found"),
+ * and the teams it can work in. Throws when Vercel takes it for neither.
+ */
 async function whoAndTeams(token: string) {
-  const { user } = await call<{ user: { username: string; email?: string; defaultTeamId?: string | null } }>(token, "/v2/user", null);
-  // (a token limited to one team can't list teams: that's fine, it still works in its team)
-  const teams = await call<{ teams: { id: string; slug: string; name: string }[] }>(token, "/v2/teams", null, { limit: 100 })
-    .then((t) => t.teams.map((x) => ({ id: x.id, slug: x.slug, name: x.name })))
-    .catch(() => []);
-  return { user: { username: user.username, email: user.email ?? null, defaultTeamId: user.defaultTeamId ?? null }, teams };
+  const [user, teams] = await Promise.all([
+    call<{ user: { username: string; email?: string; defaultTeamId?: string | null } }>(token, "/v2/user", null).then(
+      ({ user: u }) => ({ username: u.username, email: u.email ?? null, defaultTeamId: u.defaultTeamId ?? null }),
+      (e: Error) => e,
+    ),
+    call<{ teams: { id: string; slug: string; name: string }[] }>(token, "/v2/teams", null, { limit: 100 }).then(
+      (t) => t.teams.map((x) => ({ id: x.id, slug: x.slug, name: x.name })),
+      (e: Error) => e,
+    ),
+  ]);
+  if (user instanceof Error && teams instanceof Error) throw user;
+  return { user: user instanceof Error ? null : user, teams: teams instanceof Error ? [] : teams };
 }
 
 /**

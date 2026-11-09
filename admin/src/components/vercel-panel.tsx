@@ -12,7 +12,8 @@ import { BASE_PATH } from "@/lib/config";
 import { cn } from "@/lib/utils";
 
 type Link = { hasToken: true; tokenHint: string; teamId: string | null; projectId: string | null; projectName: string | null; updatedAt: string };
-type Scopes = { user: { username: string; email: string | null; defaultTeamId: string | null }; teams: { id: string; slug: string; name: string }[] };
+/** `user` is null for a team's own token (no personal account behind it) */
+type Scopes = { user: { username: string; email: string | null; defaultTeamId: string | null } | null; teams: { id: string; slug: string; name: string }[] };
 type VProject = { id: string; name: string; framework: string | null; repo: string | null; matches: boolean };
 type Deployment = {
   id: string; url: string | null; state: string; target: string; created: number; buildMs: number | null;
@@ -141,7 +142,7 @@ function ProjectPicker({ get, link, saveTeam, onPick, onCancel }: {
     get<Scopes>({ op: "scopes" }).then((s) => {
       setScopes(s);
       // (no team picked yet: the account's default team, else the only team, else the personal account)
-      setTeam((t) => t ?? s.user.defaultTeamId ?? (s.teams.length === 1 ? s.teams[0].id : null));
+      setTeam((t) => t ?? s.user?.defaultTeamId ?? (s.teams.length === 1 || !s.user ? (s.teams[0]?.id ?? null) : null));
     }, (e) => setError((e as Error).message));
   }, [get]);
 
@@ -174,11 +175,11 @@ function ProjectPicker({ get, link, saveTeam, onPick, onCancel }: {
     <div className="max-w-2xl space-y-3">
       <div className="text-sm">
         Which Vercel project is this?{" "}
-        {scopes && <span className="text-muted-foreground">(token of {scopes.user.username})</span>}
+        {scopes && <span className="text-muted-foreground">({scopes.user ? `token of ${scopes.user.username}` : "a team token"})</span>}
       </div>
       {scopes && (
         <div className="flex flex-wrap gap-1.5">
-          <Button size="sm" variant={team === null ? "secondary" : "outline"} onClick={() => setTeam(null)}>{scopes.user.username} (personal)</Button>
+          {scopes.user && <Button size="sm" variant={team === null ? "secondary" : "outline"} onClick={() => setTeam(null)}>{scopes.user.username} (personal)</Button>}
           {scopes.teams.map((t) => (
             <Button key={t.id} size="sm" variant={team === t.id ? "secondary" : "outline"} onClick={() => setTeam(t.id)}>{t.name}</Button>
           ))}
