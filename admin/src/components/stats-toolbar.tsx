@@ -65,7 +65,7 @@ export function StatsToolbar() {
       >
         <Menu className="size-5" />
       </button>
-      <div className="flex flex-1 items-center gap-4 overflow-x-auto">
+      <div className="flex min-w-0 flex-1 items-center gap-3 xl:gap-5">
         <Metric
           label="CPU"
           percent={stats?.cpuPercent ?? null}
@@ -117,12 +117,19 @@ export function StatsToolbar() {
   );
 }
 
-function barColor(percent: number): string {
-  if (percent >= 90) return "bg-destructive";
-  if (percent >= 70) return "bg-amber-500";
-  return "bg-emerald-500";
+function ringColor(percent: number): string {
+  if (percent >= 90) return "text-destructive";
+  if (percent >= 70) return "text-amber-500";
+  return "text-emerald-500";
 }
 
+const R = 9.5;
+const CIRC = 2 * Math.PI * R;
+
+/**
+ * One metric as a small ring gauge with its percent inside and its label beside it; the details (sizes, cores) are
+ * its tooltip, and shown inline too on wide screens. Small enough that the bar never needs to scroll.
+ */
 function Metric({
   label,
   percent,
@@ -134,20 +141,32 @@ function Metric({
 }) {
   const pct = percent == null ? 0 : Math.max(0, Math.min(100, percent));
   return (
-    <div className="flex min-w-[9rem] items-center gap-2">
-      <span className="w-9 shrink-0 text-xs font-medium text-muted-foreground">
-        {label}
+    <div className="flex shrink-0 items-center gap-1.5" title={`${label}: ${detail}`}>
+      <span className="relative inline-flex size-[26px] shrink-0 items-center justify-center">
+        <svg viewBox="0 0 24 24" className="absolute inset-0 size-full -rotate-90" aria-hidden>
+          <circle cx="12" cy="12" r={R} fill="none" strokeWidth="2.5" className="stroke-muted" />
+          {percent != null && (
+            <circle
+              cx="12"
+              cy="12"
+              r={R}
+              fill="none"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              stroke="currentColor"
+              strokeDasharray={`${(pct / 100) * CIRC} ${CIRC}`}
+              className={`transition-all duration-500 ${ringColor(pct)}`}
+            />
+          )}
+        </svg>
+        <span className="relative font-mono text-[9px] font-medium tabular-nums">
+          {percent == null ? "–" : Math.round(pct)}
+        </span>
       </span>
-      <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
-        <div
-          className={`h-full rounded-full transition-all ${
-            percent == null ? "bg-muted-foreground/30" : barColor(pct)
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="whitespace-nowrap font-mono text-xs tabular-nums">
-        {detail}
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="hidden whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground xl:inline">{detail}</span>
+      <span className="sr-only">
+        {label} {percent == null ? "unknown" : `${Math.round(pct)}%`}, {detail}
       </span>
     </div>
   );
