@@ -24,6 +24,15 @@ export async function makeFolder(dir: string, name: string, roots = fileRoots(),
   return t.abs;
 }
 
+/** a new, empty file (never over an existing one) */
+export async function makeFile(dir: string, name: string, roots = fileRoots(), writes?: Writes): Promise<string> {
+  const t = await resolveNew(dir, name, roots);
+  await assertWritable(t.dir, {}, writes ?? writeRoots());
+  const fh = await fs.open(t.abs, "wx", 0o644);
+  await fh.close();
+  return t.abs;
+}
+
 /** renames in place (same folder) */
 export async function renamePath(p: string, newName: string, roots = fileRoots(), writes?: Writes): Promise<string> {
   const from = await resolveExisting(p, roots);

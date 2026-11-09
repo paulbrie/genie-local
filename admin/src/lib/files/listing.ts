@@ -28,6 +28,15 @@ const SECRET_NAME = [
 /** folders whose every file is secret */
 const SECRET_DIRS = new Set([".ssh", ".gnupg", ".aws", ".docker"]);
 
+/**
+ * An environment file (.env, .env.local, .env.production…) outside the secret folders: a credential file
+ * like the others (listed as such, shown on request), but one the editor may change once it's been revealed.
+ * Keys, certificates and the other credential files stay read-only.
+ */
+export function isEnvFile(abs: string): boolean {
+  return /^\.env(\..*)?$/i.test(path.basename(abs)) && !abs.split(path.sep).slice(0, -1).some((seg) => SECRET_DIRS.has(seg));
+}
+
 /** true for a credential or key file, by its name or by a secret folder on its path */
 export function isSecretPath(abs: string): boolean {
   const name = path.basename(abs);

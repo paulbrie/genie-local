@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  AppWindow, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, Folder, FolderOpen, FolderPlus, FolderUp,
+  AppWindow, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, FilePlus, Folder, FolderOpen, FolderPlus, FolderUp,
   Copy, FileArchive, Link2, Loader2, Lock, MoveRight, RefreshCw, RotateCcw, Search, TextCursorInput, Trash2, Upload,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -85,7 +85,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
   const [writeRoots, setWriteRoots] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<
-    | { kind: "mkdir" } | { kind: "rename"; entry: Entry } | { kind: "move"; entry: Entry } | { kind: "delete"; entry: Entry; plan?: DeletePlan; error?: string; force: boolean }
+    | { kind: "mkdir" } | { kind: "mkfile" } | { kind: "rename"; entry: Entry } | { kind: "move"; entry: Entry } | { kind: "delete"; entry: Entry; plan?: DeletePlan; error?: string; force: boolean }
     | { kind: "trash"; items?: TrashItem[]; error?: string } | null
   >(null);
   const [draft, setDraft] = useState("");
@@ -308,6 +308,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
         </div>
         {!writable && cwd && <span className="flex items-center gap-1 text-xs text-muted-foreground" title={readOnlyWhy}><Lock className="size-3.5" /> Read-only</span>}
         <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => { setDraft(""); setDialog({ kind: "mkdir" }); }}><FolderPlus className="size-4" /> New folder</Button>
+        <Button size="sm" variant="outline" disabled={!writable} title={writable ? "A new, empty file (e.g. .env.local)" : readOnlyWhy} onClick={() => { setDraft(""); setDialog({ kind: "mkfile" }); }}><FilePlus className="size-4" /> New file</Button>
         <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => filePick.current?.click()}><Upload className="size-4" /> Upload files</Button>
         <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => folderPick.current?.click()}><FolderUp className="size-4" /> Upload a folder</Button>
         <Button size="sm" variant="outline" onClick={openTrash}><Trash2 className="size-4" /> Trash{trashCount ? ` (${trashCount})` : ""}</Button>
@@ -464,6 +465,13 @@ export function FileExplorer({ project }: { project?: string } = {}) {
             <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "mkdir", dir: cwd, name: draft })); }}>
               <DialogHeader><DialogTitle>New folder</DialogTitle><DialogDescription>In {cwd}</DialogDescription></DialogHeader>
               <Input autoFocus aria-label="Folder name" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3" />
+              <DialogFooter><Button type="submit" disabled={!draft.trim() || busy}>Create</Button></DialogFooter>
+            </form>
+          )}
+          {dialog?.kind === "mkfile" && (
+            <form onSubmit={(e) => { e.preventDefault(); void act(() => post({ op: "mkfile", dir: cwd, name: draft })); }}>
+              <DialogHeader><DialogTitle>New file</DialogTitle><DialogDescription>An empty file in {cwd}: open it to write in it.</DialogDescription></DialogHeader>
+              <Input autoFocus aria-label="File name" placeholder=".env.local" value={draft} onChange={(e) => setDraft(e.target.value)} className="my-3 font-mono" />
               <DialogFooter><Button type="submit" disabled={!draft.trim() || busy}>Create</Button></DialogFooter>
             </form>
           )}

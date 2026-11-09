@@ -145,9 +145,27 @@ describe("saving an edited file (op write)", () => {
     assert.equal((await post({ op: "write", path: p, content: "x" })).status, 400);
   });
 
+  it("edits an .env file once revealed, logs the save by path only, and creates new files", async () => {
+    const p = path.join(w, ".env.local");
+    await fs.writeFile(p, "API_KEY=old\n");
+    // (hidden until revealed, as before)
+    assert.equal((await get(`op=read&path=${enc(p)}`)).status, 403);
+    const page = await get(`op=read&path=${enc(p)}&reveal=1`).then((r) => r.json());
+    assert.equal(page.editable, true);
+    const res = await post({ op: "write", path: p, content: "API_KEY=new\n", hash: page.hash });
+    assert.equal(res.status, 200);
+    assert.equal(await fs.readFile(p, "utf8"), "API_KEY=new\n");
+    // (a new file: empty, never over one that exists)
+    const made = await post({ op: "mkfile", dir: w, name: ".env.production" });
+    assert.equal(made.status, 200);
+    assert.equal(await fs.readFile(path.join(w, ".env.production"), "utf8"), "");
+    assert.notEqual((await post({ op: "mkfile", dir: w, name: ".env.local" })).status, 200);
+    assert.equal(await fs.readFile(p, "utf8"), "API_KEY=new\n");
+  });
+
   it("keeps credential, binary, non-UTF-8, too big and read-only files read-only", async () => {
     const cases: [string, string | Buffer, RegExp][] = [
-      [path.join(w, ".env"), "TOKEN=x\n", /credential/],
+      [path.join(w, "server.pem"), "-----BEGIN PRIVATE KEY-----\n", /credential/],
       [path.join(w, "bin.dat"), Buffer.from([0x61, 0, 0x62]), /binary/],
       [path.join(w, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]), /UTF-8/],
       [path.join(w, "big.txt"), "x".repeat(EDIT_MAX + 1), /too big/],

@@ -1,6 +1,6 @@
 // The file explorer's editor (/files and a project's Files tab): a text file saved back in place. Only a file the
 // preview shows whole (one text page, EDIT_MAX), valid UTF-8 without NULs, not a credential file (those stay
-// read-only), inside the write roots. Saved atomically (a temp file beside it, renamed over it, its mode kept) and only
+// read-only, but for .env files: editable once revealed, see isEnvFile), inside the write roots. Saved atomically (a temp file beside it, renamed over it, its mode kept) and only
 // if it is still what the page read (its hash), so a change made on disk meanwhile is refused (409), never overwritten.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -8,7 +8,7 @@ import { constants, promises as fs } from "node:fs";
 import path from "node:path";
 
 import { assertWritable, fileRoots, isPseudo, PathError, resolveExisting, writeRoots } from "./guard";
-import { isSecretPath } from "./listing";
+import { isEnvFile, isSecretPath } from "./listing";
 import { TEXT_PAGE } from "./preview";
 
 /** the most the editor opens or saves: one preview page */
@@ -27,7 +27,7 @@ export interface Editable {
 /** `abs` (resolved) as the editor would open it, or why it stays read-only */
 export async function openForEdit(abs: string, writes: string[] = writeRoots()): Promise<Editable | { readOnly: string }> {
   if (isPseudo(abs)) return { readOnly: "a kernel file" };
-  if (isSecretPath(abs)) return { readOnly: "a credential file: read-only here" };
+  if (isSecretPath(abs) && !isEnvFile(abs)) return { readOnly: "a credential file: read-only here" };
   const st = await fs.stat(abs);
   if (!st.isFile()) return { readOnly: "not a regular file" };
   if (st.size > EDIT_MAX) return { readOnly: `too big to edit here (over ${EDIT_MAX / 1024 / 1024} MB)` };

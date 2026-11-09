@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { openForEdit, writeText } from "@/lib/files/edit";
 import { assertWritable, isPseudo, PathError, resolveExisting, rootOf, scopeRoots, writeRoots } from "@/lib/files/guard";
 import { isSecretPath, listDir } from "@/lib/files/listing";
-import { audit, deletePath, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
+import { audit, deletePath, makeFile, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
 import { readPage } from "@/lib/files/preview";
 import { emptyTrash, listTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
 import { CHUNK_BYTES } from "@/lib/files/uploads";
@@ -70,6 +70,11 @@ export async function POST(req: NextRequest) {
         audit("mkdir", { path: p }, who);
         return NextResponse.json({ path: p });
       }
+      case "mkfile": {
+        const p = await makeFile(s("dir"), s("name"), roots);
+        audit("mkfile", { path: p }, who);
+        return NextResponse.json({ path: p });
+      }
       case "rename": {
         const p = await renamePath(s("path"), s("name"), roots);
         audit("rename", { from: s("path"), to: p }, who);
@@ -97,7 +102,8 @@ export async function POST(req: NextRequest) {
       }
       case "write": {
         const r = await writeText(s("path"), body.content, s("hash"), roots);
-        audit("write", { path: r.path, bytes: r.size }, who);
+        // (an .env file: logged as such, by its path, never its contents)
+        audit(isSecretPath(r.path) ? "secret-write" : "write", { path: r.path, bytes: r.size }, who);
         return NextResponse.json(r);
       }
       case "empty-trash": {
