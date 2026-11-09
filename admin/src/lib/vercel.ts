@@ -50,7 +50,7 @@ async function call<T>(token: string, path: string, teamId: string | null, query
   const res = await fetch(u, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000), cache: "no-store" });
   const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
   if (!res.ok) {
-    const why = body.error?.message ?? `HTTP ${res.status}`;
+    const why = `${body.error?.message ?? `HTTP ${res.status}`}${body.error?.code ? ` (${body.error.code}, HTTP ${res.status})` : ` (HTTP ${res.status})`}`;
     if (res.status === 401 || res.status === 403) throw new VercelError(`Vercel refused the token: ${why}`, 403);
     throw new VercelError(`Vercel: ${why}`, res.status === 404 ? 404 : 502);
   }
@@ -78,7 +78,14 @@ async function whoAndTeams(token: string) {
       (e: Error) => e,
     ),
   ]);
-  if (user instanceof Error && teams instanceof Error) throw user;
+  if (user instanceof Error && teams instanceof Error) {
+    // A token limited to one team may still list its projects: then it's good for this tab.
+    const projects: Error | null = await call<{ projects: unknown[] }>(token, "/v9/projects", null, { limit: 1 }).then(() => null, (e: Error) => e);
+    if (projects) {
+      const strip = (e: Error) => e.message.replace(/^Vercel( refused the token)?: /, "");
+      throw new VercelError(`Vercel refused the token. Who it belongs to: ${strip(user)}. Its teams: ${strip(teams)}. Its projects: ${strip(projects)}.`, 403);
+    }
+  }
   return { user: user instanceof Error ? null : user, teams: teams instanceof Error ? [] : teams };
 }
 
