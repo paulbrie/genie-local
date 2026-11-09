@@ -9,7 +9,8 @@ import { db } from "@/db";
 import { gitCredentials } from "@/db/schema";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { getProjectIdBySlug } from "@/lib/data";
-import { authEnv, cleanToken, normalizeRemoteUrl, redactUrl, tokenHint } from "@/lib/git-auth-core";
+import { authEnv, cleanToken, normalizeRemoteUrl, redactUrl, tokenHint, tokenInUrl } from "@/lib/git-auth-core";
+import { resolveRepo } from "@/lib/git-graph";
 
 const run = promisify(execFile);
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
@@ -43,8 +44,23 @@ export async function savedRemote(slug: string, app: string): Promise<SavedRemot
  */
 export async function gitRemoteEnv(slug: string, app: string): Promise<Record<string, string>> {
   const r = await row(slug, app).catch(() => null);
-  if (!r?.tokenEnc) return { ...NO_PROMPT };
-  return { ...NO_PROMPT, ...authEnv(r.remoteUrl, decrypt(r.tokenEnc)) };
+  if (r?.tokenEnc) return { ...NO_PROMPT, ...authEnv(r.remoteUrl, decrypt(r.tokenEnc)) };
+  // No saved token, but one written into origin's URL (https://<token>@github.com/…): send that one as a header,
+  // since git can't use it from there without prompting.
+  const dir = await resolveRepo(slug, app).catch(() => null);
+  const url = dir ? await rawOrigin(dir) : null;
+  const inUrl = url && tokenInUrl(url);
+  if (url && inUrl) return { ...NO_PROMPT, ...authEnv(url, inUrl) };
+  return { ...NO_PROMPT };
+}
+
+/** origin's URL as it is, credentials and all (never sent to the browser: see currentOrigin). */
+async function rawOrigin(repoDir: string): Promise<string | null> {
+  try {
+    return (await run("git", ["remote", "get-url", "origin"], { cwd: repoDir, timeout: 5000 })).stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** The repo's `origin` now (credentials masked), or null when it has none. */
@@ -71,7 +87,11 @@ export async function saveRemote(
   const remoteUrl = normalizeRemoteUrl(input.remoteUrl);
   const pid = await projectId(slug);
   const prev = await row(slug, app);
-  const token = input.token === undefined ? undefined : input.token === null ? null : cleanToken(input.token);
+  // Nothing typed and nothing saved, but origin has a token written into its URL: keep that one, encrypted,
+  // as the URL is cleaned of it below.
+  const before = await rawOrigin(repoDir);
+  const adopted = input.token === undefined && !prev?.tokenEnc && before ? tokenInUrl(before) : null;
+  const token = adopted ?? (input.token === undefined ? undefined : input.token === null ? null : cleanToken(input.token));
   const tokenEnc = token === undefined ? (prev?.tokenEnc ?? null) : token === null ? null : encrypt(token);
   const hint = token === undefined ? (prev?.tokenHint ?? null) : token === null ? null : tokenHint(token);
 

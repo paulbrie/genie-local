@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { authEnv, cleanToken, normalizeRemoteUrl, redactUrl, tokenHint } from "./git-auth-core";
+import { authEnv, cleanToken, normalizeRemoteUrl, redactUrl, tokenHint, tokenInUrl } from "./git-auth-core";
 
 describe("normalizeRemoteUrl", () => {
   it("takes owner/repo, ssh and https forms", () => {
@@ -28,6 +28,14 @@ describe("tokens", () => {
     assert.equal(env.GIT_CONFIG_COUNT, "1");
     assert.equal(env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
     assert.equal(env.GIT_CONFIG_VALUE_0, `AUTHORIZATION: basic ${Buffer.from("x-access-token:ghp_abc").toString("base64")}`);
+  });
+  it("finds a GitHub token written into a URL", () => {
+    const fine = "github_pat_" + "A".repeat(82);
+    assert.equal(tokenInUrl(`https://${fine}@github.com/o/r.git`), fine);
+    assert.equal(tokenInUrl(`https://me:ghp_${"b".repeat(36)}@github.com/o/r.git`), `ghp_${"b".repeat(36)}`);
+    assert.equal(tokenInUrl("https://github.com/o/r.git"), null);
+    assert.equal(tokenInUrl("https://alice@github.com/o/r.git"), null);
+    assert.equal(tokenInUrl("git@github.com:o/r.git"), null);
   });
   it("cleans and hints", () => {
     assert.equal(cleanToken("  ghp_abcd1234 \n"), "ghp_abcd1234");

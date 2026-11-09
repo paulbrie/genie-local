@@ -57,6 +57,28 @@ export function authEnv(remoteUrl: string, token: string): Record<string, string
   };
 }
 
+/** GitHub's token formats: classic (ghp_), fine-grained (github_pat_), OAuth/app/refresh (gho_, ghu_, ghs_, ghr_). */
+const GITHUB_TOKEN = /^(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})$/;
+
+/**
+ * A GitHub token written into a remote URL (`https://<token>@github.com/…`, or as the password), or null.
+ * With the token as the user name and no password, git can't push from here: GitHub refuses the anonymous
+ * first try and git then wants to prompt for a password. Push and Refresh send it as a header instead.
+ */
+export function tokenInUrl(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:") return null;
+  const user = decodeURIComponent(u.username), pass = decodeURIComponent(u.password);
+  if (GITHUB_TOKEN.test(pass)) return pass;
+  if (GITHUB_TOKEN.test(user)) return user;
+  return null;
+}
+
 /** A token as pasted: trimmed, one line, no spaces (else it's a paste gone wrong). */
 export function cleanToken(input: string): string {
   const t = input.trim();

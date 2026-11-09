@@ -38,7 +38,7 @@ export function GitRemoteDialog({ projectSlug, app, onClose, onSaved }: { projec
       .then((j) => {
         if (!live) return;
         setInfo(j);
-        setUrl(j.saved?.remoteUrl ?? (j.origin && !j.origin.includes("***@") ? j.origin : ""));
+        setUrl(j.saved?.remoteUrl ?? (j.origin ? j.origin.replace("://***@", "://") : ""));
       })
       .catch((e) => toast.error(e instanceof Error ? e.message : String(e)));
     return () => {
@@ -125,6 +125,12 @@ export function GitRemoteDialog({ projectSlug, app, onClose, onSaved }: { projec
             <p className="text-xs text-muted-foreground">
               origin now: <span className="font-mono">{info ? (info.origin ?? "none") : "…"}</span>
             </p>
+            {info?.origin?.includes("***@") && !saved?.hasToken && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                origin has credentials written into its URL (in .git/config, in plain text). Save takes them out:
+                a GitHub token found there is kept, encrypted, unless you type another below.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="git-remote-token">Personal access token</Label>
