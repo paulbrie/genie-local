@@ -2,9 +2,9 @@
 //   GET ?op=link                          → { link }   (null: no token yet)
 //   GET ?op=scopes                        → { user, teams }
 //   GET ?op=projects[&search=]            → { projects }  (`matches`: the one deploying this repo)
-//   GET ?op=deployments                   → { deployments }
+//   GET ?op=deployments[&limit=5][&until=<ms>] → { deployments, next }  (next: the `until` of the page after)
 //   GET ?op=build&deployment=<id>         → { lines }
-//   GET ?op=runtime&deployment=<id>       → { lines }  (what came in a few seconds)
+//   GET ?op=runtime&deployment=<id>       → NDJSON, live: one line per request / log as it happens, while open
 //   PUT {token?, teamId?, projectId?, projectName?} → { link }
 //   DELETE                                → { ok }
 import { NextRequest, NextResponse } from "next/server";
@@ -18,7 +18,7 @@ import {
   vercelDeployments,
   vercelLink,
   vercelProjects,
-  vercelRuntimeLogs,
+  vercelRuntimeStream,
   vercelScopes,
   VercelError,
 } from "@/lib/vercel";
@@ -58,13 +58,15 @@ export async function GET(req: NextRequest, { params }: Ctx) {
       case "projects":
         return ok({ projects: await vercelProjects(slug, q.get("search") ?? undefined) });
       case "deployments":
-        return ok({ deployments: await vercelDeployments(slug) });
+        return ok(await vercelDeployments(slug, Number(q.get("limit")) || 5, Number(q.get("until")) || undefined));
       case "build":
         if (!/^[\w-]{4,80}$/.test(dep)) return NextResponse.json({ error: "bad deployment" }, { status: 400 });
         return ok({ lines: await vercelBuildLogs(slug, dep) });
       case "runtime":
         if (!/^[\w-]{4,80}$/.test(dep)) return NextResponse.json({ error: "bad deployment" }, { status: 400 });
-        return ok({ lines: await vercelRuntimeLogs(slug, dep) });
+        return new NextResponse(await vercelRuntimeStream(slug, dep, req.signal), {
+          headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store", "X-Accel-Buffering": "no" },
+        });
       default:
         return NextResponse.json({ error: "unknown op" }, { status: 400 });
     }

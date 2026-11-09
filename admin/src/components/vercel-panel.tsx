@@ -88,7 +88,7 @@ export function VercelPanel({ slug, initial }: { slug: string; initial: Link | n
           }}>Remove</Button>
         </div>
       </div>
-      <Deployments get={get} />
+      <Deployments get={get} api={api} />
     </div>
   );
 }
@@ -205,30 +205,64 @@ function ProjectPicker({ get, link, saveTeam, onPick, onCancel }: {
   );
 }
 
-function Deployments({ get }: { get: <T>(q: Record<string, string>) => Promise<T> }) {
+const PAGE_SIZES = [5, 10, 25] as const;
+const SIZE_KEY = "admin:vercel:page-size";
+
+function Deployments({ get, api }: { get: <T>(q: Record<string, string>) => Promise<T>; api: string }) {
   const [list, setList] = useState<Deployment[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [size, setSize] = useState<number>(() => {
+    try {
+      const n = Number(localStorage.getItem(SIZE_KEY));
+      return (PAGE_SIZES as readonly number[]).includes(n) ? n : 5;
+    } catch {
+      return 5;
+    }
+  });
+  // (pages by cursor: cursors[i] is page i's `until`; the first page has none)
+  const [cursors, setCursors] = useState<(number | null)[]>([null]);
+  const [page, setPage] = useState(0);
+  const [next, setNext] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setList((await get<{ deployments: Deployment[] }>({ op: "deployments" })).deployments);
+      const until = cursors[page];
+      const r = await get<{ deployments: Deployment[]; next: number | null }>({ op: "deployments", limit: String(size), ...(until ? { until: String(until) } : {}) });
+      setList(r.deployments);
+      setNext(r.next);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setLoading(false);
     }
-  }, [get]);
+  }, [get, size, cursors, page]);
+
+  const pickSize = (n: number) => {
+    setSize(n);
+    setCursors([null]);
+    setPage(0);
+    try {
+      localStorage.setItem(SIZE_KEY, String(n));
+    } catch {
+      /* not remembered */
+    }
+  };
+  const older = () => {
+    if (next == null) return;
+    setCursors((c) => [...c.slice(0, page + 1), next]);
+    setPage((p) => p + 1);
+  };
 
   useEffect(() => {
     const t = setTimeout(load, 0);
     return () => clearTimeout(t);
   }, [load]);
-  // (while one builds, look again every 10 s)
-  const building = !!list?.some((d) => busyState(d.state));
+  // (while one builds, look again every 10 s: on the first page, where new ones show)
+  const building = page === 0 && !!list?.some((d) => busyState(d.state));
   useEffect(() => {
     if (!building) return;
     const t = setInterval(load, 10_000);
@@ -246,7 +280,7 @@ function Deployments({ get }: { get: <T>(q: Record<string, string>) => Promise<T
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {!list && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {list && list.length === 0 && <p className="text-sm text-muted-foreground">No deployments yet.</p>}
+      {list && list.length === 0 && <p className="text-sm text-muted-foreground">{page === 0 ? "No deployments yet." : "No older deployments."}</p>}
       {list && list.length > 0 && (
         <div className="divide-y rounded-lg border text-sm">
           {list.map((d) => (
@@ -266,25 +300,36 @@ function Deployments({ get }: { get: <T>(q: Record<string, string>) => Promise<T
           ))}
         </div>
       )}
-      {shown && <Logs key={shown.id} d={shown} get={get} />}
+      {list && (page > 0 || next != null || list.length > 0) && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Per page</span>
+          {PAGE_SIZES.map((n) => (
+            <Button key={n} size="sm" variant={size === n ? "secondary" : "ghost"} className="h-7 px-2" onClick={() => pickSize(n)}>{n}</Button>
+          ))}
+          <span className="ml-auto text-muted-foreground">page {page + 1}</span>
+          <Button size="sm" variant="outline" className="h-7" disabled={page === 0 || loading} onClick={() => setPage((p) => p - 1)}>← Newer</Button>
+          <Button size="sm" variant="outline" className="h-7" disabled={next == null || loading} onClick={older}>Older →</Button>
+        </div>
+      )}
+      {shown && <Logs key={shown.id} d={shown} get={get} api={api} />}
     </div>
   );
 }
 
-function Logs({ d, get }: { d: Deployment; get: <T>(q: Record<string, string>) => Promise<T> }) {
+function Logs({ d, get, api }: { d: Deployment; get: <T>(q: Record<string, string>) => Promise<T>; api: string }) {
   const [tab, setTab] = useState<"build" | "runtime">("build");
   const [build, setBuild] = useState<BuildLine[] | null>(null);
-  const [runtime, setRuntime] = useState<RuntimeLine[] | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeLine[]>([]);
+  const [live, setLive] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async (which: "build" | "runtime") => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const r = await get<{ lines: BuildLine[] | RuntimeLine[] }>({ op: which, deployment: d.id });
-      if (which === "build") setBuild(r.lines as BuildLine[]);
-      else setRuntime(r.lines as RuntimeLine[]);
+      setBuild((await get<{ lines: BuildLine[] }>({ op: "build", deployment: d.id })).lines);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -293,22 +338,71 @@ function Logs({ d, get }: { d: Deployment; get: <T>(q: Record<string, string>) =
   }, [get, d.id]);
 
   useEffect(() => {
-    const t = setTimeout(() => load("build"), 0);
+    const t = setTimeout(load, 0);
     return () => clearTimeout(t);
   }, [load]);
+
+  // Runtime logs are a live feed (Vercel sends what happens while it's open): listen while the tab shows them.
+  useEffect(() => {
+    if (tab !== "runtime") return;
+    const ctl = new AbortController();
+    (async () => {
+      setError(null);
+      setConnecting(true);
+      try {
+        const res = await fetch(`${api}?${new URLSearchParams({ op: "runtime", deployment: d.id })}`, { signal: ctl.signal, cache: "no-store" });
+        if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
+        setConnecting(false);
+        setLive(true);
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const parts = buf.split("\n");
+          buf = parts.pop() ?? "";
+          const fresh = parts.filter(Boolean).flatMap((l) => {
+            try {
+              return [JSON.parse(l) as RuntimeLine];
+            } catch {
+              return [];
+            }
+          });
+          if (fresh.length) setRuntime((r) => [...r, ...fresh].slice(-1000));
+        }
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") setError((e as Error).message);
+      } finally {
+        setConnecting(false);
+        setLive(false);
+      }
+    })();
+    return () => ctl.abort();
+  }, [tab, api, d.id]);
   // (a build still running: its log grows)
   useEffect(() => {
     if (tab !== "build" || !busyState(d.state)) return;
-    const t = setInterval(() => load("build"), 5000);
+    const t = setInterval(load, 5000);
     return () => clearInterval(t);
   }, [tab, d.state, load]);
 
   return (
     <div className="rounded-lg border">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-sm">
-        <Button size="sm" variant={tab === "build" ? "secondary" : "ghost"} onClick={() => { setTab("build"); load("build"); }}>Build logs</Button>
-        <Button size="sm" variant={tab === "runtime" ? "secondary" : "ghost"} onClick={() => { setTab("runtime"); load("runtime"); }}>Runtime logs</Button>
-        {loading && <span className="text-xs text-muted-foreground">{tab === "runtime" ? "Listening a few seconds…" : "Loading…"}</span>}
+        <Button size="sm" variant={tab === "build" ? "secondary" : "ghost"} onClick={() => { setTab("build"); load(); }}>Build logs</Button>
+        <Button size="sm" variant={tab === "runtime" ? "secondary" : "ghost"} onClick={() => setTab("runtime")}>Runtime logs</Button>
+        {tab === "build" && loading && <span className="text-xs text-muted-foreground">Loading…</span>}
+        {tab === "runtime" && connecting && <span className="text-xs text-muted-foreground">Connecting… (Vercel can take up to 30 s to start)</span>}
+        {tab === "runtime" && live && (
+          <span className="flex items-center gap-1.5 text-xs text-emerald-600">
+            <span className="size-2 animate-pulse rounded-full bg-emerald-500" /> Live
+          </span>
+        )}
+        {tab === "runtime" && runtime.length > 0 && (
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setRuntime([])}>Clear</Button>
+        )}
         <div className="ml-auto flex items-center gap-3 text-xs">
           {d.url && <a href={d.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">{d.url.replace("https://", "")} <ExternalLink className="size-3" /></a>}
           {d.inspectorUrl && <a href={d.inspectorUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">On Vercel <ExternalLink className="size-3" /></a>}
@@ -323,10 +417,16 @@ function Logs({ d, get }: { d: Deployment; get: <T>(q: Record<string, string>) =
             </div>
           )))}
         {tab === "runtime" &&
-          (runtime === null ? "" : runtime.length === 0 ? "(nothing logged recently: requests and function output show here as they come)" : runtime.map((l, i) => (
+          (runtime.length === 0
+            ? live
+              ? "Listening: requests that run the site's code, and what it prints, show here as they happen (Vercel sends nothing from before, and pages served from its cache aren't logged)."
+              : connecting
+                ? "Connecting to Vercel's live logs…"
+                : ""
+            : runtime.map((l, i) => (
             <div key={i} className={cn((l.level === "error" || (l.status ?? 0) >= 500) && "text-red-600 dark:text-red-400", l.level === "warning" && "text-amber-600")}>
               <span className="text-muted-foreground">{time(l.at)} </span>
-              {l.method && <span>{l.method} {l.path} {l.status ?? ""} </span>}
+              {l.method && <span>{l.method} {l.path} {l.status != null && l.status > 0 ? l.status : ""} </span>}
               {l.text}
             </div>
           )))}

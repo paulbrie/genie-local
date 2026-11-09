@@ -168,12 +168,19 @@ type RawDeployment = {
   ready?: number;
 };
 
-/** The project's latest deployments, newest first. */
-export async function vercelDeployments(slug: string, limit = 20) {
+/**
+ * A page of the project's deployments, newest first: `limit` of them, created before `until` (ms; the `next` of
+ * the page before), and the `next` cursor for the page after (null on the last page).
+ */
+export async function vercelDeployments(slug: string, limit = 5, until?: number) {
   const { token, teamId, projectId: vp } = await linked(slug);
   if (!vp) throw new VercelError("pick the Vercel project first", 400);
-  const r = await call<{ deployments: RawDeployment[] }>(token, "/v6/deployments", teamId, { projectId: vp, limit });
-  return r.deployments.map((d) => ({
+  const r = await call<{ deployments: RawDeployment[]; pagination?: { next?: number | null } }>(token, "/v6/deployments", teamId, {
+    projectId: vp,
+    limit: Math.min(Math.max(limit, 1), 100),
+    until,
+  });
+  const deployments = r.deployments.map((d) => ({
     id: d.uid,
     url: d.url ? `https://${d.url}` : null,
     state: d.readyState ?? d.state ?? "UNKNOWN",
@@ -186,6 +193,7 @@ export async function vercelDeployments(slug: string, limit = 20) {
     message: (d.meta?.githubCommitMessage ?? d.meta?.gitlabCommitMessage ?? "").split("\n")[0] || null,
     inspectorUrl: d.inspectorUrl ?? null,
   }));
+  return { deployments, next: r.pagination?.next ?? null };
 }
 
 /** A deployment's build log: one line per event (stdout, stderr, the commands it ran). */
@@ -203,48 +211,63 @@ export async function vercelBuildLogs(slug: string, deploymentId: string) {
 }
 
 /**
- * A deployment's recent runtime logs (requests and what the functions printed). Vercel streams them; this reads for
- * up to `ms` and returns what came (newest last).
+ * A deployment's runtime logs as they happen (requests, and what its functions print). Vercel's endpoint is a live
+ * feed: it sends what happens while it's open, nothing from before. This passes it on as NDJSON, one normalized line
+ * each, until `signal` aborts (the page closed the view) or `maxMs` passes.
  */
-export async function vercelRuntimeLogs(slug: string, deploymentId: string, ms = 4000) {
+export async function vercelRuntimeStream(slug: string, deploymentId: string, signal: AbortSignal, maxMs = 15 * 60_000): Promise<ReadableStream<Uint8Array>> {
   const { token, teamId, projectId: vp } = await linked(slug);
   if (!vp) throw new VercelError("pick the Vercel project first", 400);
   const u = new URL(`${API}/v1/projects/${encodeURIComponent(vp)}/deployments/${encodeURIComponent(deploymentId)}/runtime-logs`);
   if (teamId) u.searchParams.set("teamId", teamId);
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), ms);
-  const lines: { at: number | null; level: string; source: string | null; text: string; method: string | null; path: string | null; status: number | null }[] = [];
-  try {
-    const res = await fetch(u, { headers: { Authorization: `Bearer ${token}` }, signal: ctl.signal, cache: "no-store" });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-      throw new VercelError(`Vercel: ${body.error?.message ?? `HTTP ${res.status}`}`, res.status === 401 || res.status === 403 ? 403 : 502);
-    }
-    const reader = res.body!.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    while (lines.length < 2000) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const raw = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!raw) continue;
-        try {
-          const l = JSON.parse(raw) as { timestampInMs?: number; level?: string; source?: string; message?: string; requestMethod?: string; requestPath?: string; responseStatusCode?: number };
-          lines.push({ at: l.timestampInMs ?? null, level: l.level ?? "info", source: l.source ?? null, text: l.message ?? "", method: l.requestMethod ?? null, path: l.requestPath ?? null, status: l.responseStatusCode ?? null });
-        } catch {
-          /* a partial or odd line */
-        }
-      }
-    }
-  } catch (e) {
-    if ((e as Error).name !== "AbortError") throw e;
-  } finally {
+  const stop = () => ctl.abort();
+  signal.addEventListener("abort", stop);
+  const timer = setTimeout(stop, maxMs);
+  const res = await fetch(u, { headers: { Authorization: `Bearer ${token}` }, signal: ctl.signal, cache: "no-store" });
+  if (!res.ok || !res.body) {
     clearTimeout(timer);
-    ctl.abort();
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string; code?: string } };
+    throw new VercelError(`Vercel: ${body.error?.message ?? `HTTP ${res.status}`}${body.error?.code ? ` (${body.error.code})` : ""}`, res.status === 401 || res.status === 403 ? 403 : 502);
   }
-  return lines;
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  const enc = new TextEncoder();
+  let buf = "";
+  return new ReadableStream<Uint8Array>({
+    async pull(out) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          clearTimeout(timer);
+          out.close();
+          return;
+        }
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const raw = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!raw) continue;
+          try {
+            const l = JSON.parse(raw) as { timestampInMs?: number; level?: string; source?: string; message?: string; requestMethod?: string; requestPath?: string; responseStatusCode?: number };
+            // (functions often print colours: \x1b[32m… — not for a web page)
+            const text = (l.message ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+            const line = { at: l.timestampInMs ?? null, level: l.level ?? "info", source: l.source ?? null, text, method: l.requestMethod ?? null, path: l.requestPath ?? null, status: l.responseStatusCode ?? null };
+            out.enqueue(enc.encode(JSON.stringify(line) + "\n"));
+          } catch {
+            /* a partial or odd line */
+          }
+        }
+      } catch {
+        // aborted (the page left, or maxMs): the stream just ends
+        clearTimeout(timer);
+        out.close();
+      }
+    },
+    cancel() {
+      clearTimeout(timer);
+      ctl.abort();
+    },
+  });
 }
