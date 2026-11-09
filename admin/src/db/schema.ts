@@ -377,6 +377,22 @@ export const boardSnapshots = pgTable(
 );
 
 /**
+ * A project's Vercel link (its Vercel tab): an access token (AES-GCM, src/lib/crypto.ts, never sent back to the
+ * browser), the team it works in (null = the token's personal account) and the Vercel project it shows.
+ */
+export const projectVercel = pgTable("project_vercel", {
+  projectId: integer("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  tokenEnc: text("token_enc").notNull(),
+  tokenHint: text("token_hint").notNull(),
+  teamId: text("team_id"),
+  vercelProjectId: text("vercel_project_id"),
+  vercelProjectName: text("vercel_project_name"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Where a project runs in production (its Production tab): the URL, and free notes
  * (hosting, how it deploys, accounts…). One row per project; more fields can join it.
  */
@@ -458,3 +474,4 @@ export type ProjectRecipe = typeof projectRecipes.$inferSelect;
 export type BrowserLink = typeof browserLinks.$inferSelect;
 export type GitCredential = typeof gitCredentials.$inferSelect;
 export type ProjectProduction = typeof projectProduction.$inferSelect;
+export type ProjectVercel = typeof projectVercel.$inferSelect;

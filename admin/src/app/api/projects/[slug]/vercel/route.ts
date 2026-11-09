@@ -1,0 +1,104 @@
+// A project's Vercel tab (src/lib/vercel.ts). The token is never sent back.
+//   GET ?op=link                          → { link }   (null: no token yet)
+//   GET ?op=scopes                        → { user, teams }
+//   GET ?op=projects[&search=]            → { projects }  (`matches`: the one deploying this repo)
+//   GET ?op=deployments                   → { deployments }
+//   GET ?op=build&deployment=<id>         → { lines }
+//   GET ?op=runtime&deployment=<id>       → { lines }  (what came in a few seconds)
+//   PUT {token?, teamId?, projectId?, projectName?} → { link }
+//   DELETE                                → { ok }
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+
+import { requireAdmin } from "@/lib/require-admin";
+import {
+  forgetVercel,
+  saveVercel,
+  vercelBuildLogs,
+  vercelDeployments,
+  vercelLink,
+  vercelProjects,
+  vercelRuntimeLogs,
+  vercelScopes,
+  VercelError,
+} from "@/lib/vercel";
+
+export const dynamic = "force-dynamic";
+
+type Ctx = { params: Promise<{ slug: string }> };
+
+const fail = (err: unknown) =>
+  NextResponse.json(
+    { error: err instanceof Error ? err.message : String(err) },
+    { status: err instanceof VercelError ? err.status : err instanceof z.ZodError ? 400 : 500 },
+  );
+const ok = (body: unknown) => NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
+
+async function admin() {
+  try {
+    await requireAdmin();
+    return null;
+  } catch {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+}
+
+export async function GET(req: NextRequest, { params }: Ctx) {
+  const denied = await admin();
+  if (denied) return denied;
+  const { slug } = await params;
+  const q = req.nextUrl.searchParams;
+  const dep = q.get("deployment") ?? "";
+  try {
+    switch (q.get("op") ?? "link") {
+      case "link":
+        return ok({ link: await vercelLink(slug) });
+      case "scopes":
+        return ok(await vercelScopes(slug));
+      case "projects":
+        return ok({ projects: await vercelProjects(slug, q.get("search") ?? undefined) });
+      case "deployments":
+        return ok({ deployments: await vercelDeployments(slug) });
+      case "build":
+        if (!/^[\w-]{4,80}$/.test(dep)) return NextResponse.json({ error: "bad deployment" }, { status: 400 });
+        return ok({ lines: await vercelBuildLogs(slug, dep) });
+      case "runtime":
+        if (!/^[\w-]{4,80}$/.test(dep)) return NextResponse.json({ error: "bad deployment" }, { status: 400 });
+        return ok({ lines: await vercelRuntimeLogs(slug, dep) });
+      default:
+        return NextResponse.json({ error: "unknown op" }, { status: 400 });
+    }
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const Put = z.object({
+  token: z.string().max(500).optional(),
+  teamId: z.string().max(100).nullable().optional(),
+  projectId: z.string().max(100).nullable().optional(),
+  projectName: z.string().max(200).nullable().optional(),
+});
+
+export async function PUT(req: NextRequest, { params }: Ctx) {
+  const denied = await admin();
+  if (denied) return denied;
+  const { slug } = await params;
+  try {
+    return ok({ link: await saveVercel(slug, Put.parse(await req.json())) });
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  const denied = await admin();
+  if (denied) return denied;
+  const { slug } = await params;
+  try {
+    await forgetVercel(slug);
+    return ok({ ok: true });
+  } catch (err) {
+    return fail(err);
+  }
+}

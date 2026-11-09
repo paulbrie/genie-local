@@ -10,5 +10,5 @@ import { getProjectDetail } from "@/lib/scan";
  */
 export const getProject = cache(getProjectDetail);
 
-export const PROJECT_TABS = ["scripts", "production", "tasks", "notes", "memory", "files", "git"] as const;
+export const PROJECT_TABS = ["scripts", "production", "vercel", "tasks", "notes", "memory", "files", "git"] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
