@@ -11,17 +11,26 @@ import { cn } from "@/lib/utils";
  * tile. The hues go round the wheel so neighbours tell apart; peach is left out
  * (it's Claude's, and Claude's own tile is its terracotta).
  */
-type Tint = { from: string; to: string; glyph?: string };
+type Tint = {
+  from: string;
+  to: string;
+  glyph?: string;
+  /**
+   * A pale tile with a dark glyph: no dark shadow under the glyph (on a pale ground it doubles a thin glyph's
+   * edges, which reads as pixelated), a faint light one instead.
+   */
+  light?: boolean;
+};
 
 const TINTS: Record<string, Tint> = {
   "/": { from: "#818cf8", to: "#4338ca" },
   "/projects": { from: "#fcd34d", to: "#ea580c" },
   "/terminals": { from: "#3f3f46", to: "#09090b", glyph: "#4ade80" },
-  "/boards": { from: "#fef08a", to: "#facc15", glyph: "#854d0e" },
+  "/boards": { from: "#fef08a", to: "#facc15", glyph: "#854d0e", light: true },
   "/files": { from: "#7dd3fc", to: "#0369a1" },
   "/db": { from: "#6ee7b7", to: "#047857" },
   "/processes": { from: "#fca5a5", to: "#dc2626" },
-  "/chrome": { from: "#ffffff", to: "#dbe1ea", glyph: "#2563eb" },
+  "/chrome": { from: "#ffffff", to: "#dbe1ea", glyph: "#2563eb", light: true },
   "/browsers": { from: "#f0abfc", to: "#a21caf" },
   "/agents": { from: "#c4b5fd", to: "#6d28d9" },
   "/docker": { from: "#1e40af", to: "#0b1a42", glyph: "#7dd3fc" },
@@ -40,7 +49,7 @@ const TINTS: Record<string, Tint> = {
   "/agents3d": { from: "#f472b6", to: "#6d28d9" },
   "/tasks": { from: "#fda4af", to: "#e11d48" },
   "/vscode": { from: "#4fb3ff", to: "#0065a9" },
-  launchpad: { from: "#e4e4e7", to: "#a1a1aa", glyph: "#3f3f46" },
+  launchpad: { from: "#e4e4e7", to: "#a1a1aa", glyph: "#3f3f46", light: true },
 };
 
 const FALLBACK: Tint = { from: "#a1a1aa", to: "#52525b" };
@@ -89,7 +98,7 @@ export function Tile({
       <Glyph
         aria-hidden
         strokeWidth={1.9}
-        className="relative drop-shadow-[0_1px_1px_rgb(0_0_0/0.25)]"
+        className={cn("relative", tint.light ? "drop-shadow-[0_1px_0_rgb(255_255_255/0.55)]" : "drop-shadow-[0_1px_1px_rgb(0_0_0/0.25)]")}
         style={{ width: size * 0.5, height: size * 0.5, color: tint.glyph ?? "#ffffff" }}
       />
       {badge != null && badge !== 0 && (
