@@ -6,6 +6,8 @@ import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
 
 import { NAV_HREFS } from "@/components/nav-items";
+import { ProjectContextMenu } from "@/components/project-context-menu";
+import { TerminalContextMenu } from "@/components/terminal-context-menu";
 import { statusLabel, TermStatusDot } from "@/components/terminal-dock";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
@@ -58,6 +60,8 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
   const [{ widgetFolded }] = useSubject(desk);
   const isFolded = (s: WidgetSection) => !!widgetFolded?.includes(s);
   const [projects, setProjects] = useState<ProjectNavItem[] | null>(null);
+  // bumped after a script is started or stopped from a project's menu: its running state, now and once it's bound
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -72,12 +76,14 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
       }
     };
     void load();
+    const soon = reload ? setTimeout(load, 2500) : undefined;
     const t = setInterval(load, 15_000);
     return () => {
       live = false;
       clearInterval(t);
+      clearTimeout(soon);
     };
-  }, []);
+  }, [reload]);
 
   if (mode === "hidden") return null;
   const folded = mode === "collapsed";
@@ -87,10 +93,11 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
   const working = terminals.filter((t) => t.status === "claude-working" || t.status === "busy").length;
   const running = (projects ?? []).filter((p) => p.running).length;
 
-  const openProject = (slug: string) => {
-    const path = `/projects/${encodeURIComponent(slug)}`;
+  // a project's page in the window already on it, else a new one (or the page's own window when that's closed)
+  const openPath = (path: string) => {
     if (!openPathWindow(path, pathname, NAV_HREFS)) router.push(path);
   };
+  const openProject = (slug: string) => openPath(`/projects/${encodeURIComponent(slug)}`);
 
   return (
     <aside
@@ -150,7 +157,10 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
           >
             {terms.length === 0 && <Empty>No terminals.</Empty>}
             {terms.map((t) => (
-              <TerminalRow key={t.name} t={t} onOpen={() => openTerminal(t.name)} />
+              // (right-click: the sidebar's menu, the same options as in the classic view)
+              <TerminalContextMenu key={t.name} name={t.name} claude={t.status.startsWith("claude")} onNavigate={() => {}}>
+                <TerminalRow t={t} onOpen={() => openTerminal(t.name)} />
+              </TerminalContextMenu>
             ))}
           </Section>
           <Section
@@ -166,33 +176,42 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
             {projs.map((p) => {
               const mem = memoryOf(memory, p.slug)?.bytes ?? 0;
               return (
-                <button
+                <ProjectContextMenu
                   key={p.slug}
-                  type="button"
-                  onClick={() => openProject(p.slug)}
-                  title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : " · not running"} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
+                  slug={p.slug}
+                  hasGit={p.hasGit}
+                  ports={p.ports}
+                  onNavigate={() => {}}
+                  onChanged={() => setReload((n) => n + 1)}
+                  navigate={openPath}
                 >
-                  <StatusDot
-                    color={p.running ? "bg-emerald-500" : "bg-muted-foreground/30"}
-                    pulse={p.running}
-                    size="sm"
-                    label={p.running ? "Running" : "Not running"}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{p.slug}</span>
-                  {p.ports.length > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">:{p.ports.join(" :")}</span>}
-                  {mem > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground tabular-nums">{bytes(mem)}</span>}
-                  {p.openTasks > 0 && (
-                    <span
-                      className={cn(
-                        "shrink-0 rounded-full px-1.5 text-[10.5px] tabular-nums",
-                        p.inProgress ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" : "bg-foreground/10 text-muted-foreground",
-                      )}
-                    >
-                      {p.openTasks}
-                    </span>
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => openProject(p.slug)}
+                    title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : " · not running"} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
+                  >
+                    <StatusDot
+                      color={p.running ? "bg-emerald-500" : "bg-muted-foreground/30"}
+                      pulse={p.running}
+                      size="sm"
+                      label={p.running ? "Running" : "Not running"}
+                    />
+                    <span className="min-w-0 flex-1 truncate">{p.slug}</span>
+                    {p.ports.length > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">:{p.ports.join(" :")}</span>}
+                    {mem > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground tabular-nums">{bytes(mem)}</span>}
+                    {p.openTasks > 0 && (
+                      <span
+                        className={cn(
+                          "shrink-0 rounded-full px-1.5 text-[10.5px] tabular-nums",
+                          p.inProgress ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" : "bg-foreground/10 text-muted-foreground",
+                        )}
+                      >
+                        {p.openTasks}
+                      </span>
+                    )}
+                  </button>
+                </ProjectContextMenu>
               );
             })}
           </Section>

@@ -55,7 +55,7 @@ const OPS: Record<ScriptOp, { run: typeof startAppAction; doing: string; done: s
 };
 
 /**
- * Right-click on a project in the sidebar: its tabs (Scripts ▸ every script,
+ * Right-click on a project in the sidebar (and the desktop's status widget): its tabs (Scripts ▸ every script,
  * Tasks, Notes, Git). Each script has its own menu: Start, or Stop / Restart
  * when it runs, plus Show in the Scripts tab and its Logs.
  */
@@ -65,6 +65,7 @@ export function ProjectContextMenu({
   ports,
   onNavigate,
   onChanged,
+  navigate,
   children,
 }: {
   slug: string;
@@ -72,6 +73,8 @@ export function ProjectContextMenu({
   /** Ports of its running apps. */
   ports: number[];
   onNavigate: () => void;
+  /** Where its pages open (the desktop: a window); else this page goes there. */
+  navigate?: (href: string) => void;
   /** A script was started / stopped: the sidebar reloads its running state. */
   onChanged: () => void;
   children: React.ReactNode;
@@ -82,7 +85,8 @@ export function ProjectContextMenu({
   const base = `/projects/${encodeURIComponent(slug)}`;
 
   const go = (href: string) => {
-    router.push(href);
+    if (navigate) navigate(href);
+    else router.push(href);
     onNavigate();
   };
 
