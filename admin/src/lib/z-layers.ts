@@ -20,6 +20,9 @@ export const Z_TERMINAL_WINDOWS = 10_000;
 /** The desktop interface's Launchpad (every app and project): over the floating windows. */
 export const Z_LAUNCHPAD = 100_000;
 
+/** The ⌘K / Ctrl+K command palette: over the Launchpad and every window. */
+export const Z_COMMAND_PALETTE = 200_000;
+
 /**
  * App-wide controls above every terminal: the run dock, the minimized
  * terminals bar, the Jarvis console. (Toasts are higher still: sonner's own.)

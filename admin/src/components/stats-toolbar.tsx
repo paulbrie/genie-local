@@ -10,6 +10,7 @@ import type { SystemStats } from "@/lib/stats";
 import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
 import { AdminUpdateButton } from "@/components/admin-update-button";
+import { CommandPaletteButton } from "@/components/command-palette";
 import { DesktopMenu } from "@/components/desktop/desktop-menu";
 import { ShellSwitch, useShellMode } from "@/components/desktop/shell-mode";
 import { SessionsIndicator } from "@/components/sessions-indicator";
@@ -125,6 +126,7 @@ export function StatsToolbar() {
             ? `updated ${new Date(stats.ts).toLocaleTimeString()}`
             : "loading…"}
       </span>
+      <CommandPaletteButton />
       <AdminUpdateButton />
       <SessionsIndicator />
       <StatsHistoryChart />

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Fredoka, Geist, Geist_Mono } from "next/font/google";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import "./globals.css";
 import { ActivityBeacon } from "@/components/activity-beacon";
 import { AskHost } from "@/components/ask-host";
@@ -55,6 +55,9 @@ export function generateMetadata(): Metadata {
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   // classic (the sidebar) or desktop, as this browser last chose (the top bar's switch)
   const shell = parseShellMode((await cookies()).get(SHELL_COOKIE)?.value);
+  // A page in one of the desktop's windows (a frame, components/desktop): just the page, none of the frame around it,
+  // and none of what the page it's in runs already (terminals, voice, alerts, activity), which would happen twice.
+  const embedded = (await headers()).get("sec-fetch-dest") === "iframe";
   return (
     <html
       lang="en"
@@ -68,17 +71,27 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <AppShell initialMode={shell}>{children}</AppShell>
-          <TerminalDock />
-          <TerminalVoiceMonitor />
-          <TerminalNarrator />
-          <JarvisOrb />
-          <JarvisConsole />
-          <RunDock />
+          <AppShell initialMode={shell} embedded={embedded}>
+            {children}
+          </AppShell>
+          {!embedded && (
+            <>
+              <TerminalDock />
+              <TerminalVoiceMonitor />
+              <TerminalNarrator />
+              <JarvisOrb />
+              <JarvisConsole />
+              <RunDock />
+            </>
+          )}
           <UploadDock />
           <AskHost />
-          <ProjectMemoryMonitor />
-          <ActivityBeacon />
+          {!embedded && (
+            <>
+              <ProjectMemoryMonitor />
+              <ActivityBeacon />
+            </>
+          )}
           <Toaster richColors position="top-right" />
         </ThemeProvider>
       </body>

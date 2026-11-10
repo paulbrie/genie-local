@@ -155,6 +155,17 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   projects), and the Spiridus menu at the bar's left. Its state is `src/store/desktop.ts`; the
   geometry is pure and tested (`src/lib/desktop.ts`). The window has no transform, filter or z-index,
   so a page's own `fixed` panels and z-indexes behave as they do in classic.
+  · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
+    a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
+  · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
+    sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
+    `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal
+    dock, voice, alerts, activity). The framed page posts its path, clicks, ⌘K and the terminals it
+    opens to the page around it (`openTerminalsIn`). An icon or dock click brings its app's window up,
+    else opens a new one (`openAppWindow`); right-click → Open in a new window for a second one.
+- **⌘K / Ctrl+K: the command palette** (`src/components/command-palette.tsx`, search in
+  `src/lib/command-search.ts`): pages, projects and their tabs, terminals, a few actions, in both
+  interfaces. Code editors keep their own ⌘K / Ctrl+K, and a terminal its Ctrl+K.
 - **Voice / TTS pipeline.** Spoken output (alerts, Jarvis narration, Q&A answers)
   goes through **one** entry point: `say(text, cfg, opts)` in `src/lib/tts.ts`.
   Two engines, chosen in settings (`src/store/voice.ts` — `engine: 'kokoro' |

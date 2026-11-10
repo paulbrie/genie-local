@@ -14,6 +14,10 @@ import {
   resizeRect,
   subPath,
   unmaximizeUnder,
+  iconGridSize,
+  layoutIcons,
+  moveIcon,
+  sortedIcons,
 } from "./desktop";
 
 const APPS = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks", "/teams", "/agents", "/agents3d"];
@@ -142,5 +146,51 @@ describe("parseDesk", () => {
   });
   it("an emptied dock stays empty", () => {
     assert.deepEqual(parseDesk(JSON.stringify({ pinned: [] }), APPS).pinned, []);
+  });
+});
+
+describe("desktop icons", () => {
+  const ids = ["a", "b", "c", "d", "e"];
+  it("lays them down the first column, then the next, by default", () => {
+    assert.deepEqual(layoutIcons(ids, undefined, 4, 2), { a: { c: 0, r: 0 }, b: { c: 0, r: 1 }, c: { c: 1, r: 0 }, d: { c: 1, r: 1 }, e: { c: 2, r: 0 } });
+  });
+  it("keeps saved spots, and fills around them", () => {
+    const l = layoutIcons(ids, { e: { c: 0, r: 0 }, c: { c: 3, r: 1 } }, 4, 2);
+    assert.deepEqual(l.e, { c: 0, r: 0 });
+    assert.deepEqual(l.c, { c: 3, r: 1 });
+    assert.deepEqual(l.a, { c: 0, r: 1 });
+    assert.deepEqual(l.b, { c: 1, r: 0 });
+    assert.equal(new Set(Object.values(l).map((c) => `${c.c},${c.r}`)).size, ids.length);
+  });
+  it("moves a saved spot that no longer fits to the nearest free one", () => {
+    const l = layoutIcons(["a", "b"], { a: { c: 9, r: 9 } }, 3, 2);
+    assert.deepEqual(l.a, { c: 2, r: 1 });
+    assert.deepEqual(l.b, { c: 0, r: 0 });
+  });
+  it("gives two icons saved on one spot one each", () => {
+    const l = layoutIcons(["a", "b"], { a: { c: 1, r: 0 }, b: { c: 1, r: 0 } }, 3, 2);
+    assert.deepEqual(l.a, { c: 1, r: 0 });
+    assert.notDeepEqual(l.b, { c: 1, r: 0 });
+  });
+  it("swaps with the icon dropped on, moves into a free spot", () => {
+    const l = layoutIcons(ids, undefined, 4, 2);
+    const swapped = moveIcon(l, "a", { c: 1, r: 1 });
+    assert.deepEqual(swapped.a, { c: 1, r: 1 });
+    assert.deepEqual(swapped.d, { c: 0, r: 0 });
+    const free = moveIcon(l, "a", { c: 3, r: 1 });
+    assert.deepEqual(free.a, { c: 3, r: 1 });
+    assert.equal(Object.values(free).filter((c) => c.c === 0 && c.r === 0).length, 0);
+    assert.equal(moveIcon(l, "a", { c: 0, r: 0 }), l);
+  });
+  it("sorts by name", () => {
+    const l = sortedIcons(["/z", "/a", "/m"], (id) => ({ "/z": "Zed", "/a": "Apple", "/m": "Mango" })[id]!, 2);
+    assert.deepEqual(l, { "/a": { c: 0, r: 0 }, "/m": { c: 0, r: 1 }, "/z": { c: 1, r: 0 } });
+  });
+  it("reads saved spots back, dropping what it doesn't know", () => {
+    const d = parseDesk(JSON.stringify({ pinned: [], icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
+    assert.deepEqual(d.icons, { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } });
+  });
+  it("fits as many columns and rows as the desktop has room for", () => {
+    assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });
   });
 });

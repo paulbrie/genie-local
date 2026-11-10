@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
   ChevronLeft,
@@ -31,19 +31,27 @@ import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import {
   appOf,
+  type Cell,
   clampRect,
   defaultGeom,
   DOCK_SPACE,
   type Edges,
+  ICON_GRID,
+  iconGridSize,
+  layoutIcons,
   maxRect,
+  moveIcon,
   type Rect,
   resizeRect,
   subPath,
   unmaximizeUnder,
+  VSCODE_ICON,
 } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useNavBadges } from "@/lib/use-nav-badges";
 import { Z_LAUNCHPAD } from "@/lib/z-layers";
+import { openTerminal } from "@/store/terminals";
+import { commandPalette } from "@/store/ui";
 import {
   closeApp,
   desk,
@@ -54,6 +62,18 @@ import {
   minimizeWindow,
   openApps,
   setGeom,
+  setIcons,
+  closeFrame,
+  deskDrag,
+  focusWin,
+  frames,
+  frontWin,
+  MAIN_WIN,
+  openAppWindow,
+  openFrame,
+  stack,
+  updateFrame,
+  type FrameWin,
   setPinned,
   showWindow,
 } from "@/store/desktop";
@@ -174,6 +194,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       if (!last) {
         if (Math.abs(dx) + Math.abs(dy) < 4) return;
         setDragging(true);
+        deskDrag.next(true);
         if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H), r0, x0 - area.getBoundingClientRect().left);
       }
       last = { ...start, x: start.x + dx, y: Math.max(0, start.y + dy) };
@@ -187,6 +208,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       setGeom(key, clampRect(last, W, H));
       setLive(null);
       setDragging(false);
+      deskDrag.next(false);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -207,6 +229,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
     const y0 = e.clientY;
     let last = start;
     setDragging(true);
+    deskDrag.next(true);
     const move = (ev: PointerEvent) => {
       last = resizeRect(start, edges, ev.clientX - x0, ev.clientY - y0, W, H);
       setLive(last);
@@ -218,6 +241,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       setGeom(key, clampRect(last, W, H));
       setLive(null);
       setDragging(false);
+      deskDrag.next(false);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -249,11 +273,13 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
   return (
     <div
       ref={areaRef}
-      className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "flex-1 overflow-y-auto"}
+      className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
     >
       {desktop && <DesktopBackground mobile={mobile} badgeOf={badgeOf} />}
+      {desktop && <FrameWindows area={ws} mobile={mobile} />}
       <div
         ref={winRef}
+        onPointerDownCapture={desktop ? () => focusWin(MAIN_WIN) : undefined}
         role={desktop ? "region" : undefined}
         aria-label={desktop ? `${item?.label ?? "Page"} window` : undefined}
         aria-hidden={desktop && hidden ? true : undefined}
@@ -288,7 +314,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         <div
           className={
             desktop
-              ? `min-h-0 flex-1 overflow-y-auto ${mobile ? "" : "rounded-b-[calc(var(--radius)*1.4-1px)]"} ${dragging ? "pointer-events-none select-none" : ""}`
+              ? `scrollbar-clear min-h-0 flex-1 overflow-y-auto ${mobile ? "" : "rounded-b-[calc(var(--radius)*1.4-1px)]"} ${dragging ? "pointer-events-none select-none" : ""}`
               : "contents"
           }
         >
@@ -296,9 +322,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         </div>
         {desktop && !mobile && !max && <ResizeHandles onPointerDown={onResizePointerDown} />}
       </div>
-      {desktop && (
-        <Dock app={app} mobile={mobile} windowShown={!hidden} badgeOf={badgeOf} onMinimize={minimize} />
-      )}
+      {desktop && <Dock app={app} mobile={mobile} windowShown={!hidden} badgeOf={badgeOf} onMinimize={minimize} />}
       {desktop && <Launchpad badgeOf={badgeOf} />}
     </div>
   );
@@ -315,6 +339,7 @@ function TitleBar({
   onClose,
   onMinimize,
   onToggleMax,
+  nav,
 }: {
   item: NavItem | null;
   pathname: string;
@@ -324,8 +349,13 @@ function TitleBar({
   onClose: () => void;
   onMinimize: () => void;
   onToggleMax: () => void;
+  /** a frame's own history and reload (the page's own window uses the router) */
+  nav?: { back: () => void; forward: () => void; reload: () => void; href: string };
 }) {
   const router = useRouter();
+  const back = nav?.back ?? (() => router.back());
+  const forward = nav?.forward ?? (() => router.forward());
+  const reload = nav?.reload ?? (() => router.refresh());
   const crumbs = subPath(pathname, item?.href ?? null);
   const btn =
     "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
@@ -351,10 +381,10 @@ function TitleBar({
           />
         )}
       </div>
-      <button type="button" aria-label="Back" title="Back" onClick={() => router.back()} className={`z-10 ${btn}`}>
+      <button type="button" aria-label="Back" title="Back" onClick={back} className={`z-10 ${btn}`}>
         <ChevronLeft className="size-4" />
       </button>
-      <button type="button" aria-label="Forward" title="Forward" onClick={() => router.forward()} className={`z-10 ${btn}`}>
+      <button type="button" aria-label="Forward" title="Forward" onClick={forward} className={`z-10 ${btn}`}>
         <ChevronRight className="size-4" />
       </button>
 
@@ -377,14 +407,14 @@ function TitleBar({
       </div>
 
       <div className="z-10 ml-auto flex items-center">
-        <button type="button" aria-label="Reload" title="Reload" onClick={() => router.refresh()} className={btn}>
+        <button type="button" aria-label="Reload" title="Reload" onClick={reload} className={btn}>
           <RotateCw className="size-3.5" />
         </button>
         <button
           type="button"
           aria-label="Open in a new browser tab"
           title="Open in a new browser tab"
-          onClick={() => window.open(`${BASE_PATH}${pathname}${window.location.search}`, "_blank", "noopener")}
+          onClick={() => window.open(nav ? nav.href : `${BASE_PATH}${pathname}${window.location.search}`, "_blank", "noopener")}
           className={btn}
         >
           <ExternalLink className="size-3.5" />
@@ -452,6 +482,198 @@ function ResizeHandles({ onPointerDown }: { onPointerDown: (edges: Edges, e: Rea
   );
 }
 
+/* ------------------------------ more windows ------------------------------ */
+
+/**
+ * The desktop's other windows: each another page of the app in a frame (the page there renders alone, as
+ * app-shell's FramedPage), back to front as `stack` says. The page's own window has no z-index (see Workspace), so
+ * it sits among them by DOM order: the frames behind it come before it at z-index 0, those in front of it get 1 and
+ * up (under the dock's 40).
+ */
+function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null; mobile: boolean }) {
+  const [list] = useSubject(frames);
+  const [order] = useSubject(stack);
+
+  // What the frames say: where they've gone, a click in one (to the front), ⌘K, a terminal to open.
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin || typeof e.data?.type !== "string") return;
+      const el = [...document.querySelectorAll<HTMLIFrameElement>("iframe[data-desk-frame]")].find((f) => f.contentWindow === e.source);
+      if (!el?.dataset.deskFrame) return;
+      const id = el.dataset.deskFrame;
+      if (e.data.type === "spiridus:path" && typeof e.data.path === "string" && e.data.path.startsWith("/"))
+        updateFrame(id, { path: e.data.path, app: appOf(e.data.path.split("?")[0], NAV_HREFS) });
+      else if (e.data.type === "spiridus:focus") focusWin(id);
+      else if (e.data.type === "spiridus:palette") commandPalette.next(!commandPalette.getValue());
+      else if (e.data.type === "spiridus:terminal" && typeof e.data.name === "string") openTerminal(e.data.name);
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+
+  if (!area) return null;
+  const mainAt = order.indexOf(MAIN_WIN);
+  const sorted = [...list].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+  return (
+    <>
+      {sorted.map((f) => {
+        const at = order.indexOf(f.id);
+        return (
+          <FrameWindow
+            key={f.id}
+            win={f}
+            z={at > mainAt ? Math.min(at - mainAt, 30) : 0}
+            cascade={list.indexOf(f)}
+            area={area}
+            mobile={mobile}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+function FrameWindow({ win, z, cascade, area, mobile }: { win: FrameWin; z: number; cascade: number; area: { w: number; h: number }; mobile: boolean }) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const winRef = useRef<HTMLDivElement>(null);
+  // (the frame's first page: later ones it goes to itself, and its src mustn't follow, or it would reload)
+  const [src] = useState(() => `${BASE_PATH}${win.path}`);
+  const [dragAny] = useSubject(deskDrag);
+  const [live, setLive] = useState<Rect | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [glide, setGlide] = useState(false);
+  const item = win.app ? (BY_HREF.get(win.app) ?? null) : null;
+  const { w: W, h: H } = area;
+  const max = !!win.geom?.max;
+  // a new window: the default place, each one a step down and right from the one before
+  const start = (): Rect => {
+    const d = defaultGeom(W, H);
+    const step = 28 * ((cascade % 6) + 1);
+    return clampRect({ ...d, x: d.x + step, y: d.y + step }, W, H);
+  };
+  const placed = win.geom ? clampRect(win.geom, W, H) : start();
+  const rect = live ?? (max ? maxRect(W, H) : placed);
+
+  const saveGeom = (r: Rect, isMax = max) => updateFrame(win.id, { geom: { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) } });
+
+  function toggleMax() {
+    if (mobile) return;
+    setGlide(true);
+    window.setTimeout(() => setGlide(false), 260);
+    saveGeom(placed, !max);
+  }
+
+  function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || mobile || (e.target as HTMLElement).closest("button, a, input")) return;
+    focusWin(win.id);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let from = rect;
+    let last: Rect | null = null;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const dy = ev.clientY - y0;
+      if (!last) {
+        if (Math.abs(dx) + Math.abs(dy) < 4) return;
+        setDragging(true);
+        deskDrag.next(true);
+        if (max) {
+          const left = winRef.current?.parentElement?.getBoundingClientRect().left ?? 0;
+          from = unmaximizeUnder(placed, rect, x0 - left);
+        }
+      }
+      last = { ...from, x: from.x + dx, y: Math.max(0, from.y + dy) };
+      setLive(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!last) return;
+      saveGeom(last, false);
+      setLive(null);
+      setDragging(false);
+      deskDrag.next(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function onResizePointerDown(edges: Edges, e: React.PointerEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    focusWin(win.id);
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const from = rect;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let last = from;
+    setDragging(true);
+    deskDrag.next(true);
+    const move = (ev: PointerEvent) => {
+      last = resizeRect(from, edges, ev.clientX - x0, ev.clientY - y0, W, H);
+      setLive(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      saveGeom(last);
+      setLive(null);
+      setDragging(false);
+      deskDrag.next(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  const cw = () => frameRef.current?.contentWindow ?? null;
+  return (
+    <div
+      ref={winRef}
+      role="region"
+      aria-label={`${item?.label ?? "Page"} window`}
+      aria-hidden={win.hidden ? true : undefined}
+      onPointerDownCapture={() => focusWin(win.id)}
+      style={mobile ? { inset: 0, zIndex: z } : { left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: z }}
+      className={`absolute flex origin-bottom flex-col bg-background motion-safe:animate-desk-in ${
+        mobile ? "" : "rounded-xl border shadow-[0_28px_70px_-18px_rgb(0_0_0/0.5)] ring-1 ring-black/5 dark:ring-white/10"
+      } ${glide && !dragging ? "transition-[left,top,width,height] duration-200 ease-out" : ""} ${win.hidden ? "invisible" : ""}`}
+    >
+      <TitleBar
+        item={item}
+        pathname={win.path.split("?")[0]}
+        mobile={mobile}
+        max={max}
+        onPointerDown={onBarPointerDown}
+        onClose={() => closeFrame(win.id)}
+        onMinimize={() => updateFrame(win.id, { hidden: true })}
+        onToggleMax={toggleMax}
+        nav={{
+          back: () => cw()?.history.back(),
+          forward: () => cw()?.history.forward(),
+          reload: () => cw()?.location.reload(),
+          href: `${BASE_PATH}${win.path}`,
+        }}
+      />
+      <iframe
+        ref={frameRef}
+        data-desk-frame={win.id}
+        src={src}
+        title={`${item?.label ?? "Page"}: ${win.path}`}
+        className={`min-h-0 w-full flex-1 bg-background ${mobile ? "" : "rounded-b-[calc(var(--radius)*1.4-1px)]"} ${
+          dragAny ? "pointer-events-none select-none" : ""
+        }`}
+      />
+      {!mobile && !max && <ResizeHandles onPointerDown={onResizePointerDown} />}
+    </div>
+  );
+}
+
 /* ------------------------------ the desktop ------------------------------- */
 
 /** The wallpaper (globals.css .desk-wallpaper) with the wisp, faint, in the middle. */
@@ -476,36 +698,36 @@ function Wallpaper() {
   );
 }
 
-/** Every app as an icon on the wallpaper, in columns from the top left (a phone's home screen on mobile). */
+/**
+ * Every app as an icon on the wallpaper: on a computer, each where it was dragged to (IconGrid); on a phone, a home
+ * screen grid in the default order.
+ */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned }] = useSubject(desk);
+  const [{ pinned, icons }] = useSubject(desk);
   const [open] = useSubject(openApps);
-  return (
-    <>
-      <Wallpaper />
-      <nav
-        aria-label="Apps"
-        className={
-          mobile
-            ? "scrollbar-hover absolute inset-0 grid auto-rows-[96px] grid-cols-4 content-start justify-items-center overflow-y-auto p-3 pb-28"
-            : "absolute inset-0 grid auto-cols-[88px] grid-flow-col grid-rows-[repeat(auto-fill,96px)] content-start justify-start gap-x-1 p-3"
-        }
-        style={mobile ? undefined : { paddingBottom: DOCK_SPACE }}
-      >
-        {NAV_FLAT.map((it) => (
-          <DeskIcon
-            key={it.href}
-            item={it}
-            badge={badgeOf(it.href)}
-            pinned={pinned.includes(it.href)}
-            path={open.find((o) => o.app === it.href)?.path ?? it.href}
-          />
-        ))}
-        {/* VS Code (code-server) lives outside the basePath: a raw <a>, gated by nginx. */}
+  const items = [
+    ...NAV_FLAT.map((it) => ({
+      id: it.href,
+      label: it.label,
+      node: (
+        <DeskIcon
+          item={it}
+          badge={badgeOf(it.href)}
+          pinned={pinned.includes(it.href)}
+          path={open.find((o) => o.app === it.href)?.path ?? it.href}
+        />
+      ),
+    })),
+    // VS Code (code-server) lives outside the basePath: a raw <a>, gated by nginx.
+    {
+      id: VSCODE_ICON,
+      label: "VS Code",
+      node: (
         <a
           href="/vscode/"
           target="_blank"
           rel="noreferrer"
+          draggable={false}
           className="group flex w-[84px] flex-col items-center gap-1 rounded-lg p-1.5 outline-none focus-visible:bg-white/25 dark:focus-visible:bg-white/10"
         >
           <span className="transition-transform duration-150 group-hover:-translate-y-0.5 group-active:scale-95">
@@ -513,8 +735,129 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           </span>
           <IconLabel>VS Code</IconLabel>
         </a>
-      </nav>
+      ),
+    },
+  ];
+  return (
+    <>
+      <Wallpaper />
+      {mobile ? (
+        <nav
+          aria-label="Apps"
+          className="scrollbar-hover absolute inset-0 grid auto-rows-[96px] grid-cols-4 content-start justify-items-center overflow-y-auto p-3 pb-28"
+        >
+          {items.map((i) => (
+            <div key={i.id}>{i.node}</div>
+          ))}
+        </nav>
+      ) : (
+        <IconGrid items={items} saved={icons} />
+      )}
     </>
+  );
+}
+
+type DeskItem = { id: string; label: string; node: React.ReactNode };
+
+/**
+ * The desktop's icons on a grid (lib/desktop.ts layoutIcons): drag one anywhere and it snaps to the nearest spot,
+ * swapping with an icon already there; the arrangement is remembered (desk.icons). A press that doesn't move is a
+ * click, as before.
+ */
+function IconGrid({ items, saved }: { items: DeskItem[]; saved?: Record<string, Cell> }) {
+  const box = useRef<HTMLElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const press = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
+  const swallowClick = useRef(false);
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setSize({ w: e.contentRect.width, h: e.contentRect.height }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const { cols, rows } = size ? iconGridSize(size.w, size.h) : { cols: 1, rows: 1 };
+  const idsKey = items.map((i) => i.id).join("\n");
+  const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows), [idsKey, saved, cols, rows]);
+  const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
+  const cellAt = (x: number, y: number): Cell => ({
+    c: Math.min(Math.max(Math.round((x - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
+    r: Math.min(Math.max(Math.round((y - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
+  });
+  /** where the dragged icon's top-left is now, in the grid's own coordinates */
+  const dragPos = (e: React.PointerEvent, p: NonNullable<typeof press.current>) => {
+    const b = box.current!.getBoundingClientRect();
+    return { x: e.clientX - b.left - p.ox, y: e.clientY - b.top - p.oy };
+  };
+  const target = drag ? cellAt(drag.x, drag.y) : null;
+
+  return (
+    <nav
+      ref={box}
+      aria-label="Apps"
+      className="absolute inset-0 overflow-hidden"
+      // (measured first: until then nothing is placed, so nothing jumps)
+      style={{ visibility: size ? "visible" : "hidden" }}
+    >
+      {target && <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />}
+      {items.map((i) => {
+        const dragging = drag?.id === i.id;
+        const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+        return (
+          <div
+            key={i.id}
+            style={at}
+            className={
+              dragging
+                ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
+                : "absolute transition-[left,top] duration-200 ease-out"
+            }
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              const r = e.currentTarget.getBoundingClientRect();
+              press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
+            }}
+            onPointerMove={(e) => {
+              const p = press.current;
+              if (!p || p.id !== i.id) return;
+              if (!p.moved) {
+                if (Math.hypot(e.clientX - p.px, e.clientY - p.py) < 5) return;
+                p.moved = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }
+              setDrag({ id: i.id, ...dragPos(e, p) });
+            }}
+            onPointerUp={(e) => {
+              const p = press.current;
+              press.current = null;
+              if (!p?.moved || p.id !== i.id) return;
+              // (the click that ends a drag doesn't open the app)
+              swallowClick.current = true;
+              setTimeout(() => (swallowClick.current = false), 0);
+              const { x, y } = dragPos(e, p);
+              setDrag(null);
+              const next = moveIcon(layout, i.id, cellAt(x, y));
+              if (next !== layout) setIcons(next);
+            }}
+            onPointerCancel={() => {
+              press.current = null;
+              setDrag(null);
+            }}
+            onClickCapture={(e) => {
+              if (!swallowClick.current) return;
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDragStart={(e) => e.preventDefault()}
+          >
+            {i.node}
+          </div>
+        );
+      })}
+    </nav>
   );
 }
 
@@ -539,12 +882,19 @@ function DeskIcon({
   path: string;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const mainApp = appOf(pathname, NAV_HREFS);
   return (
     <ContextMenu>
       <ContextMenuTrigger>
         <Link
           href={path}
-          onClick={showWindow}
+          draggable={false}
+          onClick={(e) => {
+            // its window to the front, or a new one (the page's own window when that's closed)
+            if (openAppWindow(item.href, path, mainApp)) e.preventDefault();
+            else showWindow();
+          }}
           aria-label={badge ? `${item.label} (${badge})` : item.label}
           title={badge ? `${item.label} (${badge})` : item.label}
           className="group flex w-[84px] flex-col items-center gap-1 rounded-lg p-1.5 outline-none focus-visible:bg-white/25 dark:focus-visible:bg-white/10"
@@ -559,9 +909,11 @@ function DeskIcon({
         label={item.label}
         pinned={pinned}
         onOpen={() => {
+          if (openAppWindow(item.href, path, mainApp)) return;
           showWindow();
           router.push(path);
         }}
+        onNewWindow={() => openFrame(path, item.href)}
         onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
         onPin={() => setPinned(item.href, !pinned)}
       />
@@ -574,6 +926,7 @@ function AppMenu({
   label,
   pinned,
   onOpen,
+  onNewWindow,
   onNewTab,
   onPin,
   onClose,
@@ -581,14 +934,16 @@ function AppMenu({
   label: string;
   pinned: boolean;
   onOpen: () => void;
+  onNewWindow: () => void;
   onNewTab: () => void;
   onPin: () => void;
   onClose?: () => void;
 }) {
   return (
-    <ContextMenuContent className="w-48">
+    <ContextMenuContent className="w-52">
       <ContextMenuItem onClick={onOpen}>Open {label}</ContextMenuItem>
-      <ContextMenuItem onClick={onNewTab}>Open in a new tab</ContextMenuItem>
+      <ContextMenuItem onClick={onNewWindow}>Open in a new window</ContextMenuItem>
+      <ContextMenuItem onClick={onNewTab}>Open in a new browser tab</ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onPin}>{pinned ? "Remove from Dock" : "Keep in Dock"}</ContextMenuItem>
       {onClose && (
@@ -631,12 +986,15 @@ function Dock({
   const [{ pinned }] = useSubject(desk);
   const [open] = useSubject(openApps);
   const [pad] = useSubject(launchpad);
+  const [wins] = useSubject(frames);
+  useSubject(stack); // (which window is in front decides what a click does)
   const dockRef = useRef<HTMLDivElement>(null);
   const centers = useRef<{ el: HTMLElement; c: number }[]>([]);
   const frame = useRef(0);
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
-  const extra = open.map((o) => o.app).filter((a) => !pinned.includes(a));
+  const frameApps = wins.map((f) => f.app).filter((a): a is string => !!a);
+  const extra = [...new Set([...open.map((o) => o.app), ...frameApps])].filter((a) => !pinned.includes(a));
   const size = mobile ? DOCK_ICON_MOBILE : DOCK_ICON;
 
   // On a phone the open window has the whole screen; the dock is for the home screen.
@@ -670,21 +1028,32 @@ function Dock({
     const it = BY_HREF.get(href);
     if (!it) return null;
     const entry = open.find((o) => o.app === href);
+    const appFrames = wins.filter((f) => f.app === href);
     const isPinned = pinned.includes(href);
-    const path = entry?.path ?? href;
+    const path = entry?.path ?? appFrames[0]?.path ?? href;
     return (
       <ContextMenu key={href}>
         <ContextMenuTrigger>
-          <DockSlot label={it.label} size={size} running={!!entry}>
+          <DockSlot label={it.label} size={size} running={!!entry || appFrames.length > 0}>
             <Link
               href={path}
               aria-label={it.label}
               onClick={(e) => {
                 // the app in front: its window goes down to the dock (as a taskbar does)
-                if (href === app && windowShown) {
+                const front = frontWin();
+                if (href === app && windowShown && front === MAIN_WIN) {
                   e.preventDefault();
                   onMinimize();
-                } else showWindow();
+                  return;
+                }
+                const inFront = appFrames.find((f) => f.id === front);
+                if (inFront) {
+                  e.preventDefault();
+                  updateFrame(inFront.id, { hidden: true });
+                  return;
+                }
+                if (openAppWindow(href, path, app)) e.preventDefault();
+                else showWindow();
               }}
               className="block outline-none focus-visible:rounded-[24%] focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -696,14 +1065,18 @@ function Dock({
           label={it.label}
           pinned={isPinned}
           onOpen={() => {
+            if (openAppWindow(href, path, app)) return;
             showWindow();
             router.push(path);
           }}
+          onNewWindow={() => openFrame(path, href)}
           onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
           onPin={() => setPinned(href, !isPinned)}
           onClose={
-            entry
+            entry || appFrames.length
               ? () => {
+                  for (const f of appFrames) closeFrame(f.id);
+                  if (!entry) return;
                   const next = closeApp(href);
                   // closing the one in front shows the next (or the bare desktop)
                   if (href === app && next) router.push(next);

@@ -97,10 +97,18 @@ export function hydrateDock() {
   }
 }
 
+// In one of the desktop's windows (a frame): terminals open in the page around it, over everything (app-shell's
+// FramedPage sets this), not inside the frame.
+let openElsewhere: ((name: string) => void) | null = null;
+export function openTerminalsIn(fn: ((name: string) => void) | null) {
+  openElsewhere = fn;
+}
+
 /** Open a window (or un-minimize + focus one that already exists). Moves the
  *  name to the end of `open` so it's the frontmost — on mobile the last visible
  *  terminal is the one shown full-screen. */
 export function openTerminal(name: string) {
+  if (openElsewhere) return openElsewhere(name);
   const s = dock.getValue();
   const open = s.open.includes(name)
     ? [...s.open.filter((n) => n !== name), name]

@@ -186,6 +186,37 @@
 }
 
 /*
+ * A slim scrollbar with nothing behind it: the thumb always shows (so you see
+ * where you are), faint until hovered; the track is transparent, so no grey
+ * gutter down the side of a page or a desktop window.
+ */
+@utility scrollbar-clear {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+  &:hover {
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent) transparent;
+  }
+  &::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+  &::-webkit-scrollbar-track,
+  &::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+    background-clip: padding-box;
+  }
+  &:hover::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+  }
+}
+
+/*
  * The desktop interface (components/desktop). Its wallpaper: the brand's
  * grounds (Paper / a deeper Night) lit by soft Catppuccin glows, static, so
  * nothing repaints while it shows. Its window: opening, and going down to the

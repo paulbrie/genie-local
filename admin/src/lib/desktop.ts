@@ -126,6 +126,8 @@ export type DeskSaved = {
   pinned: string[];
   /** Each app window's place, by app href. */
   geoms: Record<string, WinGeom>;
+  /** Where each desktop icon sits, by app href (and VSCODE_ICON), once placed by hand; absent: the default order. */
+  icons?: Record<string, Cell>;
 };
 
 export const DEFAULT_PINNED = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks"];
@@ -146,6 +148,15 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   const s = v as Record<string, unknown>;
   if (Array.isArray(s.pinned))
     out.pinned = [...new Set(s.pinned.filter((a): a is string => typeof a === "string" && known.has(a)))];
+  if (s.icons && typeof s.icons === "object" && !Array.isArray(s.icons)) {
+    const icons: Record<string, Cell> = {};
+    for (const [id, cell] of Object.entries(s.icons as Record<string, unknown>)) {
+      if ((!known.has(id) && id !== VSCODE_ICON) || !cell || typeof cell !== "object") continue;
+      const { c, r } = cell as Record<string, unknown>;
+      if (Number.isInteger(c) && Number.isInteger(r) && (c as number) >= 0 && (r as number) >= 0) icons[id] = { c: c as number, r: r as number };
+    }
+    if (Object.keys(icons).length) out.icons = icons;
+  }
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;
@@ -154,4 +165,92 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
         out.geoms[app] = { x, y, w, h, ...(max === true ? { max: true } : {}) };
     }
   return out;
+}
+
+/* ---------------------------- the desktop's icons --------------------------- */
+
+/** A spot on the desktop's icon grid: column c (from the left), row r (from the top). */
+export type Cell = { c: number; r: number };
+
+/** VS Code's desktop icon (code-server, outside the app's pages): its key among the icons. */
+export const VSCODE_ICON = "vscode";
+
+/** The icon grid: each spot's size (an 88px column and a 4px gap; a 96px row), and its inset from the edges. */
+export const ICON_GRID = { x: 92, y: 96, pad: 12 } as const;
+
+/** How many columns and rows of icons fit in a desktop of W × H (the dock's strip kept clear). */
+export function iconGridSize(W: number, H: number): { cols: number; rows: number } {
+  return {
+    cols: Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x)),
+    rows: Math.max(1, Math.floor((H - ICON_GRID.pad - DOCK_SPACE) / ICON_GRID.y)),
+  };
+}
+
+const cellKey = (c: Cell) => `${c.c},${c.r}`;
+
+/**
+ * Where every icon goes on a grid of `cols` × `rows`: its saved spot when that's on the grid and free; a saved one
+ * that no longer fits (a smaller window) the nearest free spot to it; one never placed the first free spot in the
+ * default order (down the first column, then the next). Past a full grid, more columns.
+ */
+export function layoutIcons(ids: readonly string[], saved: Record<string, Cell> | undefined, cols: number, rows: number): Record<string, Cell> {
+  const out: Record<string, Cell> = {};
+  const taken = new Set<string>();
+  const put = (id: string, c: Cell) => {
+    out[id] = c;
+    taken.add(cellKey(c));
+  };
+  const fits = (c: Cell) => c.c >= 0 && c.r >= 0 && c.c < cols && c.r < rows;
+  // 1. saved spots that are on the grid and not already someone's
+  for (const id of ids) {
+    const c = saved?.[id];
+    if (c && fits(c) && !taken.has(cellKey(c))) put(id, c);
+  }
+  // 2. saved ones that don't fit any more: the nearest free spot
+  for (const id of ids) {
+    const want = saved?.[id];
+    if (out[id] || !want) continue;
+    const target = { c: Math.min(Math.max(want.c, 0), cols - 1), r: Math.min(Math.max(want.r, 0), rows - 1) };
+    let best: Cell | null = null;
+    let bestD = Infinity;
+    for (let c = 0; c < cols; c++)
+      for (let r = 0; r < rows; r++) {
+        if (taken.has(`${c},${r}`)) continue;
+        const d = (c - target.c) ** 2 + (r - target.r) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = { c, r };
+        }
+      }
+    if (best) put(id, best);
+  }
+  // 3. the rest (never placed, or no room left): the first free spot, column by column
+  let next = 0;
+  for (const id of ids) {
+    if (out[id]) continue;
+    for (;; next++) {
+      const c = { c: Math.floor(next / rows), r: next % rows };
+      if (!taken.has(cellKey(c))) {
+        put(id, c);
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** `id` dropped on `to`: it goes there, and whatever was there takes its old spot. The whole arrangement, so it holds. */
+export function moveIcon(layout: Record<string, Cell>, id: string, to: Cell): Record<string, Cell> {
+  const from = layout[id];
+  if (!from || (from.c === to.c && from.r === to.r)) return layout;
+  const out = { ...layout, [id]: { c: to.c, r: to.r } };
+  const other = Object.keys(layout).find((k) => k !== id && layout[k].c === to.c && layout[k].r === to.r);
+  if (other) out[other] = { c: from.c, r: from.r };
+  return out;
+}
+
+/** The icons in alphabetical order (by `labelOf`), in the default flow: "Sort by name". */
+export function sortedIcons(ids: readonly string[], labelOf: (id: string) => string, rows: number): Record<string, Cell> {
+  const order = [...ids].sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+  return Object.fromEntries(order.map((id, i) => [id, { c: Math.floor(i / rows), r: i % rows }]));
 }

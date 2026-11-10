@@ -2,21 +2,21 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { LayoutGrid, LogOut, Monitor, Moon, PanelLeft, Sun } from "lucide-react";
+import { ArrowDownAZ, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 
 import { Wisp } from "@/components/brand/wisp";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf } from "@/lib/desktop";
+import { appOf, iconGridSize, sortedIcons, VSCODE_ICON } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
-import { deskView, launchpad, minimizeWindow } from "@/store/desktop";
+import { deskView, launchpad, minimizeWindow, setIcons } from "@/store/desktop";
 
 /**
  * The top bar's left end in the desktop interface, where a desktop OS keeps its
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
- * menu (show the desktop, Launchpad, back to classic, theme, log out), then
+ * menu (show the desktop, Launchpad, sort or reset the icons, back to classic, theme, log out), then
  * the name of the app in the window.
  */
 export function DesktopMenu() {
@@ -81,6 +81,22 @@ export function DesktopMenu() {
           </button>
           <button type="button" role="menuitem" onClick={pick(() => launchpad.next(true))} className={row}>
             <LayoutGrid /> Launchpad
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={pick(() => {
+              // (the desktop: the window under the 40px top bar)
+              const { rows } = iconGridSize(window.innerWidth, window.innerHeight - 40);
+              const labels = new Map<string, string>([...NAV_FLAT.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
+              setIcons(sortedIcons([...labels.keys()], (id) => labels.get(id) ?? id, rows));
+            })}
+            className={row}
+          >
+            <ArrowDownAZ /> Sort icons by name
+          </button>
+          <button type="button" role="menuitem" onClick={pick(() => setIcons(null))} className={row}>
+            <RotateCcw /> Reset icon order
           </button>
           <div className="-mx-1 my-1 h-px bg-border" />
           <button type="button" role="menuitem" onClick={pick(() => setMode("classic"))} className={row}>
