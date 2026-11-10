@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, ChevronUp, FolderKanban, PanelLeft, PanelRight, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FolderKanban, MemoryStick, PanelLeft, PanelRight, SquareTerminal, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -8,7 +8,7 @@ import { useSubject } from "subjecto/react";
 import { NAV_HREFS } from "@/components/nav-items";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
-import { statusLabel, TermStatusDot } from "@/components/terminal-dock";
+import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
@@ -39,12 +39,6 @@ const SHORT: Record<TermStatus, string> = {
   "claude-idle": "ready",
   idle: "shell",
 };
-
-function bytes(n: number): string {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GB`;
-  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
-  return `${Math.round(n / 1024)} KB`;
-}
 
 /**
  * The desktop's status widget, on the wallpaper at the top right (or left: its header's button moves it): every terminal with its state (the ones waiting
@@ -146,7 +140,7 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
       </div>
 
       {!folded && (
-        <div className="scrollbar-clear min-h-0 overflow-y-auto px-1.5 pb-2">
+        <div className="scrollbar-clear flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2 pb-2">
           <Section
             icon={SquareTerminal}
             title="Terminals"
@@ -174,7 +168,10 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
             {projects === null && <Empty>Loading…</Empty>}
             {projects?.length === 0 && <Empty>No projects.</Empty>}
             {projs.map((p) => {
-              const mem = memoryOf(memory, p.slug)?.bytes ?? 0;
+              const mem = memoryOf(memory, p.slug);
+              const limit = memory?.limits[p.slug];
+              const over = !!mem && !!limit && mem.bytes > limit * 1024 * 1024;
+              const memText = mem && mem.bytes > 0 ? shortBytes(mem.bytes) : null;
               return (
                 <ProjectContextMenu
                   key={p.slug}
@@ -188,8 +185,8 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
                   <button
                     type="button"
                     onClick={() => openProject(p.slug)}
-                    title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : " · not running"} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
+                    title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : ""}${mem ? ` · ${memoryTitle(mem)}${limit ? ` (limit ${shortBytes(limit * 1024 * 1024)})` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
+                    className={ROW}
                   >
                     <StatusDot
                       color={p.running ? "bg-emerald-500" : "bg-muted-foreground/30"}
@@ -197,18 +194,17 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
                       size="sm"
                       label={p.running ? "Running" : "Not running"}
                     />
-                    <span className="min-w-0 flex-1 truncate">{p.slug}</span>
-                    {p.ports.length > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">:{p.ports.join(" :")}</span>}
-                    {mem > 0 && <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground tabular-nums">{bytes(mem)}</span>}
-                    {p.openTasks > 0 && (
-                      <span
-                        className={cn(
-                          "shrink-0 rounded-full px-1.5 text-[10.5px] tabular-nums",
-                          p.inProgress ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" : "bg-foreground/10 text-muted-foreground",
-                        )}
-                      >
-                        {p.openTasks}
+                    <span className="truncate">{p.slug}</span>
+                    {p.ports.length > 0 && (
+                      <span className="ml-auto shrink-0 font-mono text-[10px] text-emerald-700 dark:text-emerald-400">:{p.ports.join(" :")}</span>
+                    )}
+                    {memText && (
+                      <span className={`shrink-0 font-mono text-[10px] tabular-nums ${p.ports.length > 0 ? "" : "ml-auto"} ${over ? "font-semibold text-destructive" : "opacity-70"}`}>
+                        {memText}
                       </span>
+                    )}
+                    {p.openTasks > 0 && (
+                      <span className={`shrink-0 tabular-nums opacity-70 ${p.ports.length > 0 || memText ? "" : "ml-auto"}`}>{p.openTasks}</span>
                     )}
                   </button>
                 </ProjectContextMenu>
@@ -221,7 +217,14 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
   );
 }
 
-/** A heading that folds its list (remembered: desk.widgetFolded); the list indented under the heading's title. */
+/** The sidebar's sub-item row (app-sidebar.tsx): its size, padding and indent under the heading's label. */
+const ROW =
+  "flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground";
+
+/**
+ * A heading as the sidebar's groups have it (its icon, label and count, a chevron that folds it: remembered in
+ * desk.widgetFolded), its rows under it.
+ */
 function Section({
   icon: Icon,
   title,
@@ -234,56 +237,66 @@ function Section({
   icon: typeof SquareTerminal;
   title: string;
   count: number | null;
-  /** said beside the heading, so a folded section still tells what matters */
+  /** said beside the heading while it's folded, so it still tells what matters */
   note?: string;
   folded: boolean;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <div className="mt-0.5">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={!folded}
-        className="flex w-full items-center gap-1.5 rounded-md px-1.5 pt-1 pb-0.5 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase hover:text-foreground"
-      >
-        <ChevronRight className={cn("size-3 transition-transform duration-150", !folded && "rotate-90")} />
-        <Icon className="size-3" />
-        {title}
-        {count !== null && <span className="font-normal tabular-nums">{count}</span>}
-        {note && <span className="ml-auto font-normal tracking-normal normal-case">{note}</span>}
-      </button>
-      {!folded && <div className="ml-4">{children}</div>}
+    <div>
+      <div className="flex items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground">
+        <button type="button" onClick={onToggle} aria-expanded={!folded} className="flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-left text-[13px] leading-5">
+          <Icon className="size-[15px] shrink-0" />
+          <span className="truncate">{title}</span>
+          {folded && note && <span className="truncate text-xs opacity-70">{note}</span>}
+          {count !== null && <span className="ml-auto text-xs tabular-nums opacity-60">{count}</span>}
+        </button>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={`${folded ? "Unfold" : "Fold"} ${title}`}
+          title={folded ? "Unfold" : "Fold"}
+          className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+        >
+          <ChevronDown className={`size-3.5 transition-transform ${folded ? "-rotate-90" : ""}`} />
+        </button>
+      </div>
+      {!folded && <div className="mt-px flex flex-col gap-px">{children}</div>}
     </div>
   );
 }
 
 function TerminalRow({ t, onOpen }: { t: LiveTerminal; onOpen: () => void }) {
+  const tokens = t.tokens && t.tokens.total > 0 ? t.tokens.total : 0;
   return (
     <button
       type="button"
       onClick={onOpen}
-      title={`${t.name}: ${statusLabel(t.status)}${t.background ? ` (${t.background})` : ""}${t.memBytes ? ` · ${bytes(t.memBytes)} in memory` : ""}`}
-      className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
+      title={`Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}${t.tokens ? ` · ↑ ${t.tokens.input.toLocaleString()} / ↓ ${t.tokens.output.toLocaleString()} tokens this session` : ""}${t.memBytes ? ` · ${shortBytes(t.memBytes)} in memory` : ""}`}
+      className={ROW}
     >
-      <span className="flex w-3.5 shrink-0 justify-center">
-        <TermStatusDot status={t.status} />
-      </span>
-      <span className="min-w-0 flex-1 truncate">{t.name}</span>
+      <TermDot status={t.status} />
+      <span className="min-w-0 truncate">{t.name}</span>
       <span
         className={cn(
-          "shrink-0 text-[11px]",
-          t.status === "claude-input" ? "font-medium text-red-600 dark:text-red-400" : t.status === "claude-working" ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground",
+          "ml-auto shrink-0 text-[10px]",
+          t.status === "claude-input" ? "font-medium text-red-600 dark:text-red-400" : t.status === "claude-working" ? "text-amber-700 dark:text-amber-400" : "opacity-70",
         )}
       >
         {SHORT[t.status]}
       </span>
-      {t.memBytes ? <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground tabular-nums">{bytes(t.memBytes)}</span> : null}
+      {tokens > 0 && <span className="shrink-0 font-mono tabular-nums opacity-70">{fmtTokens(tokens)}</span>}
+      {!!t.memBytes && (
+        <span className="flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums opacity-70">
+          <MemoryStick className="size-2.5" />
+          {shortBytes(t.memBytes)}
+        </span>
+      )}
     </button>
   );
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-2 py-0.5 text-[12px] text-muted-foreground">{children}</p>;
+  return <p className="py-0.5 pr-2 pl-7 text-xs text-muted-foreground">{children}</p>;
 }
