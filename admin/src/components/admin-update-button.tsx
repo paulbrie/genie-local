@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Loader2, Rocket } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,12 +18,20 @@ type Status = {
   undeployedLog: string[];
   dirty: number;
   blocked: string | null;
+  /** the commit the running admin was built from (prod) */
+  built: string | null;
+  deploying: boolean;
+  lastDeploy: "success" | "failed" | "none";
 };
 
 type Result = { ok: boolean; steps: string[]; error?: string; log: string };
 
 /** How often to ask GitHub whether there's anything new. */
 const POLL_MS = 3 * 60_000;
+/** While a deploy builds: how often to look whether the new build is up. */
+const DEPLOY_POLL_MS = 4000;
+/** Past this, stop waiting and say so (the Logs page has the deploy's log). */
+const DEPLOY_WAIT_MS = 10 * 60_000;
 
 /**
  * Shows up in the toolbar only when GitHub is ahead of this checkout, and
@@ -32,17 +40,51 @@ const POLL_MS = 3 * 60_000;
  * never ahead), when the running build is older than the checkout: then it only
  * deploys. The restart takes this page with it for a moment, which the
  * confirmation says plainly.
+ *
+ * A deploy builds for a minute or so before it restarts: meanwhile (from this
+ * tab or another, before a reload or after) the button says "Deploying…" and
+ * can't be pressed, and the page reloads once the new build answers (its
+ * `built` commit changed), not on a timer that could land on the old one.
  */
 export function AdminUpdateButton() {
   const [status, setStatus] = useState<Status | null>(null);
   const [running, setRunning] = useState(false);
+  // While waiting for a deploy: the build that was serving when it began, whether it was seen running yet, since when.
+  const wait = useRef<{ from: string | null; seen: boolean; at: number; toast: string | number } | null>(null);
 
   const check = useCallback(async () => {
+    let next: Status;
     try {
       const res = await fetch(`${BASE_PATH}/api/admin-update`, { cache: "no-store" });
-      if (res.ok) setStatus(await res.json());
+      if (!res.ok) return;
+      next = await res.json();
     } catch {
-      /* the box is busy or the admin is restarting; the next poll will tell */
+      return; /* the box is busy or the admin is restarting; the next poll will tell */
+    }
+    setStatus(next);
+    // a deploy found running (another tab's, or before a reload): wait for it like ours
+    if (next.deploying && !wait.current) {
+      wait.current = { from: next.built, seen: true, at: Date.now(), toast: toast.loading("Deploying the admin…") };
+      setRunning(true);
+    }
+    const w = wait.current;
+    if (!w) return;
+    if (next.deploying) w.seen = true;
+    const landed = next.built !== w.from || (w.seen && !next.deploying && next.lastDeploy === "success");
+    if (landed) {
+      wait.current = null;
+      toast.success("Deployed: reloading on the new version", { id: w.toast, duration: 4000 });
+      // (the dev instance isn't the one rebuilt: no new build of its own to load)
+      if (next.built !== w.from) window.setTimeout(() => window.location.reload(), 600);
+      else setRunning(false);
+    } else if (w.seen && !next.deploying && next.lastDeploy === "failed") {
+      wait.current = null;
+      setRunning(false);
+      toast.error("The deploy failed: the Logs page has admin-deploy.log", { id: w.toast, duration: 15_000 });
+    } else if (Date.now() - w.at > DEPLOY_WAIT_MS) {
+      wait.current = null;
+      setRunning(false);
+      toast.error("The deploy is taking very long: see admin-deploy.log on the Logs page", { id: w.toast, duration: 15_000 });
     }
   }, []);
 
@@ -50,14 +92,23 @@ export function AdminUpdateButton() {
     // Off the mount tick: the first look talks to GitHub and shouldn't hold up
     // the page the toolbar sits on.
     const first = setTimeout(check, 0);
-    const t = setInterval(check, POLL_MS);
+    const t = setInterval(check, running ? DEPLOY_POLL_MS : POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [check]);
+  }, [check, running]);
 
-  if (!status || (status.behind < 1 && (status.undeployed ?? 0) < 1)) return null;
+  if (!status) return null;
+  if (running || status.deploying) {
+    return (
+      <Button size="sm" className="h-7 gap-1.5" disabled data-testid="admin-update" title="Building the new version; the admin restarts by itself and this page reloads on it">
+        <Loader2 className="animate-spin" />
+        Deploying…
+      </Button>
+    );
+  }
+  if (status.behind < 1 && (status.undeployed ?? 0) < 1) return null;
 
   // (nothing on GitHub to take: the commits are here, only not deployed)
   const local = status.behind < 1;
@@ -81,16 +132,18 @@ export function AdminUpdateButton() {
     ) {
       return;
     }
-    setRunning(true);
     const note = toast.loading(local ? "Deploying the admin…" : "Updating the admin…");
+    // (set before asking, so a poll that sees the deploy running meanwhile waits on this one, not a second)
+    wait.current = { from: status.built, seen: false, at: Date.now(), toast: note };
+    setRunning(true);
     try {
       const res = await fetch(`${BASE_PATH}/api/admin-update`, { method: "POST" });
       const body: Result = await res.json();
       if (!res.ok || !body.ok) throw new Error(body.error ?? res.statusText);
-      toast.success(body.steps.join(" "), { id: note, duration: 10_000 });
-      // The restart lands within a few seconds; come back to a fresh build.
-      setTimeout(() => window.location.reload(), 25_000);
+      // (the build takes a minute or so: the polls tell when the new one is up, then reload)
+      if (wait.current) toast.loading(`${body.steps.join(" ")} This page reloads on the new version.`, { id: note });
     } catch (e) {
+      wait.current = null;
       toast.error((e as Error).message, { id: note, duration: 12_000 });
       setRunning(false);
       check();

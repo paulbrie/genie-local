@@ -3,7 +3,7 @@ import "server-only";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { DEPLOY_LOG, startDeploy } from "@/lib/deploy";
+import { DEPLOY_LOG, deployStatus, startDeploy } from "@/lib/deploy";
 
 const pexec = promisify(execFile);
 
@@ -41,8 +41,17 @@ export type UpdateStatus = {
   dirty: number;
   /** Why an update can't run now, if it can't. */
   blocked: string | null;
+  /** The commit the running admin was built from (prod only): a new one answering means the deploy landed. */
+  built: string | null;
+  /** A deploy is building now (admin-ctl's status says RUNNING, and not since long ago). */
+  deploying: boolean;
+  /** How the last deploy ended, if it did. */
+  lastDeploy: "success" | "failed" | "none";
   checkedAt: number;
 };
+
+/** A deploy that says it's still RUNNING after this long has died somewhere: not "running" any more. */
+const DEPLOY_STALE_MS = 15 * 60_000;
 
 async function git(args: string[], timeout = GIT_OPTS.timeout) {
   const { stdout } = await pexec("git", ["-C", REPO, ...args], { ...GIT_OPTS, timeout });
@@ -60,8 +69,14 @@ export async function updateStatus(): Promise<UpdateStatus> {
     undeployedLog: [],
     dirty: 0,
     blocked: null,
+    built: process.env.ADMIN_BUILT_COMMIT || null,
+    deploying: false,
+    lastDeploy: "none",
     checkedAt: Date.now(),
   };
+  const d = await deployStatus();
+  out.deploying = d.deploy === "running" && (!d.deployTs || Date.now() - d.deployTs < DEPLOY_STALE_MS);
+  out.lastDeploy = d.deploy === "failed" ? "failed" : d.deploy === "success" ? "success" : "none";
   try {
     out.branch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
     // Talks to GitHub: the slowest step here, hence its own longer limit.
@@ -168,6 +183,10 @@ async function deployLocal(status: UpdateStatus): Promise<UpdateResult> {
  */
 export async function runUpdate(): Promise<UpdateResult> {
   const status = await updateStatus();
+  // (admin-ctl would say "started" and its worker quietly give way to the one holding the lock)
+  if (status.deploying) {
+    return { ok: false, steps: [], error: "A deploy is already running: the admin restarts by itself when it's built.", log: DEPLOY_LOG };
+  }
   if (!status.behind && status.undeployed) return deployLocal(status);
   const pulled = await fastForward();
   if (!pulled.ok) return { ...pulled, log: DEPLOY_LOG };
