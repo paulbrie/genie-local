@@ -221,13 +221,32 @@ describe("the explorer scoped to a project (its Files tab)", () => {
     assert.equal((await post({ op: "mkdir", project: "p1", dir: path.join(projects, "p2"), name: "n" })).status, 403);
     assert.equal((await post({ op: "move", project: "p1", path: path.join(p1(), "sub", "f.txt"), to: path.join(projects, "p2") })).status, 403);
     for (const op of ["rename", "delete"]) assert.equal((await post({ op, project: "p1", path: p1(), name: "q" })).status, 403, op);
-    assert.equal((await post({ op: "empty-trash", project: "p1" })).status, 403);
     const up = await startUpload(new NextRequest("http://localhost/api/files/upload", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: "p1", dir: path.join(projects, "p2"), name: "x.bin", size: 1 }),
     }));
     assert.equal(up.status, 403);
     assert.equal(await fs.readFile(g, "utf8"), "in p2\n");
     for (const bad of ["..", "../p2", ".hidden", "p1/sub"]) assert.equal((await get(`op=roots&project=${enc(bad)}`)).status, 400, bad);
+  });
+
+  it("empties only the project's part of the trash, and deletes one item for good only if it's the project's", async () => {
+    const mine = path.join(p1(), "gone.txt"), theirs = path.join(projects, "p2", "gone.txt");
+    await fs.writeFile(mine, "mine\n");
+    await fs.writeFile(theirs, "theirs\n");
+    const del = async (p: string) => (await (await post({ op: "delete", path: p })).json()).item.id as string;
+    const [a, b] = [await del(mine), await del(theirs)];
+    // (one item for good: not another project's)
+    assert.equal((await post({ op: "purge", project: "p1", id: b })).status, 403);
+    assert.equal((await post({ op: "purge", project: "p1", id: a })).status, 200);
+    const left = async () => (await (await get("op=trash")).json()).items.map((i: { id: string }) => i.id);
+    assert.equal((await left()).includes(a), false);
+    assert.equal((await left()).includes(b), true);
+    // (empty from p1: p2's stays)
+    await fs.writeFile(mine, "mine again\n");
+    const c = await del(mine);
+    assert.equal((await post({ op: "empty-trash", project: "p1" })).status, 200);
+    assert.equal((await left()).includes(c), false);
+    assert.equal((await left()).includes(b), true);
   });
 
   it("edits a file inside the project", async () => {

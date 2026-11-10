@@ -1,5 +1,5 @@
 // The file explorer's trash (T243): a delete moves the item to <trash>/<id>/<name> with <trash>/<id>.json saying where
-// it came from, so it can be restored; "Empty trash" removes them for good.
+// it came from, so it can be restored; one item, or all of them ("Empty trash"), can be removed for good.
 
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -78,9 +78,18 @@ export async function restoreFromTrash(id: string, trash = trashDir()): Promise<
   return item;
 }
 
-/** removes everything in the trash for good; returns how many items and bytes */
-export async function emptyTrash(trash = trashDir()): Promise<{ items: number; bytes: number }> {
-  const items = await listTrash(trash);
+/** removes one item from the trash for good; returns its entry */
+export async function purgeFromTrash(id: string, trash = trashDir()): Promise<TrashItem> {
+  if (!ID_RE.test(id)) throw new Error("bad trash id");
+  const item = JSON.parse(await fs.readFile(path.join(trash, `${id}.json`), "utf8")) as TrashItem;
+  await fs.rm(path.join(trash, id), { recursive: true, force: true });
+  await fs.rm(path.join(trash, `${id}.json`), { force: true });
+  return item;
+}
+
+/** removes everything in the trash for good (or only what `keep` says yes to); returns how many items and bytes */
+export async function emptyTrash(trash = trashDir(), keep: (i: TrashItem) => boolean = () => true): Promise<{ items: number; bytes: number }> {
+  const items = (await listTrash(trash)).filter(keep);
   for (const i of items) {
     await fs.rm(path.join(trash, i.id), { recursive: true, force: true });
     await fs.rm(path.join(trash, `${i.id}.json`), { force: true });

@@ -518,7 +518,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
           )}
           {dialog?.kind === "trash" && (
             <>
-              <DialogHeader><DialogTitle>Trash</DialogTitle><DialogDescription>Deleted files and folders{project ? " from this project" : ""}, newest first. Restore puts one back where it was.</DialogDescription></DialogHeader>
+              <DialogHeader><DialogTitle>Trash</DialogTitle><DialogDescription>Deleted files and folders{project ? " from this project" : ""}, newest first. Restore puts one back where it was; the bin deletes one for good.</DialogDescription></DialogHeader>
               {dialog.error && <p className="text-sm text-destructive">{dialog.error}</p>}
               {!dialog.items ? <p className="text-sm text-muted-foreground"><Loader2 className="mr-1 inline size-4 animate-spin" />Loading…</p>
                 : dialog.items.length === 0 ? <p className="text-sm text-muted-foreground">The trash is empty.</p>
@@ -529,17 +529,21 @@ export function FileExplorer({ project }: { project?: string } = {}) {
                         {i.type === "dir" ? <Folder className="size-4 shrink-0 text-amber-500" /> : <FileIcon className="size-4 shrink-0 text-muted-foreground" />}
                         <span className="min-w-0 flex-1"><span className="block truncate font-mono text-xs" title={i.originalPath}>{i.originalPath}</span><span className="text-xs text-muted-foreground">{formatBytes(i.bytes)} · deleted {when(i.deletedAt)}</span></span>
                         <Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => post({ op: "restore", id: i.id }), openTrash)}><RotateCcw className="size-3.5" /> Restore</Button>
+                        <Button size="sm" variant="ghost" disabled={busy} title="Delete for good" aria-label={`Delete ${i.name} for good`} className="text-destructive hover:text-destructive"
+                          onClick={async () => { if (await confirmDialog(`Delete ${i.name} for good (${formatBytes(i.bytes)})? This can't be undone.`, { confirmLabel: "Delete for good", destructive: true })) void act(() => post({ op: "purge", id: i.id }), openTrash); }}>
+                          <Trash2 className="size-3.5" />
+                        </Button>
                       </li>
                     ))}
                   </ul>
                 )}
-              {/* (the whole trash empties from Files, where all of it shows) */}
-              {!project && <DialogFooter>
+              {/* (from a project's Files tab: only what was deleted from the project, which is all this list shows) */}
+              <DialogFooter>
                 <Button variant="destructive" disabled={busy || !dialog.items?.length}
-                  onClick={async () => { if (await confirmDialog(`Delete ${dialog.items?.length} item(s) in the trash for good (${formatBytes(dialog.items?.reduce((n, i) => n + i.bytes, 0) ?? 0)})? This can't be undone.`, { confirmLabel: "Empty the trash", destructive: true })) void act(() => post({ op: "empty-trash" })); }}>
-                  Empty the trash
+                  onClick={async () => { if (await confirmDialog(`Delete ${dialog.items?.length} item(s) in the trash${project ? " from this project" : ""} for good (${formatBytes(dialog.items?.reduce((n, i) => n + i.bytes, 0) ?? 0)})? This can't be undone.`, { confirmLabel: "Empty the trash", destructive: true })) void act(() => post({ op: "empty-trash" })); }}>
+                  {project ? "Empty this project's trash" : "Empty the trash"}
                 </Button>
-              </DialogFooter>}
+              </DialogFooter>
             </>
           )}
         </DialogContent>

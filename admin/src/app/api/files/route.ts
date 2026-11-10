@@ -6,11 +6,11 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { openForEdit, writeText } from "@/lib/files/edit";
-import { assertWritable, isPseudo, PathError, resolveExisting, rootOf, scopeRoots, writeRoots } from "@/lib/files/guard";
+import { assertWritable, isPseudo, resolveExisting, rootOf, scopeRoots, writeRoots } from "@/lib/files/guard";
 import { isSecretPath, listDir } from "@/lib/files/listing";
 import { audit, deletePath, makeFile, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
 import { readPage } from "@/lib/files/preview";
-import { emptyTrash, listTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
+import { emptyTrash, listTrash, purgeFromTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
 import { CHUNK_BYTES } from "@/lib/files/uploads";
 import { errorResponse, whoOf } from "./shared";
 
@@ -106,11 +106,19 @@ export async function POST(req: NextRequest) {
         audit(isSecretPath(r.path) ? "secret-write" : "write", { path: r.path, bytes: r.size }, who);
         return NextResponse.json(r);
       }
+      case "purge": {
+        // (one item, for good: only one deleted from inside the roots this view has)
+        const entry = (await listTrash()).find((i) => i.id === s("id"));
+        if (!entry) return NextResponse.json({ error: "not in the trash" }, { status: 404 });
+        if (!rootOf(path.resolve(entry.originalPath), roots)) return NextResponse.json({ error: "outside the roots" }, { status: 403 });
+        const item = await purgeFromTrash(entry.id);
+        audit("purge", { path: item.originalPath, bytes: item.bytes }, who);
+        return NextResponse.json({ item });
+      }
       case "empty-trash": {
-        // (the whole trash: not from a project's view, which sees only its own part of it)
-        if (s("project")) throw new PathError("the trash is emptied from Files, where all of it shows", 403);
-        const r = await emptyTrash();
-        audit("empty-trash", { items: r.items, bytes: r.bytes }, who);
+        // (from a project's view: only what was deleted from inside the project, which is all that view shows)
+        const r = await emptyTrash(undefined, s("project") ? (i) => !!rootOf(path.resolve(i.originalPath), roots) : undefined);
+        audit("empty-trash", { items: r.items, bytes: r.bytes, ...(s("project") ? { project: s("project") } : {}) }, who);
         return NextResponse.json(r);
       }
       default:
