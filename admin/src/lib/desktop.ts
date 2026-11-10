@@ -130,6 +130,8 @@ export type DeskSaved = {
   icons?: Record<string, Cell>;
   /** The status widget (terminals and projects): absent is "open". */
   widget?: WidgetMode;
+  /** Which side of the desktop it's on: absent is the right. */
+  widgetSide?: "left";
 };
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
@@ -162,6 +164,7 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
     if (Object.keys(icons).length) out.icons = icons;
   }
   if (s.widget === "collapsed" || s.widget === "hidden") out.widget = s.widget;
+  if (s.widgetSide === "left") out.widgetSide = "left";
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp, FolderKanban, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FolderKanban, PanelLeft, PanelRight, SquareTerminal, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -12,7 +12,7 @@ import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import type { WidgetMode } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { openPathWindow, setWidget } from "@/store/desktop";
+import { openPathWindow, setWidget, setWidgetSide } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { liveTerminals, openTerminal, type LiveTerminal, type TermStatus } from "@/store/terminals";
 
@@ -45,12 +45,12 @@ function bytes(n: number): string {
 }
 
 /**
- * The desktop's status widget, on the wallpaper at the top right: every terminal with its state (the ones waiting
+ * The desktop's status widget, on the wallpaper at the top right (or left: its header's button moves it): every terminal with its state (the ones waiting
  * for you first), and every project with whether it's running, its ports and its tickets. A terminal opens as a
  * floating terminal; a project in a window (the one it's already in, if any). Folds to its header, or goes away
  * (the Spiridus menu brings it back).
  */
-export function StatusWidget({ mode }: { mode: WidgetMode }) {
+export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | "right" }) {
   const router = useRouter();
   const pathname = usePathname();
   const [terminals] = useSubject(liveTerminals);
@@ -94,7 +94,7 @@ export function StatusWidget({ mode }: { mode: WidgetMode }) {
     <aside
       aria-label="Terminals and projects"
       style={{ width: STATUS_WIDGET_W }}
-      className="absolute top-3 right-3 flex max-h-[calc(100%-110px)] flex-col overflow-hidden rounded-2xl border border-white/40 bg-white/55 text-foreground shadow-[0_18px_40px_-16px_rgb(0_0_0/0.35)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/55 dark:ring-white/5"
+      className={`absolute top-3 ${side === "left" ? "left-3" : "right-3"} flex max-h-[calc(100%-110px)] flex-col overflow-hidden rounded-2xl border border-white/40 bg-white/55 text-foreground shadow-[0_18px_40px_-16px_rgb(0_0_0/0.35)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/55 dark:ring-white/5`}
     >
       <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
         <span className="text-[13px] font-semibold">Status</span>
@@ -107,6 +107,15 @@ export function StatusWidget({ mode }: { mode: WidgetMode }) {
             .filter(Boolean)
             .join(" · ") || "all quiet"}
         </span>
+        <button
+          type="button"
+          onClick={() => setWidgetSide(side === "left" ? "right" : "left")}
+          aria-label={side === "left" ? "Move to the right" : "Move to the left"}
+          title={side === "left" ? "Move to the right" : "Move to the left"}
+          className="rounded-md p-0.5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+        >
+          {side === "left" ? <PanelRight className="size-3.5" /> : <PanelLeft className="size-3.5" />}
+        </button>
         <button
           type="button"
           onClick={() => setWidget(folded ? "open" : "collapsed")}

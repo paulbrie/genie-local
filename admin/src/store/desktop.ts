@@ -220,6 +220,13 @@ export function setWidget(mode: WidgetMode) {
   save(mode === "open" ? rest : { ...rest, widget: mode });
 }
 
+/** The status widget against the desktop's left edge or its right one. */
+export function setWidgetSide(side: "left" | "right") {
+  const { widgetSide: _old, ...rest } = desk.getValue();
+  void _old;
+  save(side === "left" ? { ...rest, widgetSide: "left" } : rest);
+}
+
 /**
  * Open a page (`path`, e.g. a project's) from the desktop: the window already on it (or under it) comes to the
  * front; with none, a new window, or the page's own one when that's closed. True when handled here; false when the

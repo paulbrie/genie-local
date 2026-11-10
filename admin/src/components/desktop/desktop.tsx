@@ -694,9 +694,11 @@ function Wallpaper() {
  * screen grid in the default order.
  */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned, icons, widget }] = useSubject(desk);
+  const [{ pinned, icons, widget, widgetSide }] = useSubject(desk);
   const [open] = useSubject(openApps);
   const widgetMode = widget ?? "open";
+  const side = widgetSide ?? "right";
+  const widgetRoom = widgetMode === "hidden" ? 0 : STATUS_WIDGET_W + 12;
   const items = [
     ...NAV_FLAT.map((it) => ({
       id: it.href,
@@ -744,9 +746,9 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
         </nav>
       ) : (
         <>
-          {/* (the icons keep clear of the status widget at the top right) */}
-          <IconGrid items={items} saved={icons} reserveRight={widgetMode === "hidden" ? 0 : STATUS_WIDGET_W + 12} />
-          <StatusWidget mode={widgetMode} />
+          {/* (the icons keep clear of the status widget, on whichever side it is) */}
+          <IconGrid items={items} saved={icons} reserveLeft={side === "left" ? widgetRoom : 0} reserveRight={side === "right" ? widgetRoom : 0} />
+          <StatusWidget mode={widgetMode} side={side} />
         </>
       )}
     </>
@@ -760,7 +762,18 @@ type DeskItem = { id: string; label: string; node: React.ReactNode };
  * swapping with an icon already there; the arrangement is remembered (desk.icons). A press that doesn't move is a
  * click, as before.
  */
-function IconGrid({ items, saved, reserveRight = 0 }: { items: DeskItem[]; saved?: Record<string, Cell>; reserveRight?: number }) {
+function IconGrid({
+  items,
+  saved,
+  reserveLeft = 0,
+  reserveRight = 0,
+}: {
+  items: DeskItem[];
+  saved?: Record<string, Cell>;
+  /** room kept clear on either side (the status widget's) */
+  reserveLeft?: number;
+  reserveRight?: number;
+}) {
   const box = useRef<HTMLElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -775,12 +788,12 @@ function IconGrid({ items, saved, reserveRight = 0 }: { items: DeskItem[]; saved
     return () => ro.disconnect();
   }, []);
 
-  const { cols, rows } = size ? iconGridSize(size.w - reserveRight, size.h) : { cols: 1, rows: 1 };
+  const { cols, rows } = size ? iconGridSize(size.w - reserveLeft - reserveRight, size.h) : { cols: 1, rows: 1 };
   const idsKey = items.map((i) => i.id).join("\n");
   const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows), [idsKey, saved, cols, rows]);
-  const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
+  const spot = (c: Cell) => ({ left: reserveLeft + ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
   const cellAt = (x: number, y: number): Cell => ({
-    c: Math.min(Math.max(Math.round((x - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
+    c: Math.min(Math.max(Math.round((x - reserveLeft - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
     r: Math.min(Math.max(Math.round((y - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
   });
   /** where the dragged icon's top-left is now, in the grid's own coordinates */
