@@ -132,16 +132,20 @@
    * Scrollbars everywhere: out of sight until they're useful, while the pointer
    * is over the scrolling area (or anything in it) or while it scrolls
    * (`data-scrolling`, set for a moment by useScrollActivity). Slim, rounded, no
-   * track. Chrome and Firefox read scrollbar-color (Chrome then ignores the
-   * ::-webkit ones); ::-webkit-scrollbar is for Safari.
+   * track; it fades in quickly and out gently (scrollbar-color animates in
+   * Chrome and Firefox; Safari's ::-webkit-scrollbar can't, so it just shows).
+   * Chrome and Firefox read scrollbar-color (Chrome then ignores the ::-webkit
+   * ones); ::-webkit-scrollbar is for Safari.
    */
   * {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.45s ease-out;
   }
   *:hover,
   [data-scrolling] {
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+    transition-duration: 0.2s;
   }
   ::-webkit-scrollbar {
     width: 10px;
@@ -193,17 +197,21 @@
 @utility scrollbar-hover {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.45s ease-out;
   &:hover,
   &[data-scrolling] {
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+    transition-duration: 0.2s;
   }
 }
 @utility scrollbar-clear {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.45s ease-out;
   &:hover,
   &[data-scrolling] {
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+    transition-duration: 0.2s;
   }
 }
 
