@@ -17,6 +17,9 @@ export const Z_FILE_DIALOGS = 9_000;
 /** Floating terminal windows count up from here as they're raised. */
 export const Z_TERMINAL_WINDOWS = 10_000;
 
+/** The desktop interface's Launchpad (every app and project): over the floating windows. */
+export const Z_LAUNCHPAD = 100_000;
+
 /**
  * App-wide controls above every terminal: the run dock, the minimized
  * terminals bar, the Jarvis console. (Toasts are higher still: sonner's own.)

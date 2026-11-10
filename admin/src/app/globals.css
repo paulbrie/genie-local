@@ -184,3 +184,44 @@
     background-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
   }
 }
+
+/*
+ * The desktop interface (components/desktop). Its wallpaper: the brand's
+ * grounds (Paper / a deeper Night) lit by soft Catppuccin glows, static, so
+ * nothing repaints while it shows. Its window: opening, and going down to the
+ * dock (forwards: it stays out of sight until it's hidden).
+ */
+.desk-wallpaper {
+  background:
+    radial-gradient(60% 55% at 12% 16%, color-mix(in oklab, #cba6f7 60%, transparent), transparent 70%),
+    radial-gradient(50% 45% at 88% 10%, color-mix(in oklab, #89b4fa 55%, transparent), transparent 70%),
+    radial-gradient(55% 55% at 80% 90%, color-mix(in oklab, #94e2d5 50%, transparent), transparent 70%),
+    radial-gradient(45% 40% at 20% 94%, color-mix(in oklab, #f5c2e7 55%, transparent), transparent 70%),
+    #eff1f5;
+}
+.dark .desk-wallpaper {
+  background:
+    radial-gradient(60% 55% at 12% 16%, color-mix(in oklab, #8839ef 50%, transparent), transparent 70%),
+    radial-gradient(50% 45% at 88% 10%, color-mix(in oklab, #1e66f5 38%, transparent), transparent 70%),
+    radial-gradient(55% 55% at 80% 90%, color-mix(in oklab, #179299 38%, transparent), transparent 70%),
+    radial-gradient(45% 40% at 20% 94%, color-mix(in oklab, #ea76cb 26%, transparent), transparent 70%),
+    #11111b;
+}
+@keyframes desk-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+@keyframes desk-out {
+  to {
+    opacity: 0;
+    transform: translateY(30%) scale(0.35);
+  }
+}
+@utility animate-desk-in {
+  animation: desk-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@utility animate-desk-out {
+  animation: desk-out 0.17s cubic-bezier(0.4, 0, 1, 1) forwards;
+}

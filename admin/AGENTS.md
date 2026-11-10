@@ -143,6 +143,18 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   Keep runner + run-slug in sync.
 - `src/store/ui.ts` — `subjecto` `Subject`s for **UI state only** (search, view
   mode). Server data stays in RSC/DB; use `useSubject` from `subjecto/react`.
+- **Two interfaces: classic and desktop** (the top bar's switch, `ShellSwitch`). The choice is the
+  `admin_shell` cookie (path = basePath, so /admin and /admin-dev keep their own), read by the root
+  layout, so the server already renders the right one. `src/components/desktop/app-shell.tsx` puts the
+  page at the same place in the tree in both (`Workspace`, whose wrappers are `display: contents` in
+  classic), so switching never remounts it. Desktop (`desktop.tsx`): a wallpaper with every page of
+  `NAV` (`src/components/nav-items.ts`, shared with the sidebar) as an icon in its own colours
+  (`app-icon.tsx`), live badges (`useNavBadges`, also the sidebar's), the page as a window (drag,
+  resize from any edge, maximize, minimize, close; placed per app), a dock of pinned apps plus the
+  apps open in the tab (each reopened at the path it was left on), a Launchpad with search (apps and
+  projects), and the Spiridus menu at the bar's left. Its state is `src/store/desktop.ts`; the
+  geometry is pure and tested (`src/lib/desktop.ts`). The window has no transform, filter or z-index,
+  so a page's own `fixed` panels and z-indexes behave as they do in classic.
 - **Voice / TTS pipeline.** Spoken output (alerts, Jarvis narration, Q&A answers)
   goes through **one** entry point: `say(text, cfg, opts)` in `src/lib/tts.ts`.
   Two engines, chosen in settings (`src/store/voice.ts` — `engine: 'kokoro' |

@@ -10,17 +10,21 @@ import type { SystemStats } from "@/lib/stats";
 import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
 import { AdminUpdateButton } from "@/components/admin-update-button";
+import { DesktopMenu } from "@/components/desktop/desktop-menu";
+import { ShellSwitch, useShellMode } from "@/components/desktop/shell-mode";
 import { SessionsIndicator } from "@/components/sessions-indicator";
 import { ProjectsMemoryBadge } from "@/components/project-memory-badge";
 
 const POLL_MS = 5000;
 
 /**
- * Slim top bar showing live system telemetry. Navigation and the theme/logout
- * controls live in {@link AppSidebar}; this is telemetry only.
+ * Slim top bar showing live system telemetry, and the Classic / Desktop switch.
+ * Navigation and the theme/logout controls live in {@link AppSidebar}; in the
+ * desktop interface the bar is its menu bar, the Spiridus menu at its left.
  */
 export function StatsToolbar() {
   const pathname = usePathname();
+  const desktop = useShellMode().mode === "desktop";
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [error, setError] = useState(false);
 
@@ -55,16 +59,27 @@ export function StatsToolbar() {
   if (hidden) return null;
 
   return (
-    <header className="flex h-10 shrink-0 items-center gap-4 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      {/* Mobile nav trigger — the sidebar is an off-canvas drawer below `md`. */}
-      <button
-        type="button"
-        onClick={() => mobileNav.next(true)}
-        aria-label="Open navigation"
-        className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:hidden"
-      >
-        <Menu className="size-5" />
-      </button>
+    <header
+      className={`flex h-10 shrink-0 items-center gap-2 border-b px-4 sm:gap-4 ${
+        desktop
+          ? // over the desktop's window, so the bar's own popovers open on top of it
+            "relative z-30 bg-background/90 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70"
+          : "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+      }`}
+    >
+      {desktop ? (
+        <DesktopMenu />
+      ) : (
+        // Mobile nav trigger — the sidebar is an off-canvas drawer below `md`.
+        <button
+          type="button"
+          onClick={() => mobileNav.next(true)}
+          aria-label="Open navigation"
+          className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:hidden"
+        >
+          <Menu className="size-5" />
+        </button>
+      )}
       <div className="flex min-w-0 flex-1 items-center gap-3 xl:gap-5">
         <Metric
           label="CPU"
@@ -113,6 +128,7 @@ export function StatsToolbar() {
       <AdminUpdateButton />
       <SessionsIndicator />
       <StatsHistoryChart />
+      <ShellSwitch />
     </header>
   );
 }
@@ -127,8 +143,8 @@ const R = 9.5;
 const CIRC = 2 * Math.PI * R;
 
 /**
- * One metric as a small ring gauge with its percent inside and its label beside it; the details (sizes, cores) are
- * its tooltip, and shown inline too on wide screens. Small enough that the bar never needs to scroll.
+ * One metric as a small ring gauge with its percent inside and its label beside it (from `sm` up); the details
+ * (sizes, cores) are its tooltip, and shown inline too on wide screens. Small enough that the bar never needs to scroll.
  */
 function Metric({
   label,
@@ -163,7 +179,7 @@ function Metric({
           {percent == null ? "–" : Math.round(pct)}
         </span>
       </span>
-      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="hidden text-[11px] font-medium text-muted-foreground sm:inline">{label}</span>
       <span className="hidden whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground xl:inline">{detail}</span>
       <span className="sr-only">
         {label} {percent == null ? "unknown" : `${Math.round(pct)}%`}, {detail}

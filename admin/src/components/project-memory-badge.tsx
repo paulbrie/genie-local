@@ -50,7 +50,7 @@ export function ProjectsMemoryBadge() {
     >
       <Link href="/projects" className="flex items-center gap-1.5 rounded px-1 text-xs whitespace-nowrap hover:bg-accent/50" data-testid="projects-memory">
         <Boxes className="size-3.5 text-muted-foreground" />
-        <span className="font-medium text-muted-foreground">Projects</span>
+        <span className="hidden font-medium text-muted-foreground sm:inline">Projects</span>
         <span className="font-mono tabular-nums">{formatBytes(total)}</span>
       </Link>
       {at && createPortal(

@@ -4,46 +4,23 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
-  Activity,
   Bot,
-  Box,
-  BrickWallShield,
-  ChefHat,
   ChevronDown,
   Code2,
-  Container,
-  Database,
   ExternalLink,
-  Globe,
-  MousePointerClick,
-  KanbanSquare,
-  KeyRound,
-  LayoutDashboard,
   LogOut,
   MemoryStick,
-  UsersRound,
-  MessagesSquare,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
-  FolderOpen,
-  FolderKanban,
   FolderPlus,
-  ScrollText,
-  Server,
-  Share2,
-  StickyNote,
-  Sparkles,
-  SquareTerminal,
-  TrainFront,
   Workflow,
   X,
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
-import type { WispMotion } from "@/brand/spiridus";
 import { Lockup, Wisp } from "@/components/brand/wisp";
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
+import { isActive, NAV, type NavItem } from "@/components/nav-items";
 import { NewProjectDialog } from "@/components/new-project-dialog";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -54,69 +31,16 @@ import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import type { ProjectMemory } from "@/lib/project-memory";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { useNavBadges, useWispState } from "@/lib/use-nav-badges";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
-import { activeRuns, openRun } from "@/store/runs";
+import { openRun } from "@/store/runs";
 import { mobileNav } from "@/store/ui";
-import {
-  liveTerminals,
-  openTerminal,
-  type TermStatus,
-} from "@/store/terminals";
-
-type NavItem = {
-  href: string;
-  label: string;
-  icon: typeof LayoutDashboard;
-  exact?: boolean;
-  /** A collapsible group: the item itself links to its own page, these under it. */
-  children?: NavItem[];
-};
-
-const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
-  // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
-  { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
-  { href: "/terminals", label: "Terminals", icon: SquareTerminal },
-  { href: "/boards", label: "Boards", icon: StickyNote },
-  { href: "/files", label: "Files", icon: FolderOpen },
-  { href: "/db", label: "DB Explorer", icon: Database },
-  { href: "/processes", label: "Processes", icon: Activity },
-  { href: "/chrome", label: "Chrome", icon: Globe },
-  { href: "/browsers", label: "Browsers", icon: MousePointerClick },
-  { href: "/agents", label: "Agents", icon: Bot },
-  { href: "/docker", label: "Docker", icon: Container },
-  { href: "/services", label: "Services", icon: Server },
-  { href: "/nginx", label: "Nginx", icon: Network },
-  { href: "/firewall", label: "Firewall", icon: BrickWallShield },
-  { href: "/railway", label: "Railway", icon: TrainFront },
-  { href: "/diagrams", label: "Diagrams", icon: Share2 },
-  { href: "/recipes", label: "Recipes", icon: ChefHat },
-  { href: "/logs", label: "Logs", icon: ScrollText },
-  { href: "/logins", label: "Logins", icon: KeyRound },
-  { href: "/users", label: "Users", icon: UsersRound },
-  { href: "/claude", label: "Claude", icon: Sparkles },
-  {
-    href: "/teams",
-    label: "Team",
-    icon: UsersRound,
-    exact: true,
-    children: [
-      { href: "/comms", label: "Comms", icon: MessagesSquare },
-      { href: "/agents3d", label: "Agents City", icon: Box },
-      { href: "/tasks", label: "Tasks", icon: KanbanSquare },
-    ],
-  },
-];
+import { openTerminal, type TermStatus } from "@/store/terminals";
 
 const STORAGE_KEY = "admin.sidebar.collapsed";
 /** The nav groups folded shut (by href); open by default. */
 const GROUPS_KEY = "admin.sidebar.closedGroups";
-
-const isActive = (item: NavItem, pathname: string) =>
-  item.exact
-    ? pathname === item.href
-    : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
 /**
  * Collapsible left navigation rail. Holds every top-level route plus the global
@@ -131,17 +55,7 @@ export function AppSidebar() {
   // full-width off-canvas drawer, so it never uses the rail.
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
-  const [chromeCount, setChromeCount] = useState<number | null>(null);
-  const [dockerStats, setDockerStats] = useState<{
-    running: number;
-    memBytes: number;
-  } | null>(null);
-  const [runs] = useSubject(activeRuns);
-  // Currently-active runs (kept fresh by <RunDock>), shown as sub-items.
-  const liveRuns = runs.filter(
-    (r) => r.running || r.state === "running" || r.state === "starting",
-  );
-  const [terms] = useSubject(liveTerminals);
+  const { dockerStats, liveRuns, workingTerms, badgeOf } = useNavBadges(pathname);
   const [boards] = useSubject(recentBoards);
   // The boards last opened on this browser, as sub-items under Boards: their
   // names refreshed (and archived ones dropped) from the board list.
@@ -152,26 +66,7 @@ export function AppSidebar() {
       .then((list) => Array.isArray(list) && syncRecentBoards(list))
       .catch(() => {});
   }, []);
-  // "Currently working" = anything not sitting idle at a shell prompt.
-  const workingTerms = terms.filter((t) => t.status !== "idle");
-
-  // The wisp's state (brand motion): looking for you while an agent waits on
-  // you, flickering while one works, else idle blinking; a wink on hover.
-  const waitingOn = terms.filter((t) => t.status === "claude-input").length;
-  // (work running in the background after the turn counts as working)
-  const working = terms.filter((t) => t.status === "claude-working" || t.status === "claude-background").length;
-  const [winking, setWinking] = useState(false);
-  const wink = () => {
-    if (winking) return;
-    setWinking(true);
-    setTimeout(() => setWinking(false), 900);
-  };
-  const wispMotion: WispMotion = winking ? "wink" : waitingOn ? "look" : working ? "flicker" : "blink";
-  const wispTitle = waitingOn
-    ? `${waitingOn} agent${waitingOn === 1 ? " is" : "s are"} waiting for you`
-    : working
-      ? `${working} agent${working === 1 ? "" : "s"} working`
-      : "All quiet";
+  const { motion: wispMotion, title: wispTitle, wink } = useWispState();
 
   const [closedGroups, setClosedGroups] = useState<string[]>([]);
 
@@ -196,62 +91,6 @@ export function AppSidebar() {
       }
       return next;
     });
-
-  // Live count of running Chrome instances, shown as a badge on the nav item.
-  useEffect(() => {
-    if (pathname === "/login") return;
-    let active = true;
-    const load = async () => {
-      try {
-        const res = await fetch(`${BASE_PATH}/api/chrome`, {
-          cache: "no-store",
-        });
-        if (!res.ok) return;
-        const json = await res.json();
-        if (active) setChromeCount((json.instances ?? []).length);
-      } catch {
-        /* ignore */
-      }
-    };
-    void load();
-    const id = setInterval(load, 7000);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, [pathname]);
-
-  // Live running-container count + memory, shown as a badge on the Docker item.
-  // `docker stats` is slower than a plain list, so this polls on its own timer.
-  useEffect(() => {
-    if (pathname === "/login") return;
-    let active = true;
-    const load = async () => {
-      try {
-        const res = await fetch(`${BASE_PATH}/api/docker/stats`, {
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          if (active) setDockerStats(null);
-          return;
-        }
-        const json = await res.json();
-        if (active)
-          setDockerStats({
-            running: json.running ?? 0,
-            memBytes: json.memBytes ?? 0,
-          });
-      } catch {
-        /* ignore */
-      }
-    };
-    void load();
-    const id = setInterval(load, 10000);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, [pathname]);
 
   function toggle() {
     setCollapsed((c) => {
@@ -369,16 +208,7 @@ export function AppSidebar() {
           const Icon = item.icon;
           // Numeric count drives the collapsed-rail pill; Docker also gets a
           // wider text badge (count · memory) in the expanded sidebar.
-          const badge =
-            item.href === "/chrome" && chromeCount
-              ? chromeCount
-              : item.href === "/agents" && liveRuns.length
-                ? liveRuns.length
-                : item.href === "/terminals" && workingTerms.length
-                  ? workingTerms.length
-                  : item.href === "/docker" && dockerStats?.running
-                    ? dockerStats.running
-                    : null;
+          const badge = badgeOf(item.href);
           const badgeText =
             item.href === "/docker" && dockerStats?.running
               ? `${dockerStats.running} · ${fmtBytes(dockerStats.memBytes)}`

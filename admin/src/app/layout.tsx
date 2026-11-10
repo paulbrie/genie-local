@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
 import { Fredoka, Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import { ActivityBeacon } from "@/components/activity-beacon";
-import { AppSidebar } from "@/components/app-sidebar";
 import { AskHost } from "@/components/ask-host";
+import { AppShell } from "@/components/desktop/app-shell";
 import { RunDock } from "@/components/run-dock";
-import { StatsToolbar } from "@/components/stats-toolbar";
 import { JarvisConsole } from "@/components/jarvis-console";
 import { JarvisOrb } from "@/components/jarvis-orb";
 import { ProjectMemoryMonitor } from "@/components/project-memory-monitor";
@@ -15,6 +15,7 @@ import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { UploadDock } from "@/components/upload-dock";
+import { parseShellMode, SHELL_COOKIE } from "@/lib/desktop";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -51,7 +52,9 @@ export function generateMetadata(): Metadata {
   };
 }
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // classic (the sidebar) or desktop, as this browser last chose (the top bar's switch)
+  const shell = parseShellMode((await cookies()).get(SHELL_COOKIE)?.value);
   return (
     <html
       lang="en"
@@ -65,13 +68,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <div className="flex h-screen overflow-hidden">
-            <AppSidebar />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <StatsToolbar />
-              <div className="flex-1 overflow-y-auto">{children}</div>
-            </div>
-          </div>
+          <AppShell initialMode={shell}>{children}</AppShell>
           <TerminalDock />
           <TerminalVoiceMonitor />
           <TerminalNarrator />
