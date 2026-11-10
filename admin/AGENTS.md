@@ -153,8 +153,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   resize from any edge, maximize, minimize, close; placed per app), a dock of pinned apps plus the
   apps open in the tab (each reopened at the path it was left on), a Launchpad with search (apps and
   projects), and the Spiridus menu at the bar's left. Its state is `src/store/desktop.ts`; the
-  geometry is pure and tested (`src/lib/desktop.ts`). The window has no transform, filter or z-index,
-  so a page's own `fixed` panels and z-indexes behave as they do in classic.
+  geometry is pure and tested (`src/lib/desktop.ts`). The window has no transform or filter, so a
+  page's own `fixed` panels behave as they do in classic; alone it has no z-index either, but with
+  other windows open every window is a layer at its place in `stack` (`winZ`), or what it holds with a
+  z-index (its title bar's buttons, a page's sticky parts) would show through the windows in front.
   · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
     a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,

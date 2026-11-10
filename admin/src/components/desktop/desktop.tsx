@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow,
-  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Maximize2,
@@ -90,9 +89,11 @@ type BadgeOf = (href: string) => number | null;
  *
  * The page sits at the same place in the tree in both, so switching interfaces
  * doesn't remount it (the extra wrappers are `display: contents` in classic).
- * The window has no transform, filter or z-index of its own: a page's own
- * `fixed` panels stay relative to the viewport, and its z-indexes keep working
- * against the rest of the app as they do in classic.
+ * The window has no transform or filter: a page's own `fixed` panels stay
+ * relative to the viewport. Alone, it has no z-index either, so the page's
+ * z-indexes work against the rest of the app as they do in classic; with other
+ * windows open it's a layer at its place among them (winZ), so nothing in it
+ * shows through the windows in front (dialogs and menus are portalled out).
  */
 export function Workspace({ desktop, children }: { desktop: boolean; children: React.ReactNode }) {
   const pathname = usePathname();
@@ -103,6 +104,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
   const [ws, setWs] = useState<{ w: number; h: number } | null>(null);
   const [{ geoms }] = useSubject(desk);
   const [{ hidden }] = useSubject(deskView);
+  const [others] = useSubject(frames);
+  const [order] = useSubject(stack);
   // the rect while it's being dragged or resized (saved on release)
   const [live, setLive] = useState<Rect | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -260,7 +263,11 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         : saved && !max
           ? saved
           : null));
-  const winStyle: React.CSSProperties | undefined = !desktop
+  // Alone, the window has no z-index (see above). With other windows, each one is a layer at its place in the stack,
+  // this one too: else what it holds with a z-index of its own (its title bar's buttons, a page's sticky parts) would
+  // show through the windows in front of it.
+  const z = desktop && others.length ? winZ(order, MAIN_WIN) : undefined;
+  const place: React.CSSProperties | undefined = !desktop
     ? undefined
     : mobile
       ? { inset: 0 }
@@ -269,6 +276,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         : max
           ? { left: 8, top: 8, right: 8, bottom: DOCK_SPACE }
           : { top: 12, right: 16, bottom: DOCK_SPACE };
+  const winStyle = place && z !== undefined ? { ...place, zIndex: z } : place;
 
   return (
     <div
@@ -349,12 +357,10 @@ function TitleBar({
   onClose: () => void;
   onMinimize: () => void;
   onToggleMax: () => void;
-  /** a frame's own history and reload (the page's own window uses the router) */
-  nav?: { back: () => void; forward: () => void; reload: () => void; href: string };
+  /** a frame's own reload and address (the page's own window uses the router) */
+  nav?: { reload: () => void; href: string };
 }) {
   const router = useRouter();
-  const back = nav?.back ?? (() => router.back());
-  const forward = nav?.forward ?? (() => router.forward());
   const reload = nav?.reload ?? (() => router.refresh());
   const crumbs = subPath(pathname, item?.href ?? null);
   const btn =
@@ -381,12 +387,6 @@ function TitleBar({
           />
         )}
       </div>
-      <button type="button" aria-label="Back" title="Back" onClick={back} className={`z-10 ${btn}`}>
-        <ChevronLeft className="size-4" />
-      </button>
-      <button type="button" aria-label="Forward" title="Forward" onClick={forward} className={`z-10 ${btn}`}>
-        <ChevronRight className="size-4" />
-      </button>
 
       {/* the title, centred on the bar whatever sits either side */}
       <div className="pointer-events-none absolute inset-x-0 flex justify-center px-40 max-sm:justify-start max-sm:pr-16 max-sm:pl-36">
@@ -484,11 +484,15 @@ function ResizeHandles({ onPointerDown }: { onPointerDown: (edges: Edges, e: Rea
 
 /* ------------------------------ more windows ------------------------------ */
 
+/** A window's layer: its place in the stack, back to front, from 1 (all under the dock's 40). */
+function winZ(order: string[], id: string): number {
+  return Math.min(order.indexOf(id) + 1, 39);
+}
+
 /**
  * The desktop's other windows: each another page of the app in a frame (the page there renders alone, as
- * app-shell's FramedPage), back to front as `stack` says. The page's own window has no z-index (see Workspace), so
- * it sits among them by DOM order: the frames behind it come before it at z-index 0, those in front of it get 1 and
- * up (under the dock's 40).
+ * app-shell's FramedPage), back to front as `stack` says, each a layer at its place in it (winZ), as the page's own
+ * window is while they're open.
  */
 function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null; mobile: boolean }) {
   const [list] = useSubject(frames);
@@ -512,23 +516,11 @@ function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null;
   }, []);
 
   if (!area) return null;
-  const mainAt = order.indexOf(MAIN_WIN);
-  const sorted = [...list].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
   return (
     <>
-      {sorted.map((f) => {
-        const at = order.indexOf(f.id);
-        return (
-          <FrameWindow
-            key={f.id}
-            win={f}
-            z={at > mainAt ? Math.min(at - mainAt, 30) : 0}
-            cascade={list.indexOf(f)}
-            area={area}
-            mobile={mobile}
-          />
-        );
-      })}
+      {list.map((f, i) => (
+        <FrameWindow key={f.id} win={f} z={winZ(order, f.id)} cascade={i} area={area} mobile={mobile} />
+      ))}
     </>
   );
 }
@@ -654,8 +646,6 @@ function FrameWindow({ win, z, cascade, area, mobile }: { win: FrameWin; z: numb
         onMinimize={() => updateFrame(win.id, { hidden: true })}
         onToggleMax={toggleMax}
         nav={{
-          back: () => cw()?.history.back(),
-          forward: () => cw()?.history.forward(),
           reload: () => cw()?.location.reload(),
           href: `${BASE_PATH}${win.path}`,
         }}
