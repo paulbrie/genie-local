@@ -10,6 +10,7 @@ import { rememberShellMode, ShellModeContext } from "@/components/desktop/shell-
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { isPaletteShortcut } from "@/lib/command-search";
 import type { ShellMode } from "@/lib/desktop";
+import { useScrollActivity } from "@/lib/use-scroll-activity";
 import { openTerminalsIn } from "@/store/terminals";
 
 /**
@@ -29,6 +30,8 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [mode, setMode] = useState(initialMode);
+  // (scrollbars show while hovered or scrolling: globals.css)
+  useScrollActivity();
   const ctx = useMemo(
     () => ({
       mode,

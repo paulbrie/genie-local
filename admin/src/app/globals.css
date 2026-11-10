@@ -128,6 +128,40 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /*
+   * Scrollbars everywhere: out of sight until they're useful, while the pointer
+   * is over the scrolling area (or anything in it) or while it scrolls
+   * (`data-scrolling`, set for a moment by useScrollActivity). Slim, rounded, no
+   * track. Chrome and Firefox read scrollbar-color (Chrome then ignores the
+   * ::-webkit ones); ::-webkit-scrollbar is for Safari.
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  *:hover,
+  [data-scrolling] {
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    background: transparent;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-color: transparent;
+    background-clip: padding-box;
+  }
+  *:hover::-webkit-scrollbar-thumb,
+  [data-scrolling]::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  }
   body {
     @apply bg-background text-foreground;
   }
@@ -152,67 +186,24 @@
 }
 
 /*
- * A scrollbar that stays out of sight until it's useful: transparent at rest
- * (thumb and track, so no grey gutter shows), a thin muted thumb while the
- * pointer is over the area or focus is inside it. Standard properties for
- * Chrome / Firefox (Chrome ignores the ::-webkit ones once scrollbar-color is
- * set); ::-webkit-scrollbar for Safari.
+ * Scrollbars that stay out of sight until hovered or scrolled: every scrollbar
+ * does that now (the base layer above). These two names are kept for the places
+ * that ask for it by name.
  */
 @utility scrollbar-hover {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
   &:hover,
-  &:focus-within {
+  &[data-scrolling] {
     scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
   }
-  &::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-    background: transparent;
-  }
-  &::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  &::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    border-radius: 9999px;
-    background-color: transparent;
-    background-clip: padding-box;
-  }
-  &:hover::-webkit-scrollbar-thumb,
-  &:focus-within::-webkit-scrollbar-thumb {
-    background-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
-  }
 }
-
-/*
- * A slim scrollbar with nothing behind it: the thumb always shows (so you see
- * where you are), faint until hovered; the track is transparent, so no grey
- * gutter down the side of a page or a desktop window.
- */
 @utility scrollbar-clear {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
-  &:hover {
-    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent) transparent;
-  }
-  &::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-    background: transparent;
-  }
-  &::-webkit-scrollbar-track,
-  &::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-  &::-webkit-scrollbar-thumb {
-    border: 3px solid transparent;
-    border-radius: 9999px;
-    background-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
-    background-clip: padding-box;
-  }
-  &:hover::-webkit-scrollbar-thumb {
-    background-color: color-mix(in oklab, var(--muted-foreground) 60%, transparent);
+  scrollbar-color: transparent transparent;
+  &:hover,
+  &[data-scrolling] {
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent) transparent;
   }
 }
 
