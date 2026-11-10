@@ -784,6 +784,11 @@ function IconGrid({
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
   const press = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
   const swallowClick = useRef(false);
+  // Icons glide only to settle a drop (the one swapped with sliding over); placed any other way (the first
+  // measure, the saved arrangement and the widget's side restored, a resize) they're simply there.
+  const [glide, setGlide] = useState(false);
+  const glideTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(glideTimer.current), []);
 
   useEffect(() => {
     const el = box.current;
@@ -827,7 +832,9 @@ function IconGrid({
             className={
               dragging
                 ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
-                : "absolute transition-[left,top] duration-200 ease-out"
+                : glide
+                  ? "absolute transition-[left,top] duration-200 ease-out"
+                  : "absolute"
             }
             onPointerDown={(e) => {
               if (e.button !== 0) return;
@@ -854,7 +861,12 @@ function IconGrid({
               const { x, y } = dragPos(e, p);
               setDrag(null);
               const next = moveIcon(layout, i.id, cellAt(x, y));
-              if (next !== layout) setIcons(next);
+              if (next !== layout) {
+                setGlide(true);
+                window.clearTimeout(glideTimer.current);
+                glideTimer.current = window.setTimeout(() => setGlide(false), 260);
+                setIcons(next);
+              }
             }}
             onPointerCancel={() => {
               press.current = null;
