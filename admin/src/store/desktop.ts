@@ -2,7 +2,7 @@
 
 import { Subject } from "subjecto";
 
-import { type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WinGeom } from "@/lib/desktop";
+import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetMode, type WinGeom } from "@/lib/desktop";
 
 /**
  * The desktop shell's state (components/desktop). The page you're on is the
@@ -211,6 +211,39 @@ export function setPinned(app: string, on: boolean) {
   const cur = desk.getValue();
   const pinned = on ? [...cur.pinned.filter((a) => a !== app), app] : cur.pinned.filter((a) => a !== app);
   save({ ...cur, pinned });
+}
+
+/** The status widget: open, folded to its header, or off (the Spiridus menu brings it back). */
+export function setWidget(mode: WidgetMode) {
+  const { widget: _old, ...rest } = desk.getValue();
+  void _old;
+  save(mode === "open" ? rest : { ...rest, widget: mode });
+}
+
+/**
+ * Open a page (`path`, e.g. a project's) from the desktop: the window already on it (or under it) comes to the
+ * front; with none, a new window, or the page's own one when that's closed. True when handled here; false when the
+ * page's own window is to go there (the caller navigates).
+ */
+export function openPathWindow(path: string, mainPath: string, apps: readonly string[]): boolean {
+  const under = (p: string) => p === path || p.startsWith(`${path}/`) || p.startsWith(`${path}?`);
+  const closed = deskView.getValue().hidden === "closed";
+  if (!closed && under(mainPath)) {
+    showWindow();
+    return true;
+  }
+  const f = frames.getValue().find((x) => under(x.path));
+  if (f) {
+    if (f.hidden) updateFrame(f.id, { hidden: false });
+    focusWin(f.id);
+    return true;
+  }
+  if (closed) {
+    showWindow();
+    return false;
+  }
+  openFrame(path, appOf(path, apps));
+  return true;
 }
 
 /** The desktop icons' arrangement, placed by hand (null: back to the default order). */

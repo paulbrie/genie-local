@@ -190,6 +190,11 @@ describe("desktop icons", () => {
     const d = parseDesk(JSON.stringify({ pinned: [], icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
     assert.deepEqual(d.icons, { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } });
   });
+  it("remembers the status widget folded or hidden, open by default", () => {
+    assert.equal(parseDesk(JSON.stringify({ widget: "collapsed" }), ["/"]).widget, "collapsed");
+    assert.equal(parseDesk(JSON.stringify({ widget: "hidden" }), ["/"]).widget, "hidden");
+    assert.equal(parseDesk(JSON.stringify({ widget: "sideways" }), ["/"]).widget, undefined);
+  });
   it("fits as many columns and rows as the desktop has room for", () => {
     assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });
   });

@@ -128,7 +128,11 @@ export type DeskSaved = {
   geoms: Record<string, WinGeom>;
   /** Where each desktop icon sits, by app href (and VSCODE_ICON), once placed by hand; absent: the default order. */
   icons?: Record<string, Cell>;
+  /** The status widget (terminals and projects): absent is "open". */
+  widget?: WidgetMode;
 };
+
+export type WidgetMode = "open" | "collapsed" | "hidden";
 
 export const DEFAULT_PINNED = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks"];
 
@@ -157,6 +161,7 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
     }
     if (Object.keys(icons).length) out.icons = icons;
   }
+  if (s.widget === "collapsed" || s.widget === "hidden") out.widget = s.widget;
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;

@@ -18,6 +18,7 @@ import { useSubject } from "subjecto/react";
 
 import { WISP_BODY, WISP_EYES } from "@/brand/spiridus";
 import { AppIcon, LaunchpadIcon, ProjectIcon, VsCodeIcon } from "@/components/desktop/app-icon";
+import { STATUS_WIDGET_W, StatusWidget } from "@/components/desktop/status-widget";
 import { NAV_FLAT, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import {
   ContextMenu,
@@ -693,8 +694,9 @@ function Wallpaper() {
  * screen grid in the default order.
  */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned, icons }] = useSubject(desk);
+  const [{ pinned, icons, widget }] = useSubject(desk);
   const [open] = useSubject(openApps);
+  const widgetMode = widget ?? "open";
   const items = [
     ...NAV_FLAT.map((it) => ({
       id: it.href,
@@ -741,7 +743,11 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           ))}
         </nav>
       ) : (
-        <IconGrid items={items} saved={icons} />
+        <>
+          {/* (the icons keep clear of the status widget at the top right) */}
+          <IconGrid items={items} saved={icons} reserveRight={widgetMode === "hidden" ? 0 : STATUS_WIDGET_W + 12} />
+          <StatusWidget mode={widgetMode} />
+        </>
       )}
     </>
   );
@@ -754,7 +760,7 @@ type DeskItem = { id: string; label: string; node: React.ReactNode };
  * swapping with an icon already there; the arrangement is remembered (desk.icons). A press that doesn't move is a
  * click, as before.
  */
-function IconGrid({ items, saved }: { items: DeskItem[]; saved?: Record<string, Cell> }) {
+function IconGrid({ items, saved, reserveRight = 0 }: { items: DeskItem[]; saved?: Record<string, Cell>; reserveRight?: number }) {
   const box = useRef<HTMLElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -769,7 +775,7 @@ function IconGrid({ items, saved }: { items: DeskItem[]; saved?: Record<string, 
     return () => ro.disconnect();
   }, []);
 
-  const { cols, rows } = size ? iconGridSize(size.w, size.h) : { cols: 1, rows: 1 };
+  const { cols, rows } = size ? iconGridSize(size.w - reserveRight, size.h) : { cols: 1, rows: 1 };
   const idsKey = items.map((i) => i.id).join("\n");
   const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows), [idsKey, saved, cols, rows]);
   const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
