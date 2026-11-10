@@ -3,7 +3,7 @@
 import { Subject } from "subjecto";
 
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetMode, type WinGeom } from "@/lib/desktop";
+import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetMode, type WidgetSection, type WinGeom } from "@/lib/desktop";
 
 /**
  * The desktop shell's state (components/desktop). The page you're on is the
@@ -255,6 +255,14 @@ export function setWidget(mode: WidgetMode) {
   const { widget: _old, ...rest } = desk.getValue();
   void _old;
   save(mode === "open" ? rest : { ...rest, widget: mode });
+}
+
+/** Fold or unfold one of the status widget's sections (Terminals, Projects). */
+export function toggleWidgetSection(section: WidgetSection) {
+  const { widgetFolded, ...rest } = desk.getValue();
+  const cur = widgetFolded ?? [];
+  const next = cur.includes(section) ? cur.filter((x) => x !== section) : [...cur, section];
+  save(next.length ? { ...rest, widgetFolded: next } : rest);
 }
 
 /** The status widget against the desktop's left edge or its right one. */

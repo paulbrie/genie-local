@@ -132,7 +132,11 @@ export type DeskSaved = {
   widget?: WidgetMode;
   /** Which side of the desktop it's on: absent is the right. */
   widgetSide?: "left";
+  /** Its sections folded to their heading. */
+  widgetFolded?: WidgetSection[];
 };
+
+export type WidgetSection = "terminals" | "projects";
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
 
@@ -165,6 +169,10 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   }
   if (s.widget === "collapsed" || s.widget === "hidden") out.widget = s.widget;
   if (s.widgetSide === "left") out.widgetSide = "left";
+  if (Array.isArray(s.widgetFolded)) {
+    const folded = [...new Set(s.widgetFolded.filter((x): x is WidgetSection => x === "terminals" || x === "projects"))];
+    if (folded.length) out.widgetFolded = folded;
+  }
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;

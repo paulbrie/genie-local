@@ -196,6 +196,7 @@ describe("desktop icons", () => {
     assert.equal(parseDesk(JSON.stringify({ widget: "sideways" }), ["/"]).widget, undefined);
     assert.equal(parseDesk(JSON.stringify({ widgetSide: "left" }), ["/"]).widgetSide, "left");
     assert.equal(parseDesk(JSON.stringify({ widgetSide: "up" }), ["/"]).widgetSide, undefined);
+    assert.deepEqual(parseDesk(JSON.stringify({ widgetFolded: ["projects", "projects", "other"] }), ["/"]).widgetFolded, ["projects"]);
   });
   it("fits as many columns and rows as the desktop has room for", () => {
     assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });

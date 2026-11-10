@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp, FolderKanban, PanelLeft, PanelRight, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, FolderKanban, PanelLeft, PanelRight, SquareTerminal, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -10,9 +10,9 @@ import { statusLabel, TermStatusDot } from "@/components/terminal-dock";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import type { WidgetMode } from "@/lib/desktop";
+import type { WidgetMode, WidgetSection } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { openPathWindow, setWidget, setWidgetSide } from "@/store/desktop";
+import { desk, openPathWindow, setWidget, setWidgetSide, toggleWidgetSection } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { liveTerminals, openTerminal, type LiveTerminal, type TermStatus } from "@/store/terminals";
 
@@ -55,6 +55,8 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
   const pathname = usePathname();
   const [terminals] = useSubject(liveTerminals);
   const [memory] = useSubject(projectMemory);
+  const [{ widgetFolded }] = useSubject(desk);
+  const isFolded = (s: WidgetSection) => !!widgetFolded?.includes(s);
   const [projects, setProjects] = useState<ProjectNavItem[] | null>(null);
 
   useEffect(() => {
@@ -138,13 +140,27 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
 
       {!folded && (
         <div className="scrollbar-clear min-h-0 overflow-y-auto px-1.5 pb-2">
-          <Section icon={SquareTerminal} title="Terminals" count={terminals.length}>
+          <Section
+            icon={SquareTerminal}
+            title="Terminals"
+            count={terminals.length}
+            note={waiting ? `${waiting} waiting` : undefined}
+            folded={isFolded("terminals")}
+            onToggle={() => toggleWidgetSection("terminals")}
+          >
             {terms.length === 0 && <Empty>No terminals.</Empty>}
             {terms.map((t) => (
               <TerminalRow key={t.name} t={t} onOpen={() => openTerminal(t.name)} />
             ))}
           </Section>
-          <Section icon={FolderKanban} title="Projects" count={projects?.length ?? null}>
+          <Section
+            icon={FolderKanban}
+            title="Projects"
+            count={projects?.length ?? null}
+            note={running ? `${running} running` : undefined}
+            folded={isFolded("projects")}
+            onToggle={() => toggleWidgetSection("projects")}
+          >
             {projects === null && <Empty>Loading…</Empty>}
             {projects?.length === 0 && <Empty>No projects.</Empty>}
             {projs.map((p) => {
@@ -155,7 +171,7 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
                   type="button"
                   onClick={() => openProject(p.slug)}
                   title={`${p.slug}${p.running ? ` · running${p.ports.length ? ` on :${p.ports.join(", :")}` : ""}` : " · not running"} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
-                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[12.5px] hover:bg-foreground/[0.07]"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
                 >
                   <StatusDot
                     color={p.running ? "bg-emerald-500" : "bg-muted-foreground/30"}
@@ -186,15 +202,40 @@ export function StatusWidget({ mode, side }: { mode: WidgetMode; side: "left" | 
   );
 }
 
-function Section({ icon: Icon, title, count, children }: { icon: typeof SquareTerminal; title: string; count: number | null; children: React.ReactNode }) {
+/** A heading that folds its list (remembered: desk.widgetFolded); the list indented under the heading's title. */
+function Section({
+  icon: Icon,
+  title,
+  count,
+  note,
+  folded,
+  onToggle,
+  children,
+}: {
+  icon: typeof SquareTerminal;
+  title: string;
+  count: number | null;
+  /** said beside the heading, so a folded section still tells what matters */
+  note?: string;
+  folded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="mt-1">
-      <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-1 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase">
+    <div className="mt-0.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={!folded}
+        className="flex w-full items-center gap-1.5 rounded-md px-1.5 pt-1 pb-0.5 text-[10.5px] font-semibold tracking-wider text-muted-foreground uppercase hover:text-foreground"
+      >
+        <ChevronRight className={cn("size-3 transition-transform duration-150", !folded && "rotate-90")} />
         <Icon className="size-3" />
         {title}
         {count !== null && <span className="font-normal tabular-nums">{count}</span>}
-      </div>
-      {children}
+        {note && <span className="ml-auto font-normal tracking-normal normal-case">{note}</span>}
+      </button>
+      {!folded && <div className="ml-4">{children}</div>}
     </div>
   );
 }
@@ -205,7 +246,7 @@ function TerminalRow({ t, onOpen }: { t: LiveTerminal; onOpen: () => void }) {
       type="button"
       onClick={onOpen}
       title={`${t.name}: ${statusLabel(t.status)}${t.background ? ` (${t.background})` : ""}${t.memBytes ? ` · ${bytes(t.memBytes)} in memory` : ""}`}
-      className="flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left text-[12.5px] hover:bg-foreground/[0.07]"
+      className="flex w-full items-center gap-2 rounded-md px-2 py-[3px] text-left text-[12.5px] leading-5 hover:bg-foreground/[0.07]"
     >
       <span className="flex w-3.5 shrink-0 justify-center">
         <TermStatusDot status={t.status} />
@@ -225,5 +266,5 @@ function TerminalRow({ t, onOpen }: { t: LiveTerminal; onOpen: () => void }) {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="px-2 py-1 text-[12px] text-muted-foreground">{children}</p>;
+  return <p className="px-2 py-0.5 text-[12px] text-muted-foreground">{children}</p>;
 }
