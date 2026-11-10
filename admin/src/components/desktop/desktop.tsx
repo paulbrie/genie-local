@@ -131,17 +131,22 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
 
   // Restore what this browser remembers, once the desktop first shows.
   const hydrated = useRef(false);
+  // the window minimized or closed on this very page before a reload: it stays so (once)
+  const keptHidden = useRef<"min" | "closed" | null>(null);
   useEffect(() => {
     if (!desktop || hydrated.current) return;
     hydrated.current = true;
-    hydrateDesk(NAV_HREFS);
+    keptHidden.current = hydrateDesk(NAV_HREFS);
   }, [desktop]);
 
   // The page you go to is the window in front (and its app open, at that path).
   useEffect(() => {
     if (!desktop) return;
+    const kept = keptHidden.current;
+    keptHidden.current = null;
+    if (kept === "closed") return;
     if (app) noteApp(app, pathname + window.location.search);
-    showWindow();
+    if (kept !== "min") showWindow();
   }, [desktop, app, pathname]);
 
   useEffect(() => {

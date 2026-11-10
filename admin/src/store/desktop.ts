@@ -2,6 +2,7 @@
 
 import { Subject } from "subjecto";
 
+import { BASE_PATH } from "@/lib/config";
 import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetMode, type WinGeom } from "@/lib/desktop";
 
 /**
@@ -130,8 +131,21 @@ function saveOpen(next: OpenApp[]) {
   }
 }
 
-/** Restore what this browser (and tab) remembers. Call once, client-side, after mount. */
-export function hydrateDesk(apps: readonly string[]) {
+/**
+ * Restore what this browser (and tab) remembers. Call once, client-side, after mount. Returns how the page's own
+ * window was left on this very page ("min" / "closed", kept so), or null (it shows, as the page you came to).
+ */
+export function hydrateDesk(apps: readonly string[]): "min" | "closed" | null {
+  let kept: "min" | "closed" | null = null;
+  try {
+    const m = JSON.parse(sessionStorage.getItem(MAIN_KEY) ?? "null") as { hidden?: unknown; path?: unknown } | null;
+    if (m && (m.hidden === "min" || m.hidden === "closed") && m.path === here()) {
+      kept = m.hidden;
+      deskView.next({ hidden: kept });
+    } else sessionStorage.removeItem(MAIN_KEY);
+  } catch {
+    /* unreadable: the window shows */
+  }
   try {
     const v = JSON.parse(sessionStorage.getItem(FRAMES_KEY) ?? "null") as { frames?: unknown; stack?: unknown } | null;
     if (v && Array.isArray(v.frames)) {
@@ -174,6 +188,7 @@ export function hydrateDesk(apps: readonly string[]) {
   } catch {
     /* unreadable: start afresh */
   }
+  return kept;
 }
 
 /** The page shows `path` of `app`: it's open (and the one in front), at that path. */
@@ -186,12 +201,31 @@ export function noteApp(app: string, path: string) {
 
 /** The page's own window: shown (if minimized or closed) and in front. */
 export function showWindow() {
-  if (deskView.getValue().hidden) deskView.next({ hidden: null });
+  if (deskView.getValue().hidden) {
+    deskView.next({ hidden: null });
+    rememberMain(null);
+  }
   focusWin(MAIN_WIN);
 }
 
 export function minimizeWindow() {
   deskView.next({ hidden: "min" });
+  rememberMain("min");
+}
+
+// The page's own window minimized or closed, and on which page, for this tab: a reload loads the same address, and
+// would show that page's window again (hydrateDesk keeps it as it was instead).
+const MAIN_KEY = "admin.desktop.main";
+const here = () =>
+  (BASE_PATH && window.location.pathname.startsWith(BASE_PATH) ? window.location.pathname.slice(BASE_PATH.length) || "/" : window.location.pathname) +
+  window.location.search;
+function rememberMain(hidden: "min" | "closed" | null) {
+  try {
+    if (hidden) sessionStorage.setItem(MAIN_KEY, JSON.stringify({ hidden, path: here() }));
+    else sessionStorage.removeItem(MAIN_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -203,7 +237,10 @@ export function closeApp(app: string | null): string | null {
   const rest = openApps.getValue().filter((o) => o.app !== app);
   saveOpen(rest);
   const next = rest.reduce<OpenApp | null>((a, o) => (!a || o.at > a.at ? o : a), null);
-  if (!next) deskView.next({ hidden: "closed" });
+  if (!next) {
+    deskView.next({ hidden: "closed" });
+    rememberMain("closed");
+  }
   return next?.path ?? null;
 }
 
