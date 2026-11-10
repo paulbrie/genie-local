@@ -393,6 +393,41 @@ export const projectVercel = pgTable("project_vercel", {
 });
 
 /**
+ * A problem seen in a project's production on Vercel (its Vercel tab): runtime errors and warnings and 5xx
+ * responses, collected from Vercel's live logs by src/lib/vercel-collector.ts (Vercel keeps no history its API
+ * serves), and failed production builds. Same problem, same `fingerprint` (ids and numbers taken out): one row,
+ * counted. A ticket made from it is `task_id`; dismissing hides it until it happens again.
+ */
+export const vercelIssues = pgTable(
+  "vercel_issues",
+  {
+    id: serial("id").primaryKey(),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    // "runtime" | "build"
+    kind: text("kind").notNull(),
+    // "error" | "warning"
+    level: text("level").notNull(),
+    title: text("title").notNull(),
+    // the latest occurrence's full message (cut to a few KB)
+    sample: text("sample").notNull().default(""),
+    // the latest few: { at, path, method, status, message, deployment }
+    recent: jsonb("recent").notNull().default([]),
+    // distinct request paths it was seen on (a few)
+    paths: jsonb("paths").notNull().default([]),
+    count: integer("count").notNull().default(0),
+    firstSeen: timestamp("first_seen", { withTimezone: true }).notNull().defaultNow(),
+    lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+    lastDeploymentId: text("last_deployment_id"),
+    taskId: integer("task_id"),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("vercel_issues_project_fingerprint_key").on(t.projectId, t.fingerprint), index("vercel_issues_project_last").on(t.projectId, t.lastSeen)],
+);
+
+/**
  * Where a project runs in production (its Production tab): the URL, and free notes
  * (hosting, how it deploys, accounts…). One row per project; more fields can join it.
  */
@@ -475,3 +510,4 @@ export type BrowserLink = typeof browserLinks.$inferSelect;
 export type GitCredential = typeof gitCredentials.$inferSelect;
 export type ProjectProduction = typeof projectProduction.$inferSelect;
 export type ProjectVercel = typeof projectVercel.$inferSelect;
+export type VercelIssue = typeof vercelIssues.$inferSelect;

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { projectVercel } from "@/db/schema";
+import { projects, projectVercel } from "@/db/schema";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { getProjectIdBySlug } from "@/lib/data";
 import { listRepos } from "@/lib/git-graph";
@@ -43,7 +43,7 @@ export class VercelError extends Error {
 }
 
 /** A call to Vercel's API with `token`, in `teamId`'s scope when given. */
-async function call<T>(token: string, path: string, teamId: string | null, query: Record<string, string | number | undefined> = {}): Promise<T> {
+export async function call<T>(token: string, path: string, teamId: string | null, query: Record<string, string | number | undefined> = {}): Promise<T> {
   const u = new URL(API + path);
   for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== "") u.searchParams.set(k, String(v));
   if (teamId) u.searchParams.set("teamId", teamId);
@@ -116,6 +116,17 @@ export async function saveVercel(
   const values = { tokenEnc, tokenHint, teamId, vercelProjectId, vercelProjectName, updatedAt: new Date() };
   await db.insert(projectVercel).values({ projectId: pid, ...values }).onConflictDoUpdate({ target: projectVercel.projectId, set: values });
   return (await vercelLink(slug))!;
+}
+
+/** Every project with a Vercel project picked, for the collector (src/lib/vercel-collector.ts): with its token. */
+export async function vercelLinks() {
+  const rows = await db
+    .select({ projectId: projectVercel.projectId, slug: projects.slug, tokenEnc: projectVercel.tokenEnc, teamId: projectVercel.teamId, vercelProjectId: projectVercel.vercelProjectId, vercelProjectName: projectVercel.vercelProjectName })
+    .from(projectVercel)
+    .innerJoin(projects, eq(projects.id, projectVercel.projectId));
+  return rows
+    .filter((r) => r.vercelProjectId)
+    .map((r) => ({ projectId: r.projectId, slug: r.slug, token: decrypt(r.tokenEnc), teamId: r.teamId, vercelProjectId: r.vercelProjectId!, vercelProjectName: r.vercelProjectName }));
 }
 
 export async function forgetVercel(slug: string): Promise<void> {
@@ -206,7 +217,8 @@ export async function vercelBuildLogs(slug: string, deploymentId: string) {
     { limit: -1, builds: 1, direction: "forward" },
   );
   return (Array.isArray(events) ? events : [])
-    .map((e) => ({ at: e.payload?.date ?? e.created ?? null, type: e.type ?? "stdout", text: e.payload?.text ?? e.text ?? "" }))
+    // (builds print colours: \x1b[90m… — not for a web page)
+    .map((e) => ({ at: e.payload?.date ?? e.created ?? null, type: e.type ?? "stdout", text: (e.payload?.text ?? e.text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "") }))
     .filter((e) => e.text);
 }
 

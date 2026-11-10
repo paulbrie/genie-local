@@ -5,12 +5,16 @@
 //   GET ?op=deployments[&limit=5][&until=<ms>] → { deployments, next }  (next: the `until` of the page after)
 //   GET ?op=build&deployment=<id>         → { lines }
 //   GET ?op=runtime&deployment=<id>       → NDJSON, live: one line per request / log as it happens, while open
+//   GET ?op=issues[&dismissed=1]          → { issues, collector }  (production problems, src/lib/vercel-collector.ts)
+//   POST {action: "ticket" | "dismiss" | "restore", id} → { taskId } | { ok }
 //   PUT {token?, teamId?, projectId?, projectName?} → { link }
 //   DELETE                                → { ok }
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { getProjectIdBySlug } from "@/lib/data";
 import { requireAdmin } from "@/lib/require-admin";
+import { collectorStatus, dismissIssue, listIssues, ticketFromIssue } from "@/lib/vercel-collector";
 import {
   forgetVercel,
   saveVercel,
@@ -57,6 +61,11 @@ export async function GET(req: NextRequest, { params }: Ctx) {
         return ok(await vercelScopes(slug));
       case "projects":
         return ok({ projects: await vercelProjects(slug, q.get("search") ?? undefined) });
+      case "issues": {
+        const pid = await getProjectIdBySlug(slug);
+        if (pid === null) return NextResponse.json({ error: "no such project" }, { status: 404 });
+        return ok({ issues: await listIssues(pid, q.get("dismissed") === "1"), collector: collectorStatus(pid) });
+      }
       case "deployments":
         return ok(await vercelDeployments(slug, Number(q.get("limit")) || 5, Number(q.get("until")) || undefined));
       case "build":
@@ -88,6 +97,24 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   const { slug } = await params;
   try {
     return ok({ link: await saveVercel(slug, Put.parse(await req.json())) });
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const Post = z.object({ action: z.enum(["ticket", "dismiss", "restore"]), id: z.number().int().positive() });
+
+export async function POST(req: NextRequest, { params }: Ctx) {
+  const denied = await admin();
+  if (denied) return denied;
+  const { slug } = await params;
+  try {
+    const { action, id } = Post.parse(await req.json());
+    const pid = await getProjectIdBySlug(slug);
+    if (pid === null) return NextResponse.json({ error: "no such project" }, { status: 404 });
+    if (action === "ticket") return ok({ taskId: await ticketFromIssue(pid, slug, id, (await vercelLink(slug))?.projectName ?? null) });
+    await dismissIssue(pid, id, action === "dismiss");
+    return ok({ ok: true });
   } catch (err) {
     return fail(err);
   }

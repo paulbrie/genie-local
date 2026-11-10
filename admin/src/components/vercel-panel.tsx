@@ -39,6 +39,7 @@ const time = (ms: number | null) => (ms ? new Date(ms).toLocaleTimeString() : ""
 
 /** A project's Vercel tab: its token, the Vercel project it shows, deployments, build and runtime logs. */
 export function VercelPanel({ slug, initial }: { slug: string; initial: Link | null }) {
+  // (slug: for the issues' ticket links)
   const api = `${BASE_PATH}/api/projects/${encodeURIComponent(slug)}/vercel`;
   const get = useCallback(async <T,>(q: Record<string, string>): Promise<T> => {
     const r = await fetch(`${api}?${new URLSearchParams(q)}`, { cache: "no-store" });
@@ -88,6 +89,7 @@ export function VercelPanel({ slug, initial }: { slug: string; initial: Link | n
           }}>Remove</Button>
         </div>
       </div>
+      <ProductionIssues get={get} api={api} slug={slug} />
       <Deployments get={get} api={api} />
     </div>
   );
@@ -431,6 +433,160 @@ function Logs({ d, get, api }: { d: Deployment; get: <T>(q: Record<string, strin
             </div>
           )))}
       </pre>
+    </div>
+  );
+}
+
+type Issue = {
+  id: number; kind: "runtime" | "build"; level: "error" | "warning"; title: string; sample: string;
+  recent: { at?: number; path?: string | null; method?: string | null; status?: number | null; message?: string; deployment?: string; commit?: string | null; branch?: string | null }[];
+  paths: string[]; count: number; firstSeen: string; lastSeen: string; lastDeploymentId: string | null; taskId: number | null; dismissedAt: string | null;
+};
+type CollectorStatus = {
+  running: boolean;
+  watching: { deploymentId: string; since: number; lastLineAt: number | null; lines: number; problems: number; error: string | null } | null;
+  lastTick: number | null;
+  error: string | null;
+} | null;
+
+/**
+ * Production's errors and warnings (and failed production builds), collected all the time by the live admin
+ * (src/lib/vercel-collector.ts), grouped, newest first: each one a ticket away.
+ */
+function ProductionIssues({ get, api, slug }: { get: <T>(q: Record<string, string>) => Promise<T>; api: string; slug: string }) {
+  const [issues, setIssues] = useState<Issue[] | null>(null);
+  const [collector, setCollector] = useState<CollectorStatus>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [level, setLevel] = useState<"error" | "warning" | "all">("all");
+  const [dismissed, setDismissed] = useState(false);
+  const [open, setOpen] = useState<number | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await get<{ issues: Issue[]; collector: CollectorStatus }>({ op: "issues", ...(dismissed ? { dismissed: "1" } : {}) });
+      setIssues(r.issues);
+      setCollector(r.collector);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [get, dismissed]);
+
+  useEffect(() => {
+    const first = setTimeout(load, 0);
+    const t = setInterval(load, 30_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [load]);
+
+  const act = async (action: "ticket" | "dismiss" | "restore", id: number) => {
+    setBusy(id);
+    try {
+      const r = await fetch(api, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, id }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      if (action === "ticket") toast.success(`Ticket #${j.taskId} created in Tasks`);
+      await load();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const shown = (issues ?? []).filter((i) => level === "all" || i.level === level);
+  const errors = (issues ?? []).filter((i) => i.level === "error" && !i.dismissedAt).length;
+  const warnings = (issues ?? []).filter((i) => i.level === "warning" && !i.dismissedAt).length;
+  const w = collector?.watching;
+  const tasksHref = (id: number) => `${BASE_PATH}/projects/${encodeURIComponent(slug)}/tasks?task=${id}`;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-sm font-medium">Production issues</h2>
+        {issues && (
+          <span className="text-xs text-muted-foreground">
+            {errors} error{errors === 1 ? "" : "s"} · {warnings} warning{warnings === 1 ? "" : "s"}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1 text-xs">
+          {(["all", "error", "warning"] as const).map((l) => (
+            <Button key={l} size="sm" variant={level === l ? "secondary" : "ghost"} className="h-7 px-2" onClick={() => setLevel(l)}>
+              {l === "all" ? "All" : l === "error" ? "Errors" : "Warnings"}
+            </Button>
+          ))}
+          <label className="ml-2 flex items-center gap-1 text-muted-foreground">
+            <input type="checkbox" checked={dismissed} onChange={(e) => setDismissed(e.target.checked)} /> dismissed
+          </label>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {collector === null
+          ? "Collected by the live admin (this instance doesn't listen): problems show here as they happen in production."
+          : w
+            ? `Listening to production (${w.deploymentId.slice(0, 12)}…) since ${new Date(w.since).toLocaleTimeString()} · ${w.lines} log line${w.lines === 1 ? "" : "s"}, ${w.problems} problem${w.problems === 1 ? "" : "s"}${w.error ? ` · reconnecting: ${w.error}` : ""}`
+            : collector.error
+              ? `Not listening: ${collector.error}`
+              : "Starting to listen to production…"}
+        {" "}Vercel keeps no log history its API serves, so this starts from when Spiridus began listening.
+      </p>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {issues && shown.length === 0 && (
+        <p className="rounded-lg border px-3 py-4 text-center text-sm text-muted-foreground">
+          {issues.length === 0 ? "No problems seen in production yet." : "None of this kind."}
+        </p>
+      )}
+      {shown.length > 0 && (
+        <div className="divide-y rounded-lg border text-sm">
+          {shown.map((i) => (
+            <div key={i.id} className={cn(i.dismissedAt && "opacity-60")}>
+              <div className="flex items-center gap-2 px-3 py-2">
+                <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setOpen(open === i.id ? null : i.id)}>
+                  <span className={cn("size-2 shrink-0 rounded-full", i.level === "error" ? "bg-red-500" : "bg-amber-500")} title={i.level} />
+                  {i.kind === "build" && <Badge variant="outline">build</Badge>}
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{i.title}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {i.kind === "runtime" ? `×${i.count} · ` : ""}{ago(new Date(i.lastSeen).getTime())}
+                    {i.paths.length > 0 && ` · ${i.paths.slice(0, 2).join(", ")}${i.paths.length > 2 ? "…" : ""}`}
+                  </span>
+                </button>
+                {i.taskId ? (
+                  <a href={tasksHref(i.taskId)} className="shrink-0 text-xs font-medium hover:underline">Ticket #{i.taskId}</a>
+                ) : (
+                  <Button size="sm" variant="outline" className="h-7 shrink-0" disabled={busy === i.id} onClick={() => act("ticket", i.id)}>Create ticket</Button>
+                )}
+                <Button size="sm" variant="ghost" className="h-7 shrink-0 text-xs" disabled={busy === i.id} onClick={() => act(i.dismissedAt ? "restore" : "dismiss", i.id)}>
+                  {i.dismissedAt ? "Restore" : "Dismiss"}
+                </Button>
+              </div>
+              {open === i.id && (
+                <div className="space-y-2 border-t bg-muted/30 px-3 py-2 text-xs">
+                  <div className="text-muted-foreground">
+                    {i.kind === "runtime"
+                      ? `${i.count} time${i.count === 1 ? "" : "s"} · first ${new Date(i.firstSeen).toLocaleString()} · last ${new Date(i.lastSeen).toLocaleString()}`
+                      : `Build of ${new Date(i.firstSeen).toLocaleString()}`}
+                    {i.lastDeploymentId && ` · ${i.lastDeploymentId}`}
+                  </div>
+                  <pre className="max-h-72 overflow-auto rounded bg-background p-2 font-mono whitespace-pre-wrap">{i.sample || "(no message)"}</pre>
+                  {i.kind === "runtime" && i.recent.length > 0 && (
+                    <div>
+                      <div className="text-muted-foreground">Recent:</div>
+                      {i.recent.map((r, k) => (
+                        <div key={k} className="font-mono">
+                          {r.at ? new Date(r.at).toLocaleString() : ""} {r.method ?? ""} {r.path ?? ""} {r.status ?? ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
