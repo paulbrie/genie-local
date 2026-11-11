@@ -32,6 +32,9 @@ import {
   dropRange,
   fitShift,
   widgetMode,
+  arrangementFits,
+  stackDesktop,
+  widgetWants,
 } from "./desktop";
 
 const APPS = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks", "/teams", "/agents", "/agents3d"];
@@ -237,12 +240,14 @@ describe("desktop widgets", () => {
       projects: { c: 12, r: 3, w: 3, h: 4 },
       disk: { c: 9, r: 0, w: 3, h: 4 },
       memory: { c: 6, r: 0, w: 3, h: 4 },
+      processes: { c: 9, r: 4, w: 3, h: 3 },
+      docker: { c: 6, r: 4, w: 3, h: 3 },
     });
     assert.deepEqual(defaultWidgetAt("terminals", 15), { c: 12, r: 0, w: 3, h: 3 });
   });
   it("a hidden one isn't placed, and a folded one takes its header's row", () => {
     assert.deepEqual(
-      deskWidgets({ terminals: { mode: "hidden" }, projects: { mode: "collapsed", at: { c: 2, r: 1, w: 4, h: 5 } }, disk: { mode: "hidden" }, memory: { mode: "hidden" } }, 15, 7),
+      deskWidgets({ terminals: { mode: "hidden" }, projects: { mode: "collapsed", at: { c: 2, r: 1, w: 4, h: 5 } }, disk: { mode: "hidden" }, memory: { mode: "hidden" }, processes: { mode: "hidden" }, docker: { mode: "hidden" } }, 15, 7),
       { projects: { c: 2, r: 1, w: 4, h: 1 } },
     );
   });
@@ -346,6 +351,63 @@ describe("widgets off at first", () => {
     assert.equal(widgetMode(undefined, "terminals"), "open");
     assert.equal(widgetMode({ health: { mode: "open" } }, "health"), "open");
     assert.deepEqual(parseDesk(JSON.stringify({ widgets: { git: { mode: "open" } } }), ["/"]).widgets, { git: { mode: "open" } });
-    assert.deepEqual(Object.keys(deskWidgets(undefined, 15, 7)), ["terminals", "projects", "disk", "memory"]);
+    assert.deepEqual(Object.keys(deskWidgets(undefined, 15, 7)), ["terminals", "projects", "disk", "memory", "processes", "docker"]);
+  });
+  it("remember how each shows what it shows, and nothing odd", () => {
+    assert.deepEqual(
+      parseDesk(JSON.stringify({ widgets: { disk: { views: { chart: "treemap", "x y": "1" } }, memory: { views: { period: "<script>" } } } }), ["/"]).widgets,
+      { disk: { views: { chart: "treemap" } } },
+    );
+  });
+});
+
+describe("the stacked desktop", () => {
+  it("is for when the arrangement doesn't fit: a widget pushed onto the grid, or an icon past its columns", () => {
+    const saved = { terminals: { at: { c: 10, r: 0, w: 3, h: 3 } }, projects: { mode: "hidden" as const }, disk: { mode: "hidden" as const }, memory: { mode: "hidden" as const }, processes: { mode: "hidden" as const }, docker: { mode: "hidden" as const } };
+    const wide = widgetWants(saved, 15);
+    assert.equal(arrangementFits(wide, deskWidgets(saved, 15, 7), { a: { c: 0, r: 0 } }, 15), true);
+    const narrow = widgetWants(saved, 8);
+    assert.equal(arrangementFits(narrow, deskWidgets(saved, 8, 7), { a: { c: 0, r: 0 } }, 8), false, "the widget's spot is past the grid");
+    assert.equal(arrangementFits(wide, deskWidgets(saved, 15, 7), { a: { c: 15, r: 0 } }, 15), false, "an icon past the columns");
+  });
+  it("puts the widgets one a row, the whole width, in reading order, then the icons a row after another", () => {
+    const s = stackDesktop(
+      [
+        { id: "b", at: { c: 9, r: 0, w: 3, h: 4 } },
+        { id: "a", at: { c: 2, r: 0, w: 3, h: 3 } },
+        { id: "c", at: { c: 0, r: 5, w: 3, h: 1 } },
+      ],
+      ["x", "y", "z"],
+      12 + 2 * 92 + 88 + 12,
+    );
+    assert.deepEqual(s.widgets.a, { x: 20, y: 20, w: 12 + 2 * 92 + 88 + 12 - 40, h: 3 * 96 - 16 });
+    assert.equal(s.widgets.b.y, 12 + 3 * 96 + 8);
+    assert.equal(s.widgets.c.y, 12 + 7 * 96 + 8);
+    assert.deepEqual(s.icons, { x: { c: 0, r: 8 }, y: { c: 1, r: 8 }, z: { c: 2, r: 8 } });
+    assert.equal(s.rows, 9);
+  });
+});
+
+describe("VS Code in the dock", () => {
+  it("can be kept in the dock, as the apps are", () => {
+    assert.deepEqual(parseDesk(JSON.stringify({ pinned: ["/", "vscode", "vscode", "/gone"] }), ["/"]).pinned, ["/", "vscode"]);
+  });
+});
+
+describe("a shorter window", () => {
+  it("fills the rows that show with the icons never placed, then goes on under them, never past the last column", () => {
+    const l = layoutIcons(["a", "b", "c", "d", "e", "f", "g"], undefined, 2, 9, [], 2);
+    assert.deepEqual(l, {
+      a: { c: 0, r: 0 },
+      b: { c: 0, r: 1 },
+      c: { c: 1, r: 0 },
+      d: { c: 1, r: 1 },
+      e: { c: 0, r: 2 },
+      f: { c: 1, r: 2 },
+      g: { c: 0, r: 3 },
+    });
+  });
+  it("keeps the icons placed by hand where they are, below what shows too", () => {
+    assert.deepEqual(layoutIcons(["a"], { a: { c: 1, r: 6 } }, 3, 7, [], 3).a, { c: 1, r: 6 });
   });
 });

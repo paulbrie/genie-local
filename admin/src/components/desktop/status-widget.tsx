@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderKanban, HardDrive, Loader2, MemoryStick, RotateCw, SquareTerminal } from "lucide-react";
+import { FolderKanban, MemoryStick, SquareTerminal } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -8,13 +8,11 @@ import { useSubject } from "subjecto/react";
 import { NAV_HREFS } from "@/components/nav-items";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
-import { Empty, Meter, ROW, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
+import { Empty, ROW, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import type { DiskOverview } from "@/lib/disk-overview-core";
-import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { openPathWindow } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
@@ -170,113 +168,6 @@ export function ProjectsWidget({ folded }: { folded: boolean }) {
               </ProjectContextMenu>
             );
           })}
-        </WidgetList>
-      )}
-    </>
-  );
-}
-
-/**
- * The disk: how full the system disk is, and what /opt/project and /tmp take, each with its largest entries
- * (/api/disk: measured in the background, at most every 5 minutes, or now with the refresh button).
- */
-export function DiskWidget({ folded }: { folded: boolean }) {
-  const [data, setData] = useState<DiskOverview | null>(null);
-  const [failed, setFailed] = useState(false);
-  // bumped by the refresh button: measure again now
-  const [fresh, setFresh] = useState(0);
-
-  useEffect(() => {
-    let live = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const load = async (again: boolean) => {
-      let next = 60_000;
-      try {
-        const r = await fetch(`${BASE_PATH}/api/disk${again ? "?fresh=1" : ""}`, { cache: "no-store" });
-        if (!r.ok) throw new Error(String(r.status));
-        const json = (await r.json()) as DiskOverview;
-        if (!live) return;
-        setData(json);
-        setFailed(false);
-        // (while it measures, look again soon: the figures are on their way)
-        if (json.scanning) next = 4000;
-      } catch {
-        if (live) setFailed(true);
-      }
-      if (live) timer = setTimeout(() => load(false), next);
-    };
-    void load(fresh > 0);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [fresh]);
-
-  const disk = data?.fs[0];
-  const pct = disk && disk.size ? Math.round((disk.used / disk.size) * 100) : null;
-  return (
-    <>
-      <WidgetHeader
-        id="disk"
-        icon={HardDrive}
-        title="Disk"
-        count={pct === null ? null : `${pct}%`}
-        note={disk ? `${formatBytes(disk.avail)} free` : failed ? "couldn't read" : ""}
-        folded={folded}
-      />
-      {!folded && (
-        <WidgetList>
-          {!data && <Empty>{failed ? "Couldn't read the disk." : "Loading…"}</Empty>}
-          {data?.fs.map((f) => (
-            <div key={f.mount} className="flex flex-col gap-1 pr-2 pb-1.5 pl-7 text-xs text-muted-foreground">
-              <div className="flex items-baseline gap-2">
-                <span className="truncate">{f.mount === "/" ? "System disk" : f.mount}</span>
-                <span className="ml-auto shrink-0 tabular-nums">
-                  {formatBytes(f.used)} of {formatBytes(f.size)}
-                </span>
-              </div>
-              <Meter value={f.size ? f.used / f.size : 0} />
-            </div>
-          ))}
-          {data && !data.paths && <Empty>Measuring /opt/project and /tmp (half a minute the first time)…</Empty>}
-          {data?.paths?.map((p) => (
-            <div key={p.path} className="flex flex-col pt-1">
-              <div className="flex items-baseline gap-2 pr-2 pl-7 text-xs">
-                <span className="truncate font-mono font-medium">{p.path}</span>
-                <span className="ml-auto shrink-0 tabular-nums">{formatBytes(p.bytes)}</span>
-              </div>
-              <div className="pr-2 pb-0.5 pl-7">
-                <Meter value={disk?.size ? p.bytes / disk.size : 0} thin />
-              </div>
-              {p.top.map((e) => (
-                <div key={e.name} className="flex items-baseline gap-2 pr-2 pl-10 text-[11px] text-muted-foreground" title={`${p.path}/${e.name}: ${formatBytes(e.bytes)}`}>
-                  <span className="min-w-0 truncate">{e.name}</span>
-                  <span className="ml-auto shrink-0 tabular-nums opacity-80">{formatBytes(e.bytes)}</span>
-                </div>
-              ))}
-            </div>
-          ))}
-          {data && (
-            <div className="mt-auto flex items-center gap-1.5 pt-1.5 pr-1 pl-7 text-[11px] text-muted-foreground">
-              {data.scanning ? (
-                <>
-                  <Loader2 className="size-3 animate-spin" /> Measuring…
-                </>
-              ) : (
-                <span>{data.scannedAt ? `Measured ${formatRelativeTime(new Date(data.scannedAt))}` : ""}</span>
-              )}
-              <button
-                type="button"
-                onClick={() => setFresh((n) => n + 1)}
-                disabled={data.scanning}
-                aria-label="Measure again"
-                title="Measure again"
-                className="ml-auto rounded-md p-0.5 hover:bg-foreground/10 hover:text-foreground disabled:opacity-40"
-              >
-                <RotateCw className="size-3" />
-              </button>
-            </div>
-          )}
         </WidgetList>
       )}
     </>

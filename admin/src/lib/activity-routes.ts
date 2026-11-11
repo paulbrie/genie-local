@@ -157,9 +157,11 @@ export const API_ROUTES = [
   "/api/terminals/[name]",
   "/api/terminals/[name]/image",
   "/api/tts",
+  "/api/widgets/docker",
   "/api/widgets/errors",
   "/api/widgets/git",
   "/api/widgets/health",
+  "/api/widgets/memory",
   "/api/widgets/signins",
   "/api/widgets/tickets",
 ] as const;

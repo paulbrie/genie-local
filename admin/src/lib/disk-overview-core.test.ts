@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseDf, parseDuTop } from "./disk-overview-core";
+import { otherPart, parseDf, parseDockerDf, parseDockerSize, parseDuTop } from "./disk-overview-core";
 
 describe("parseDf", () => {
   it("reads each filesystem once, two folders on one disk being one", () => {
@@ -29,5 +29,39 @@ describe("parseDuTop", () => {
     assert.equal(parseDuTop(out, "/tmp/")?.top.length, 4);
     assert.equal(parseDuTop("", "/tmp"), null);
     assert.equal(parseDuTop("12\t/tmpfoo", "/tmp"), null);
+  });
+});
+
+describe("Docker's part", () => {
+  it("reads docker's decimal sizes", () => {
+    assert.equal(parseDockerSize("8.033GB"), 8_033_000_000);
+    assert.equal(parseDockerSize("9.884MB"), 9_884_000);
+    assert.equal(parseDockerSize("0B"), 0);
+    assert.equal(parseDockerSize("nonsense"), 0);
+  });
+  it("is the kinds docker counts, the biggest first, empty ones left out", () => {
+    const out = ["Images\t8.033GB", "Containers\t9.884MB", "Local Volumes\t1.06GB", "Build Cache\t0B", ""].join("\n");
+    assert.deepEqual(parseDockerDf(out), {
+      key: "docker",
+      label: "Docker",
+      bytes: 8_033_000_000 + 1_060_000_000 + 9_884_000,
+      top: [
+        { name: "images", bytes: 8_033_000_000 },
+        { name: "local volumes", bytes: 1_060_000_000 },
+        { name: "containers", bytes: 9_884_000 },
+      ],
+    });
+    assert.equal(parseDockerDf(""), null);
+  });
+});
+
+describe("otherPart", () => {
+  it("is what's used that nothing measured accounts for, never below 0", () => {
+    const parts = [
+      { key: "/a", label: "/a", bytes: 60, top: [] },
+      { key: "docker", label: "Docker", bytes: 25, top: [] },
+    ];
+    assert.equal(otherPart(100, parts).bytes, 15);
+    assert.equal(otherPart(50, parts).bytes, 0);
   });
 });

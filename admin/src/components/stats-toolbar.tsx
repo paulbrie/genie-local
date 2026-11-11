@@ -103,27 +103,28 @@ export function StatsToolbar() {
   );
 }
 
-/** Each gauge's own hue (its ring, its tooltip's bar), until it fills up: amber from 80%, red from 90%. */
 const GAUGES = {
-  cpu: { label: "CPU", icon: Cpu, hue: "text-sky-500", bar: "bg-sky-500" },
-  mem: { label: "Memory", icon: MemoryStick, hue: "text-violet-500", bar: "bg-violet-500" },
-  disk: { label: "Disk", icon: HardDrive, hue: "text-teal-500", bar: "bg-teal-500" },
+  cpu: { label: "CPU", icon: Cpu },
+  mem: { label: "Memory", icon: MemoryStick },
+  disk: { label: "Disk", icon: HardDrive },
 } as const;
 type GaugeKind = keyof typeof GAUGES;
 
-const level = (pct: number) => (pct >= 90 ? "crit" : pct >= 80 ? "warn" : "ok");
+/** How full, as a colour: green, orange from 70%, red from 90% (the ring's, and its tooltip's bars'). */
+const ringColor = (pct: number) => (pct >= 90 ? "text-destructive" : pct >= 70 ? "text-amber-500" : "text-emerald-500");
+const barColor = (pct: number) => (pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-amber-500" : "bg-emerald-500");
 
 /**
- * CPU, memory and disk as three small rings in one capsule, each its percent inside and its own hue (amber, then red
- * with a glow, as it fills up). The figures behind them are each one's tooltip: the percent, a bar, the sizes, and
- * for the CPU every core's load.
+ * CPU, memory and disk as three small rings, each its percent inside, green, orange as it fills up, red when nearly
+ * full. The figures behind them are each one's tooltip: the percent, a bar, the sizes, and for the CPU every core's
+ * load.
  */
 function Gauges({ stats, error }: { stats: SystemStats | null; error: boolean }) {
   const none = error ? "Stats unavailable" : "Loading…";
   const free = (total: number, used: number) => `${formatBytes(used)} of ${formatBytes(total)} · ${formatBytes(Math.max(0, total - used))} free`;
   return (
     <TooltipProvider delay={120} closeDelay={60}>
-      <div className="flex shrink-0 items-center gap-px rounded-full bg-muted/60 p-0.5 ring-1 ring-border/60">
+      <div className="flex shrink-0 items-center gap-1">
         <Gauge kind="cpu" percent={stats?.cpuPercent ?? null} detail={stats ? `${stats.cpuCores} ${stats.cpuCores === 1 ? "core" : "cores"}` : none} cores={stats?.cpuPerCore ?? null} />
         <Gauge kind="mem" percent={stats?.memPercent ?? null} detail={stats ? free(stats.memTotalBytes, stats.memUsedBytes) : none} />
         <Gauge kind="disk" percent={stats?.diskPercent ?? null} detail={stats ? free(stats.diskTotalBytes, stats.diskUsedBytes) : none} />
@@ -138,15 +139,12 @@ const CIRC = 2 * Math.PI * R;
 function Gauge({ kind, percent, detail, cores }: { kind: GaugeKind; percent: number | null; detail: string; cores?: number[] | null }) {
   const g = GAUGES[kind];
   const pct = percent == null ? 0 : Math.max(0, Math.min(100, percent));
-  const lvl = level(pct);
-  const hue = lvl === "crit" ? "text-red-500" : lvl === "warn" ? "text-amber-500" : g.hue;
-  const bar = lvl === "crit" ? "bg-red-500" : lvl === "warn" ? "bg-amber-500" : g.bar;
   const shown = percent == null ? "–" : `${Math.round(pct)}`;
   return (
     <Tooltip>
       <TooltipTrigger
         aria-label={`${g.label} ${percent == null ? "unknown" : `${Math.round(pct)}%`}, ${detail}`}
-        className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-background focus-visible:ring-2 focus-visible:ring-ring data-[popup-open]:bg-background"
+        className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <svg viewBox="0 0 24 24" className="absolute inset-[3px] -rotate-90" aria-hidden>
           <circle cx="12" cy="12" r={R} fill="none" strokeWidth="2.5" className="stroke-foreground/10" />
@@ -160,7 +158,7 @@ function Gauge({ kind, percent, detail, cores }: { kind: GaugeKind; percent: num
               strokeLinecap="round"
               stroke="currentColor"
               strokeDasharray={`${(pct / 100) * CIRC} ${CIRC}`}
-              className={cn("transition-[stroke-dasharray,color] duration-700 ease-out", hue, lvl === "crit" && "drop-shadow-[0_0_3px_currentColor]")}
+              className={cn("transition-[stroke-dasharray,color] duration-700 ease-out", ringColor(pct))}
             />
           )}
         </svg>
@@ -173,14 +171,14 @@ function Gauge({ kind, percent, detail, cores }: { kind: GaugeKind; percent: num
           <span className="ml-auto font-mono text-sm font-semibold tabular-nums">{percent == null ? "–" : `${Math.round(pct)}%`}</span>
         </div>
         <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-background/20">
-          <div className={cn("h-full rounded-full transition-[width] duration-700", bar)} style={{ width: `${pct}%` }} />
+          <div className={cn("h-full rounded-full transition-[width] duration-700", barColor(pct))} style={{ width: `${pct}%` }} />
         </div>
         {/* (the CPU: every core's load, a thin bar each) */}
         {cores && cores.length > 1 && (
           <div className="mt-2 flex h-6 items-end gap-px" aria-hidden>
             {cores.map((c, i) => (
               <div key={i} className="relative h-full flex-1 overflow-hidden rounded-[1px] bg-background/15">
-                <div className={cn("absolute inset-x-0 bottom-0", level(c) === "ok" ? g.bar : level(c) === "warn" ? "bg-amber-500" : "bg-red-500")} style={{ height: `${Math.max(4, Math.min(100, c))}%` }} />
+                <div className={cn("absolute inset-x-0 bottom-0", barColor(c))} style={{ height: `${Math.max(4, Math.min(100, c))}%` }} />
               </div>
             ))}
           </div>

@@ -164,6 +164,11 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     The icons and widgets are drawn as one arrangement against the left, centred or against the right
     (`desk.align`, `alignShift`); there a drop can land left of column 0, and the whole moves over to
     stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen.
+  · VS Code (code-server, outside the basePath) can be kept in the dock too (`VSCODE_ICON` in
+    `desk.pinned`, `VsCodeDockItem`): its desktop icon's and the Launchpad's menus keep it there.
+  · Drags (an icon, a widget's move or resize) also end when the window loses the pointer or the
+    focus mid-drag (`lostpointercapture`, `blur`), which sends no pointerup: they go back, rather
+    than stay drawn half-way with their drop target.
   · The dock resizes as macOS's does: drag the line between its parts up or down (`DockDivider`,
     `desk.dockSize`, 32–80 px). Windows and the icon grid keep clear of it at its size (`dockSpace`).
   · Settings (`/settings`, in `NAV`): panes listed in `SETTINGS_PANES` (also in ⌘K). General
@@ -172,26 +177,27 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
     made in a window's frame (a separate document) reaches the desktop around it.
   · Widgets (registry: `widget-registry.tsx`, `WIDGET_BODY` / `WIDGET_ICON`; `WIDGETS` /
-    `WIDGET_LABEL` / `WIDGETS_OFF` in lib/desktop.ts; shared parts, polling and `useOpenPath` in
-    `widget-parts.tsx`; framed by `WidgetFrame` in desktop.tsx). On at first (`status-widget.tsx`):
-    Terminals (waiting for you first, from `liveTerminals`); Projects (running, ports, memory,
-    tickets, /api/projects every 15 s); Disk (the system disk, /opt/project and /tmp with their
-    largest entries: /api/disk, `src/lib/disk-overview.ts`, du at `nice` in the background at most
-    every 5 min, the last figures served meanwhile); Memory (`more-widgets.tsx`: the server's RAM as
-    one segmented bar, a project a segment in its own colour and its Claude agents striped after it,
-    then the system, then what's free; rows a project, or a terminal with the switch; hover links a
-    row and its segments; from `projectMemory` and `liveTerminals`, no API of its own). Off at first (`more-widgets.tsx`, data in
-    `src/lib/widgets.ts` via /api/widgets/<id>, pure parts in `widgets-core.ts`, tested): Health (the
-    curated services and the containers, `healthOf`), Production errors (open Vercel issues this
-    week), Git (`git status` of every repo, 30 s cache), Load (/api/stats and its 1-day history as
-    sparklines), Tickets (in progress, then to do), Sign-ins (connected now, failed today). A row
-    opens the page behind it (`openPathWindow`). A right-click on the wallpaper (`DeskMenu`) lists
-    every widget, ticked when shown: one added goes on the spot under the pointer. Folded, a widget
-    is one icon row tall: its header as a glance (name over status, its count larger). Each sits on the icon grid, in cells: dragged anywhere by its
-    header, resized from any edge down to 3×3 icons (`moveCells` / `resizeCells`; inset 8px in its
-    cells, so two side by side are 16px apart), never over the other
-    (`placeWidgets`), the icons keeping off its cells (`deskWidgets` → `layoutIcons`' `blocked`). Its
-    spot, folded (its header's row only) or hidden is `desk.widgets`; the Spiridus menu shows or hides each.
+    `WIDGET_LABEL` / `WIDGETS_OFF` / `WIDGET_APP` in lib/desktop.ts; shared parts in `widget-parts.tsx`:
+    `WidgetHeader`, `usePolled`, `useOpenPath` / `useOpenApp`, `useWidgetView` + `ViewSwitch` for a
+    widget's own remembered choices, `desk.widgets[id].views`; framed by `WidgetFrame` in desktop.tsx).
+    On at first: Terminals, Projects (`status-widget.tsx`); Disk (`disk-widget.tsx`: /opt/project,
+    /tmp, the home folder, /usr, /var with their largest entries, Docker from `docker system df`, and
+    the rest as Other; as a list, a bar, a donut or a squarified treemap, `src/lib/treemap.ts`; /api/disk,
+    `disk-overview.ts`, du at `nice` in the background at most every 10 min); Memory
+    (`memory-widget.tsx`: now, the RAM as one segmented bar by project, agents striped, or by
+    terminal; or over 24 h / 7 / 30 days (30 by default), a stacked area from the per-minute history,
+    /api/widgets/memory, `memory-history-core.ts`); Processes (the busiest by CPU or memory, named by
+    port); Docker (containers with their CPU and memory, `docker stats` cached 15 s, and the images).
+    Off at first (`more-widgets.tsx`, data in `src/lib/widgets.ts` via /api/widgets/<id>, pure parts in
+    `widgets-core.ts`): Health, Production errors, Git, Load, Tickets (in progress, to do, recently
+    done), Sign-ins. A row opens the page behind it (`openPathWindow`); a widget with an app has the
+    app's icon in its header. Fold and hide show on hover (always on a device that can't hover). A
+    right-click on the wallpaper (`DeskMenu`) lists every widget: one added goes under the pointer.
+    Folded, a widget is one icon row tall, a glance. A window shorter than the arrangement doesn't
+    squeeze it: the grid keeps the rows it needs and the desktop scrolls (icons never placed by hand
+    fill the rows that show first, `layoutIcons`' `flowRows`). One too narrow for it
+    (`arrangementFits`) stacks the desktop (`stackDesktop`): the widgets one a row the whole width,
+    the icons under them, scrolling, nothing dragged until there's room again.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
     sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
     `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal

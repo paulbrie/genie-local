@@ -128,7 +128,7 @@ export function unmaximizeUnder(restored: Rect, max: Rect, px: number): Rect {
 
 /** What the desktop remembers on this browser (localStorage). */
 export type DeskSaved = {
-  /** Apps kept in the dock, in order. */
+  /** Apps kept in the dock, in order (by href; VS Code by VSCODE_ICON). */
   pinned: string[];
   /** Each app window's place, by app href. */
   geoms: Record<string, WinGeom>;
@@ -147,17 +147,19 @@ export type DeskSaved = {
 export type DeskAlign = "left" | "center" | "right";
 
 /**
- * The desktop's widgets, among the icons: the terminals, the projects, the disk and the memory, and the ones that start off
+ * The desktop's widgets, among the icons: the terminals, the projects, the disk, the memory, the processes and Docker, and the ones that start off
  * (WIDGETS_OFF: a right-click on the desktop adds them): the services' health, the production errors, the repos'
  * state, the load, the tickets and the sign-ins.
  */
-export const WIDGETS = ["terminals", "projects", "disk", "memory", "health", "errors", "git", "load", "tickets", "signins"] as const;
+export const WIDGETS = ["terminals", "projects", "disk", "memory", "processes", "docker", "health", "errors", "git", "load", "tickets", "signins"] as const;
 export type WidgetId = (typeof WIDGETS)[number];
 export const WIDGET_LABEL: Record<WidgetId, string> = {
   terminals: "Terminals",
   projects: "Projects",
   disk: "Disk",
   memory: "Memory",
+  processes: "Processes",
+  docker: "Docker",
   health: "Health",
   errors: "Production errors",
   git: "Git",
@@ -165,13 +167,27 @@ export const WIDGET_LABEL: Record<WidgetId, string> = {
   tickets: "Tickets",
   signins: "Sign-ins",
 };
+/** The app each widget is a glance at, where there's one: its header has the app's icon, to open it. */
+export const WIDGET_APP: Partial<Record<WidgetId, string>> = {
+  terminals: "/terminals",
+  projects: "/projects",
+  processes: "/processes",
+  docker: "/docker",
+  health: "/services",
+  tickets: "/tasks",
+  signins: "/logins",
+};
+
 /** The widgets off the desktop until they're put on it. */
 export const WIDGETS_OFF: ReadonlySet<WidgetId> = new Set(["health", "errors", "git", "load", "tickets", "signins"]);
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
 
-/** A widget as remembered: absent `mode` is its default (WIDGETS_OFF: hidden; else open). */
-export type WidgetSaved = { at?: CellRect; mode?: WidgetMode };
+/**
+ * A widget as remembered: absent `mode` is its default (WIDGETS_OFF: hidden; else open); `views`, its own choices of
+ * how to show, by name (the Disk's chart, the Memory's split and period).
+ */
+export type WidgetSaved = { at?: CellRect; mode?: WidgetMode; views?: Record<string, string> };
 
 /** What a widget is now: open, folded or off the desktop (its default when nothing says). */
 export function widgetMode(saved: DeskSaved["widgets"], id: WidgetId): WidgetMode {
@@ -195,7 +211,7 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   const s = v as Record<string, unknown>;
   if (Array.isArray(s.pinned))
-    out.pinned = [...new Set(s.pinned.filter((a): a is string => typeof a === "string" && known.has(a)))];
+    out.pinned = [...new Set(s.pinned.filter((a): a is string => typeof a === "string" && (known.has(a) || a === VSCODE_ICON)))];
   if (s.icons && typeof s.icons === "object" && !Array.isArray(s.icons)) {
     const icons: Record<string, Cell> = {};
     for (const [id, cell] of Object.entries(s.icons as Record<string, unknown>)) {
@@ -254,8 +270,9 @@ function covered(spans: readonly CellRect[]): Set<string> {
 /**
  * Where every icon goes on a grid of `cols` × `rows`, off the cells `blocked` covers (the widgets'): its saved spot
  * when that's on the grid and free; a saved one that no longer fits (a smaller window, a widget over it) the nearest
- * free spot to it; one never placed the first free spot in the default order (down the first column, then the next).
- * Past a full grid, more columns.
+ * free spot to it; one never placed the first free spot in the default order: down the first column, then the next,
+ * `flowRows` deep (the rows the window shows; the grid's own by default), and when those are full, row after row
+ * under them (the desktop scrolls), never past the last column.
  */
 export function layoutIcons(
   ids: readonly string[],
@@ -263,6 +280,7 @@ export function layoutIcons(
   cols: number,
   rows: number,
   blocked: readonly CellRect[] = [],
+  flowRows: number = rows,
 ): Record<string, Cell> {
   const out: Record<string, Cell> = {};
   const taken = covered(blocked);
@@ -294,12 +312,15 @@ export function layoutIcons(
       }
     if (best) put(id, best);
   }
-  // 3. the rest (never placed, or no room left): the first free spot, column by column
+  // 3. the rest (never placed, or no room left): the first free spot, column by column in the rows that show, then
+  // row by row under them
+  const deep = Math.max(1, Math.min(flowRows, rows));
+  const nth = (n: number): Cell => (n < cols * deep ? { c: Math.floor(n / deep), r: n % deep } : { c: (n - cols * deep) % cols, r: deep + Math.floor((n - cols * deep) / cols) });
   let next = 0;
   for (const id of ids) {
     if (out[id]) continue;
     for (;; next++) {
-      const c = { c: Math.floor(next / rows), r: next % rows };
+      const c = nth(next);
       if (!taken.has(cellKey(c))) {
         put(id, c);
         break;
@@ -371,6 +392,8 @@ export function defaultWidgetAt(id: WidgetId, cols: number): CellRect {
   if (id === "projects") return { c: cols - w, r: 3, w, h: 4 };
   if (id === "disk") return { c: cols - 2 * w, r: 0, w, h: 4 };
   if (id === "memory") return { c: cols - 3 * w, r: 0, w, h: 4 };
+  if (id === "processes") return { c: cols - 2 * w, r: 4, w, h: 3 };
+  if (id === "docker") return { c: cols - 3 * w, r: 4, w, h: 3 };
   return { c: cols - w, r: 0, w, h: id === "tickets" ? 4 : 3 };
 }
 
@@ -405,16 +428,53 @@ export function placeWidgets(wants: readonly { id: string; at: CellRect }[], col
   return out;
 }
 
+/** Where the widgets that show (not hidden) want to be: their spot (or their default); a folded one, its header's row. */
+export function widgetWants(saved: DeskSaved["widgets"], cols: number): { id: WidgetId; at: CellRect }[] {
+  return WIDGETS.filter((id) => widgetMode(saved, id) !== "hidden").map((id) => {
+    const at = saved?.[id]?.at ?? defaultWidgetAt(id, cols);
+    return { id, at: widgetMode(saved, id) === "collapsed" ? { ...at, h: 1 } : at };
+  });
+}
+
 /**
  * The widgets that show (not hidden), placed on a grid of `cols` × `rows` (placeWidgets). A folded one takes only
  * the row its header is on, so the icons can have the rest.
  */
 export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: number): Partial<Record<WidgetId, CellRect>> {
-  const wants = WIDGETS.filter((id) => widgetMode(saved, id) !== "hidden").map((id) => {
-    const at = saved?.[id]?.at ?? defaultWidgetAt(id, cols);
-    return { id, at: widgetMode(saved, id) === "collapsed" ? { ...at, h: 1 } : at };
-  });
-  return placeWidgets(wants, cols, rows);
+  return placeWidgets(widgetWants(saved, cols), cols, rows);
+}
+
+/**
+ * Whether the arrangement fits the desktop: every widget where it wants to be (not pushed onto the grid, nor off
+ * another), and every icon within the grid's columns. When it doesn't (a narrower window), the desktop is stacked.
+ */
+export function arrangementFits(wants: readonly { id: string; at: CellRect }[], placed: Readonly<Record<string, CellRect | undefined>>, icons: Readonly<Record<string, Cell>>, cols: number): boolean {
+  const same = (a: CellRect | undefined, b: CellRect) => !!a && a.c === b.c && a.r === b.r && a.w === b.w && a.h === b.h;
+  return wants.every((w) => same(placed[w.id], w.at)) && Object.values(icons).every((c) => c.c < cols);
+}
+
+/**
+ * The stacked desktop (a window too narrow for the arrangement): the widgets one a row, the whole width, in reading
+ * order (top to bottom, then left to right, as they were placed), each as tall as it was (in rows); then the icons,
+ * a row after another, under them. Returns each widget's rect (in pixels, inset as cellsRect's), each icon's cell,
+ * and the rows it all takes.
+ */
+export function stackDesktop(
+  wants: readonly { id: string; at: CellRect }[],
+  iconIds: readonly string[],
+  W: number,
+): { widgets: Record<string, Rect>; icons: Record<string, Cell>; rows: number } {
+  const order = [...wants].sort((a, b) => a.at.r - b.at.r || a.at.c - b.at.c);
+  const widgets: Record<string, Rect> = {};
+  let row = 0;
+  for (const w of order) {
+    const r = cellsRect({ c: 0, r: row, w: 1, h: w.at.h });
+    widgets[w.id] = { ...r, w: Math.max(0, W - 2 * ICON_GRID.pad - 2 * (r.x - ICON_GRID.pad)) };
+    row += w.at.h;
+  }
+  const perRow = Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x));
+  const icons = Object.fromEntries(iconIds.map((id, i) => [id, { c: i % perRow, r: row + Math.floor(i / perRow) }]));
+  return { widgets, icons, rows: row + Math.ceil(iconIds.length / perRow) };
 }
 
 /**
@@ -495,8 +555,12 @@ function parseWidgets(s: Record<string, unknown>): DeskSaved["widgets"] {
     const one: WidgetSaved = {};
     const v = src?.[id];
     if (v && typeof v === "object") {
-      const { at, mode } = v as Record<string, unknown>;
+      const { at, mode, views } = v as Record<string, unknown>;
       if (mode === "open" || mode === "collapsed" || mode === "hidden") one.mode = mode;
+      if (views && typeof views === "object" && !Array.isArray(views)) {
+        const ok = Object.entries(views).filter((e): e is [string, string] => /^[a-z]{1,20}$/.test(e[0]) && typeof e[1] === "string" && /^[a-z0-9-]{1,20}$/.test(e[1]));
+        if (ok.length) one.views = Object.fromEntries(ok);
+      }
       if (at && typeof at === "object") {
         const { c, r, w, h } = at as Record<string, unknown>;
         if (isInt(c) && isInt(r) && isInt(w) && isInt(h) && c >= 0 && r >= 0)
@@ -506,7 +570,7 @@ function parseWidgets(s: Record<string, unknown>): DeskSaved["widgets"] {
       if (s.widget === "collapsed" || s.widget === "hidden") one.mode = s.widget;
       else if (Array.isArray(s.widgetFolded) && s.widgetFolded.includes(id)) one.mode = "collapsed";
     }
-    if (one.mode || one.at) out[id] = one;
+    if (one.mode || one.at || one.views) out[id] = one;
   }
   return Object.keys(out).length ? out : undefined;
 }

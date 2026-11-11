@@ -1,9 +1,11 @@
 "use client";
 
-import { FolderKanban, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListTodo, type LucideIcon, MemoryStick, SquareTerminal, TriangleAlert } from "lucide-react";
+import { Container, Cpu, FolderKanban, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListTodo, type LucideIcon, MemoryStick, SquareTerminal, TriangleAlert } from "lucide-react";
 
-import { ErrorsWidget, GitWidget, HealthWidget, LoadWidget, MemoryWidget, SigninsWidget, TicketsWidget } from "@/components/desktop/more-widgets";
-import { DiskWidget, ProjectsWidget, TerminalsWidget } from "@/components/desktop/status-widget";
+import { MemoryWidget } from "@/components/desktop/memory-widget";
+import { DockerWidget, ErrorsWidget, GitWidget, HealthWidget, LoadWidget, ProcessesWidget, SigninsWidget, TicketsWidget } from "@/components/desktop/more-widgets";
+import { DiskWidget } from "@/components/desktop/disk-widget";
+import { ProjectsWidget, TerminalsWidget } from "@/components/desktop/status-widget";
 import type { WidgetId } from "@/lib/desktop";
 
 /** Each widget's glyph, as its header and the menus that show or hide it have it. */
@@ -12,6 +14,8 @@ export const WIDGET_ICON: Record<WidgetId, LucideIcon> = {
   projects: FolderKanban,
   disk: HardDrive,
   memory: MemoryStick,
+  processes: Cpu,
+  docker: Container,
   health: HeartPulse,
   errors: TriangleAlert,
   git: GitBranch,
@@ -26,6 +30,8 @@ export const WIDGET_BODY: Record<WidgetId, (p: { folded: boolean }) => React.Rea
   projects: ProjectsWidget,
   disk: DiskWidget,
   memory: MemoryWidget,
+  processes: ProcessesWidget,
+  docker: DockerWidget,
   health: HealthWidget,
   errors: ErrorsWidget,
   git: GitWidget,

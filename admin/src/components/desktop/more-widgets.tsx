@@ -1,18 +1,14 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Bot, Container, GitBranch, Gauge, HeartPulse, KeyRound, ListTodo, MemoryStick, Server, TriangleAlert } from "lucide-react";
-import { useState } from "react";
-import { useSubject } from "subjecto/react";
+import { ArrowDown, ArrowUp, Check, Container, Cpu, GitBranch, Gauge, HeartPulse, KeyRound, ListTodo, Server, TriangleAlert } from "lucide-react";
 
-import { ago, Empty, ROW, Subhead, useOpenPath, usePolled, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
+import { ago, Empty, ROW, Subhead, useOpenPath, usePolled, useWidgetView, ViewSwitch, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
 import { StatusDot } from "@/components/ui/status-dot";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { formatBytes } from "@/lib/format";
 import type { SystemStats } from "@/lib/stats";
 import { cn } from "@/lib/utils";
 import type { HealthItem, HealthState, RepoState } from "@/lib/widgets-core";
-import { projectMemory } from "@/store/project-memory";
-import { liveTerminals, openTerminal } from "@/store/terminals";
 
 // The desktop's widgets that start off (a right-click on the desktop adds them): Health, Production errors, Git,
 // Load, Tickets and Sign-ins. Each a glance, polling /api/widgets/<id> (Load: /api/stats), its rows opening the page
@@ -281,10 +277,11 @@ function Spark({
 }
 
 type Ticket = { id: number; slug: string; title: string; status: string; assignee: string | null };
+type DoneTicket = Ticket & { at: string };
 
-/** Tickets: what's in progress (and who has it), then what's to do, across the projects; a row opens the ticket. */
+/** Tickets: what's in progress (and who has it), then what's to do, across the projects, then the last ones done; a row opens the ticket. */
 export function TicketsWidget({ folded }: { folded: boolean }) {
-  const { data, failed } = usePolled<{ inProgress: number; open: number; tasks: Ticket[] }>("/api/widgets/tickets", 30_000);
+  const { data, failed } = usePolled<{ inProgress: number; open: number; tasks: Ticket[]; done: DoneTicket[] }>("/api/widgets/tickets", 30_000);
   const open = useOpenPath();
   const tasks = data?.tasks ?? [];
   return (
@@ -321,6 +318,24 @@ export function TicketsWidget({ folded }: { folded: boolean }) {
               </button>
             </div>
           ))}
+          {!!data?.done.length && (
+            <>
+              <Subhead>Recently done</Subhead>
+              {data.done.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => open(`/projects/${encodeURIComponent(t.slug)}/tasks?task=${t.id}`)}
+                  title={`${t.slug} #${t.id}: ${t.title}, done ${ago(t.at)}${t.assignee ? ` (by ${t.assignee})` : ""}`}
+                  className={cn(ROW, "opacity-75")}
+                >
+                  <Check className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                  <span className="min-w-0 truncate line-through decoration-foreground/25">{t.title}</span>
+                  <span className="ml-auto shrink-0 text-[10px] opacity-60">{ago(t.at)}</span>
+                </button>
+              ))}
+            </>
+          )}
         </WidgetList>
       )}
     </>
@@ -379,195 +394,140 @@ export function SigninsWidget({ folded }: { folded: boolean }) {
   );
 }
 
-/** Distinct, steady colours for the memory bar's segments (a name's hue; the next free one when two would match). */
-const PALETTE = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#14b8a6", "#6366f1", "#d946ef", "#84cc16", "#f97316"];
-
-function colorsFor(names: readonly string[]): Map<string, string> {
-  const out = new Map<string, string>();
-  const used = new Set<number>();
-  for (const n of names) {
-    let h = 0;
-    for (const ch of n) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    let i = h % PALETTE.length;
-    for (let k = 0; k < PALETTE.length && used.has(i); k++) i = (i + 1) % PALETTE.length;
-    used.add(i);
-    out.set(n, PALETTE[i]);
-  }
-  return out;
-}
-
-/** A segment of the bar, or a row under it: its own part, and (projects) its Claude agents, drawn striped after it. */
-type Share = { key: string; label: string; bytes: number; agents: number; color: string; open: () => void; title: string };
+type Proc = { pid: number; ppid: number; user: string; cpu: number; mem: number; name: string; port: string };
+/** The admin's own servers, by port (their process is a "MainThread"): prod and dev, as this box runs them. */
+const ADMIN_PORTS: Record<string, string> = { "3002": "admin", "3003": "admin-dev" };
 
 /**
- * Memory: the server's RAM as one bar, in the way of macOS's storage bar: each project a segment in its colour, its
- * Claude agents striped after it, then the system and everything else, then what's free; under it the four totals,
- * and a row a project (its share drawn behind it). Hovering a row lights its segments up, and the other way round.
- * By terminal instead with the switch. The figures are the top bar's (projectMemory, liveTerminals), live.
+ * Processes: the busiest ones, by CPU or by memory (the switch, remembered), each its figure drawn behind it, the
+ * port it listens on; named for what they are where the process name says little (the admin's servers, a project's
+ * dev server by its port). From the stats daemon's latest look (/api/processes, every 5 s); a row opens Processes.
  */
-export function MemoryWidget({ folded }: { folded: boolean }) {
-  const [status] = useSubject(projectMemory);
-  const [terms] = useSubject(liveTerminals);
-  const [view, setView] = useState<"projects" | "terminals">("projects");
-  const [hot, setHot] = useState<string | null>(null);
-  const openPath = useOpenPath();
-  const total = status?.server.totalBytes ?? 0;
-  const free = status?.server.availableBytes ?? 0;
-  const used = Math.max(0, total - free);
-
-  const projs = (status?.projects ?? []).filter((p) => p.bytes > 0 || p.agentBytes > 0).sort((a, b) => b.bytes + b.agentBytes - (a.bytes + a.agentBytes));
-  const projBytes = projs.reduce((n, p) => n + p.bytes, 0);
-  const agentBytes = projs.reduce((n, p) => n + p.agentBytes, 0);
-  const projColors = colorsFor(projs.map((p) => p.slug));
-  const termList = terms.filter((t) => t.memBytes).sort((a, b) => (b.memBytes ?? 0) - (a.memBytes ?? 0));
-  const termColors = colorsFor(termList.map((t) => t.name));
-  const pct = (b: number) => (total ? (b / total) * 100 : 0);
-
-  const shares: Share[] =
-    view === "projects"
-      ? projs.map((p) => ({
-          key: p.slug,
-          label: p.slug,
-          bytes: p.bytes,
-          agents: p.agentBytes,
-          color: projColors.get(p.slug)!,
-          open: () => openPath(`/projects/${encodeURIComponent(p.slug)}/memory`),
-          title: `${p.slug}: ${formatBytes(p.bytes)}${p.agentBytes ? ` + ${formatBytes(p.agentBytes)} in Claude agents` : ""} · ${pct(p.bytes + p.agentBytes).toFixed(1)}% of RAM`,
-        }))
-      : termList.map((t) => ({
-          key: t.name,
-          label: t.name,
-          bytes: t.memBytes ?? 0,
-          agents: 0,
-          color: termColors.get(t.name)!,
-          open: () => openTerminal(t.name),
-          title: `${t.name}: ${formatBytes(t.memBytes ?? 0)} · ${pct(t.memBytes ?? 0).toFixed(1)}% of RAM`,
-        }));
-  const shown = shares.reduce((n, s) => n + s.bytes + s.agents, 0);
-  // (terminals: their memory is their projects' too, so the rest is everything else that's in use)
-  const rest = Math.max(0, used - shown);
-  const top = Math.max(1, ...shares.map((s) => s.bytes + s.agents));
-  const stripes = (c: string) => `repeating-linear-gradient(135deg, ${c} 0 2px, color-mix(in oklab, ${c} 35%, transparent) 2px 4px)`;
-  // (a legend's swatch for many: their colours round a little wheel)
-  const wheel = (cs: string[]) => (cs.length > 1 ? `conic-gradient(${cs.slice(0, 6).join(", ")}, ${cs[0]})` : (cs[0] ?? "#a1a1aa"));
-  const dim = (key: string) => hot !== null && hot !== key;
-
+export function ProcessesWidget({ folded }: { folded: boolean }) {
+  const { data, failed } = usePolled<{ processes: Proc[] }>("/api/processes", 5000);
+  const { data: projs } = usePolled<{ projects?: ProjectNavItem[] }>("/api/projects", 30_000);
+  const [by, setBy] = useWidgetView<"cpu" | "mem">("processes", "sort", ["cpu", "mem"], "cpu");
+  const open = useOpenPath();
+  const owner = new Map((projs?.projects ?? []).flatMap((p) => p.ports.map((port) => [String(port), p.slug] as const)));
+  const label = (p: Proc) =>
+    ADMIN_PORTS[p.port] ?? owner.get(p.port) ?? (p.name === "MainThread" ? "node" : p.name.replace(/ \(v?\d*$/, ""));
+  const list = [...(data?.processes ?? [])].sort((a, b) => (by === "cpu" ? b.cpu - a.cpu || b.mem - a.mem : b.mem - a.mem)).slice(0, 30);
+  const value = (p: Proc) => (by === "cpu" ? p.cpu : p.mem);
+  const top = Math.max(by === "cpu" ? 1 : 64, ...list.map(value));
+  const show = (p: Proc, m: "cpu" | "mem") => (m === "cpu" ? `${p.cpu.toFixed(1)}%` : p.mem > 0 ? formatBytes(p.mem * 1024 * 1024) : "—");
+  const color = by === "cpu" ? "#0ea5e9" : "#8b5cf6";
+  const lead = list[0];
   return (
     <>
       <WidgetHeader
-        id="memory"
-        icon={MemoryStick}
-        title="Memory"
-        count={status ? `${Math.round(pct(used))}%` : null}
-        note={status ? `${formatBytes(free)} free` : ""}
+        id="processes"
+        icon={Cpu}
+        title="Processes"
+        count={lead ? show(lead, by) : null}
+        note={lead ? `${label(lead)} ${by === "cpu" ? "busiest" : "biggest"}` : failed ? "couldn't read" : ""}
         folded={folded}
       />
       {!folded && (
         <WidgetList>
-          {!status && <Empty>Loading…</Empty>}
-          {status && (
-            <div className="flex flex-col gap-2 pr-2 pb-1.5 pl-7">
-              {/* (the headline: how much is in use, of how much; the view's switch at its right) */}
-              <div className="flex items-end gap-2">
-                <span className="text-xl leading-none font-semibold tracking-tight tabular-nums">{formatBytes(used)}</span>
-                <span className="pb-px text-[11px] leading-none text-muted-foreground">used of {formatBytes(total)}</span>
-                <div role="group" aria-label="Show memory by" className="ml-auto flex shrink-0 rounded-md bg-foreground/[0.06] p-0.5 text-[10px]">
-                {(["projects", "terminals"] as const).map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    aria-pressed={view === v}
-                    onClick={() => setView(v)}
-                    className={cn("rounded px-2 py-0.5 capitalize text-muted-foreground transition-colors", view === v && "bg-background text-foreground shadow-sm")}
-                  >
-                    {v}
-                  </button>
-                ))}
-                </div>
-              </div>
-              {/* the bar: every share, then the rest in use, then (the track) what's free */}
-              <TooltipProvider delay={80} closeDelay={40}>
-                <div className="flex h-4 w-full gap-[2px] overflow-hidden rounded-full bg-foreground/[0.07] shadow-inner" onPointerLeave={() => setHot(null)}>
-                  {shares.map((s) => (
-                    <Tooltip key={s.key}>
-                      <TooltipTrigger
-                        render={<div />}
-                        onPointerEnter={() => setHot(s.key)}
-                        className="flex h-full shrink-0 gap-[1px] transition-opacity duration-150"
-                        style={{ width: `${pct(s.bytes + s.agents)}%`, minWidth: 3, opacity: dim(s.key) ? 0.3 : 1 }}
-                      >
-                        <div className="h-full" style={{ flex: s.bytes || 0.0001, background: s.color }} />
-                        {s.agents > 0 && <div className="h-full" style={{ flex: s.agents, background: stripes(s.color) }} />}
-                      </TooltipTrigger>
-                      <TooltipContent side="top">{s.title}</TooltipContent>
-                    </Tooltip>
-                  ))}
-                  {rest > 0 && (
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={<div />}
-                        onPointerEnter={() => setHot("rest")}
-                        className="h-full shrink-0 bg-foreground/30 transition-opacity duration-150"
-                        style={{ width: `${pct(rest)}%`, opacity: dim("rest") ? 0.3 : 1 }}
-                      />
-                      <TooltipContent side="top">
-                        {view === "projects" ? "System and everything else" : "Everything else in use"}: {formatBytes(rest)}
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-              </TooltipProvider>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
-                {(view === "projects"
-                  ? [
-                      { label: "Projects", bytes: projBytes, swatch: <span className="size-2 rounded-full" style={{ background: wheel(shares.map((x) => x.color)) }} /> },
-                      { label: "Agents", bytes: agentBytes, swatch: <span className="size-2 rounded-full" style={{ background: stripes("#a1a1aa") }} /> },
-                      { label: "System", bytes: rest, swatch: <span className="size-2 rounded-full bg-foreground/30" /> },
-                      { label: "Free", bytes: free, swatch: <span className="size-2 rounded-full bg-foreground/[0.07] ring-1 ring-foreground/15" /> },
-                    ]
-                  : [
-                      { label: "Terminals", bytes: shown, swatch: <span className="size-2 rounded-full" style={{ background: wheel(shares.map((x) => x.color)) }} /> },
-                      { label: "Other", bytes: rest, swatch: <span className="size-2 rounded-full bg-foreground/30" /> },
-                      { label: "Free", bytes: free, swatch: <span className="size-2 rounded-full bg-foreground/[0.07] ring-1 ring-foreground/15" /> },
-                    ]
-                ).map((x) => (
-                  <span key={x.label} className="flex items-center gap-1.5">
-                    {x.swatch}
-                    {x.label}
-                    <span className="ml-auto font-mono tabular-nums text-foreground/80">{formatBytes(x.bytes)}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {status && !shares.length && <Empty>{view === "projects" ? "Nothing running in a project." : "No terminal's memory known yet."}</Empty>}
-          {shares.map((s) => (
+          <div className="flex items-center gap-2 pr-2 pb-1.5 pl-7 text-[11px] text-muted-foreground">
+            <span>{data ? `${data.processes.length} busiest` : ""}</span>
+            <span className="ml-auto" />
+            <ViewSwitch
+              label="Sort the processes by"
+              value={by}
+              onChange={setBy}
+              options={[
+                { value: "cpu", label: "CPU" },
+                { value: "mem", label: "Memory" },
+              ]}
+            />
+          </div>
+          {!data && <Empty>{failed ? "Couldn't read the processes." : "Loading…"}</Empty>}
+          {list.map((p) => (
             <button
-              key={s.key}
+              key={p.pid}
               type="button"
-              onClick={s.open}
-              onPointerEnter={() => setHot(s.key)}
-              onPointerLeave={() => setHot(null)}
-              title={s.title}
-              className={cn(ROW, "relative isolate overflow-hidden", hot === s.key && "text-foreground")}
+              onClick={() => open("/processes")}
+              title={`${p.name} (pid ${p.pid}, ${p.user})${p.port ? ` on :${p.port}` : ""}: ${show(p, "cpu")} CPU, ${show(p, "mem")}`}
+              className={cn(ROW, "relative isolate overflow-hidden")}
             >
-              {/* (its share, drawn behind it in its colour) */}
-              <span
-                aria-hidden
-                className="absolute inset-y-0 left-0 -z-10 rounded-md transition-[width,opacity] duration-300"
-                style={{ width: `${((s.bytes + s.agents) / top) * 100}%`, background: s.color, opacity: hot === s.key ? 0.22 : 0.1 }}
-              />
-              <span className="size-2 shrink-0 rounded-full" style={{ background: s.color }} />
-              <span className="min-w-0 truncate">{s.label}</span>
-              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{s.bytes ? formatBytes(s.bytes) : "—"}</span>
-              {s.agents > 0 && (
-                <span className="flex shrink-0 items-center gap-0.5 font-mono text-[10px] tabular-nums opacity-60" title="Claude sessions working in it">
-                  <Bot className="size-2.5" />
-                  {formatBytes(s.agents)}
-                </span>
-              )}
+              {/* (its share of the busiest's, drawn behind it) */}
+              <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-md opacity-[0.12] transition-[width] duration-500" style={{ width: `${(value(p) / top) * 100}%`, background: color }} />
+              <span className="min-w-0 truncate text-foreground/90">{label(p)}</span>
+              <span className="shrink-0 font-mono text-[9px] opacity-50">{p.pid}</span>
+              {p.port && <span className="shrink-0 font-mono text-[9px] text-emerald-700 dark:text-emerald-400">:{p.port}</span>}
+              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{show(p, by)}</span>
+              <span className="w-12 shrink-0 text-right font-mono text-[9px] tabular-nums opacity-50">{show(p, by === "cpu" ? "mem" : "cpu")}</span>
             </button>
           ))}
+        </WidgetList>
+      )}
+    </>
+  );
+}
+
+type DockerRow = { id: string; name: string; image: string; state: string; status: string; ports: string; cpu: number | null; memBytes: number | null };
+
+/**
+ * Docker: every container, the running first (the biggest first), with its image, the port it publishes, its memory
+ * and CPU (its memory drawn behind it), then how many images and how big; a row opens Docker.
+ */
+export function DockerWidget({ folded }: { folded: boolean }) {
+  const { data, failed } = usePolled<{ available: boolean; containers: DockerRow[]; images: { count: number; bytes: number } }>("/api/widgets/docker", 15_000);
+  const open = useOpenPath();
+  const list = data?.containers ?? [];
+  const running = list.filter((c) => c.state === "running");
+  const mem = running.reduce((n, c) => n + (c.memBytes ?? 0), 0);
+  const top = Math.max(1, ...list.map((c) => c.memBytes ?? 0));
+  // (the host port a container publishes, the first if several)
+  const port = (p: string) => /:(\d+)->/.exec(p)?.[1] ?? null;
+  const state = (c: DockerRow): { color: string; label: string; pulse?: boolean } =>
+    c.state === "running"
+      ? c.status.includes("(unhealthy)")
+        ? { color: "bg-red-500", label: "Unhealthy", pulse: true }
+        : { color: "bg-emerald-500", label: "Running" }
+      : c.state === "restarting"
+        ? { color: "bg-amber-500", label: "Restarting", pulse: true }
+        : { color: "bg-muted-foreground/30", label: c.status };
+  return (
+    <>
+      <WidgetHeader
+        id="docker"
+        icon={Container}
+        title="Docker"
+        count={data ? `${running.length}/${list.length}` : null}
+        note={!data ? (failed ? "couldn't read" : "") : data.available ? `${running.length} running · ${formatBytes(mem)}` : "not available"}
+        folded={folded}
+      />
+      {!folded && (
+        <WidgetList>
+          {!data && <Empty>{failed ? "Couldn't read Docker." : "Loading…"}</Empty>}
+          {data && !data.available && <Empty>Docker isn&apos;t answering.</Empty>}
+          {data?.available && !list.length && <Empty>No containers.</Empty>}
+          {list.map((c) => {
+            const s = state(c);
+            const p = port(c.ports);
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => open("/docker")}
+                title={`${c.name} (${c.image}): ${c.status}${c.ports ? ` · ${c.ports}` : ""}${c.memBytes != null ? ` · ${formatBytes(c.memBytes)}, ${c.cpu?.toFixed(1)}% CPU` : ""}`}
+                className={cn(ROW, "relative isolate overflow-hidden", c.state !== "running" && "opacity-60")}
+              >
+                {c.memBytes ? (
+                  <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-md bg-indigo-500 opacity-[0.1]" style={{ width: `${(c.memBytes / top) * 100}%` }} />
+                ) : null}
+                <StatusDot color={s.color} pulse={s.pulse} size="sm" label={s.label} />
+                <span className="min-w-0 truncate text-foreground/90">{c.name}</span>
+                <span className="min-w-0 truncate text-[9px] opacity-50">{c.image.split("/").pop()}</span>
+                {p && <span className="shrink-0 font-mono text-[9px] text-emerald-700 dark:text-emerald-400">:{p}</span>}
+                <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{c.memBytes != null ? formatBytes(c.memBytes) : "—"}</span>
+                <span className="w-10 shrink-0 text-right font-mono text-[9px] tabular-nums opacity-55">{c.cpu != null ? `${c.cpu.toFixed(1)}%` : ""}</span>
+              </button>
+            );
+          })}
+          {data?.available && <Empty>{`${data.images.count} image${data.images.count === 1 ? "" : "s"} · ${formatBytes(data.images.bytes)}`}</Empty>}
         </WidgetList>
       )}
     </>

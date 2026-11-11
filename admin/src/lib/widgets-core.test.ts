@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { healthOf, parseGitStatus } from "./widgets-core";
+import { healthOf, parseDockerStats, parseGitStatus } from "./widgets-core";
 
 describe("healthOf", () => {
   const svc = (unit: string, active: string, sub = "running", curated = true) => ({ unit, active, sub, curated });
@@ -47,5 +47,14 @@ describe("parseGitStatus", () => {
   });
   it("is clean with no upstream, and has no branch when detached", () => {
     assert.deepEqual(parseGitStatus("# branch.oid abc\n# branch.head (detached)\n"), { branch: null, upstream: false, ahead: 0, behind: 0, changed: 0, untracked: 0 });
+  });
+});
+
+describe("parseDockerStats", () => {
+  it("reads each container's CPU and memory, binary and decimal sizes alike", () => {
+    const m = parseDockerStats(["db-1\t2.47%\t22.85MiB / 31.34GiB", "web\t0.00%\t1.5GiB / 31.34GiB", "x\t--\t512kB / 1GB", ""].join("\n"));
+    assert.deepEqual(m.get("db-1"), { cpu: 2.47, memBytes: Math.round(22.85 * 1024 ** 2) });
+    assert.equal(m.get("web")?.memBytes, Math.round(1.5 * 1024 ** 3));
+    assert.deepEqual(m.get("x"), { cpu: 0, memBytes: 512_000 });
   });
 });

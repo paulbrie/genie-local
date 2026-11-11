@@ -2,6 +2,8 @@ import "server-only";
 
 import { promises as fs } from "node:fs";
 
+import { type MemoryDistribution, memoryDistribution } from "@/lib/memory-history-core";
+
 /**
  * Persistent CPU/MEM/DISK history, written by `scripts/stats-history.mjs` (a
  * per-minute cron sampler). Kept OUTSIDE the admin app dir so `next dev`'s file
@@ -188,4 +190,15 @@ export async function readProjectMemoryHistory(slug: string, range: HistoryRange
     .sort((x, y) => x[0] - y[0])
     .map(([, a]) => ({ t: Math.round(a.t / a.n), bytes: (a.mb / a.n) * MB, agentBytes: (a.agentMb / a.n) * MB }));
   return { range, bucketMs, points };
+}
+
+/** Every project's memory, its agents' and what's used on the server over `range` (the Memory widget's periods). */
+export async function readMemoryDistribution(range: HistoryRange, now: number = Date.now()): Promise<MemoryDistribution & { range: HistoryRange }> {
+  let raw = "";
+  try {
+    raw = await fs.readFile(HISTORY_FILE, "utf8");
+  } catch {
+    /* no history yet: no points */
+  }
+  return { range, ...memoryDistribution(raw, RANGE_MS[range], now, TARGET_BUCKETS) };
 }

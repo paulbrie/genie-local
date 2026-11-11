@@ -43,7 +43,6 @@ import {
   defaultWidgetAt,
   type DeskAlign,
   type DeskSaved,
-  deskWidgets,
   DOCK_ICON,
   dropRange,
   dockSpace,
@@ -57,6 +56,9 @@ import {
   moveIcon,
   overlaps,
   placeWidgets,
+  arrangementFits,
+  stackDesktop,
+  widgetWants,
   type Rect,
   resizeCells,
   resizeRect,
@@ -780,6 +782,9 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           <ContextMenuContent className="w-52">
             <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
             <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => setPinned(VSCODE_ICON, !pinned.includes(VSCODE_ICON))}>
+              {pinned.includes(VSCODE_ICON) ? "Remove from Dock" : "Keep in Dock"}
+            </ContextMenuItem>
             <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, false)}>Remove from Desktop</ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
@@ -833,6 +838,17 @@ function IconGrid({
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+  const dragging = drag !== null;
+  // (the window losing the focus mid-drag, to another window or tab, may never hand the pointer back: the drag ends)
+  useEffect(() => {
+    if (!dragging) return;
+    const end = () => {
+      press.current = null;
+      setDrag(null);
+    };
+    window.addEventListener("blur", end);
+    return () => window.removeEventListener("blur", end);
+  }, [dragging]);
   const press = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
   const swallowClick = useRef(false);
   // the desktop's menu: where it was opened, and the spot under it (a widget added from it goes there)
@@ -858,11 +874,24 @@ function IconGrid({
   }, []);
 
   const W = size?.w ?? 0;
-  const { cols, rows } = size ? iconGridSize(size.w, size.h, dock) : { cols: 1, rows: 1 };
-  const placed = useMemo(() => deskWidgets(widgets, cols, rows), [widgets, cols, rows]);
+  const { cols, rows: fitRows } = size ? iconGridSize(size.w, size.h, dock) : { cols: 1, rows: 1 };
+  const wants = useMemo(() => widgetWants(widgets, cols), [widgets, cols]);
+  // A window shorter than the arrangement doesn't squeeze it (widgets pushed up onto each other): the grid has the
+  // rows it needs, the desktop grows below the window, and scrolls. (Narrower, it stacks instead: below.)
+  const rows = Math.max(fitRows, ...wants.map((w) => w.at.r + w.at.h), ...items.map((i) => (saved?.[i.id]?.r ?? -1) + 1));
+  const placed = useMemo(() => placeWidgets(wants, cols, rows) as Partial<Record<WidgetId, CellRect>>, [wants, cols, rows]);
   const blocked = useMemo(() => Object.values(placed).filter((r): r is CellRect => !!r), [placed]);
   const idsKey = items.map((i) => i.id).join("\n");
-  const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows, blocked), [idsKey, saved, cols, rows, blocked]);
+  const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows, blocked, fitRows), [idsKey, saved, cols, rows, blocked, fitRows]);
+  // (the rows it all takes: the desktop's height, to scroll)
+  const usedRows = Math.max(rows, ...Object.values(layout).map((c) => c.r + 1));
+  // A window too narrow for the arrangement (a widget pushed onto the grid or off another, an icon past the columns):
+  // the desktop stacks, the widgets one a row the whole width, the icons under them, and it scrolls; nothing moves by
+  // hand until there's room again, when the arrangement is back as it was.
+  const stack = useMemo(
+    () => (size && !arrangementFits(wants, placed, layout, cols) ? stackDesktop(wants, idsKey.split("\n"), W) : null),
+    [size, wants, placed, layout, cols, idsKey, W],
+  );
   /** the icons (a cell each) and the widgets, but `skip` (the one being moved) */
   const spansBut = (skip?: string) => [
     ...Object.entries(layout)
@@ -871,7 +900,7 @@ function IconGrid({
     ...WIDGETS.flatMap((id) => (id !== skip && placed[id] ? [placed[id]] : [])),
   ];
   // (everything below is in the arrangement's own coordinates: the layer it's drawn in is `shift` px right)
-  const shift = size ? alignShift(align, spansBut(), W) : 0;
+  const shift = size && !stack ? alignShift(align, spansBut(), W) : 0;
   const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
   const cellAt = (id: string, x: number, y: number): Cell => {
     const { lo, hi } = dropRange(spansBut(id), 1, cols, shift, W);
@@ -885,7 +914,7 @@ function IconGrid({
   /** where the dragged icon's top-left is now */
   const dragPos = (e: React.PointerEvent, p: NonNullable<typeof press.current>) => {
     const b = box.current!.getBoundingClientRect();
-    return { x: e.clientX - b.left - p.ox - shift, y: e.clientY - b.top - p.oy };
+    return { x: e.clientX - b.left - p.ox - shift, y: e.clientY - b.top - p.oy + box.current!.scrollTop };
   };
   const target = drag ? cellAt(drag.id, drag.x, drag.y) : null;
 
@@ -923,7 +952,9 @@ function IconGrid({
   return (
     <div
       ref={box}
-      className="absolute inset-0 overflow-hidden"
+      // (it scrolls when the arrangement is taller than the window; the gutter's kept, so a scrollbar showing up doesn't
+      // narrow the desktop by a column)
+      className="scrollbar-hover absolute inset-0 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
       // (measured first: until then nothing is placed, so nothing jumps)
       style={{ visibility: size ? "visible" : "hidden" }}
       onContextMenu={(e) => {
@@ -936,19 +967,22 @@ function IconGrid({
           y: e.clientY,
           cell: {
             c: Math.min(Math.max(Math.floor((e.clientX - b.left - shift - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
-            r: Math.min(Math.max(Math.floor((e.clientY - b.top - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
+            r: Math.min(Math.max(Math.floor((e.clientY - b.top + box.current!.scrollTop - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
           },
         });
       }}
     >
-      <div className={`absolute inset-y-0 ${glide ? "transition-[left] duration-200 ease-out" : ""}`} style={{ left: shift, width: W }}>
+      <div
+        className={`absolute top-0 ${glide ? "transition-[left] duration-200 ease-out" : ""}`}
+        style={{ left: shift, width: W, height: Math.max(size?.h ?? 0, ICON_GRID.pad * 2 + (stack ? stack.rows : usedRows) * ICON_GRID.y + dock) }}
+      >
         <nav aria-label="Apps" className="absolute inset-0">
           {target && free(target) && (
             <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />
           )}
           {items.map((i) => {
             const dragging = drag?.id === i.id;
-            const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+            const at = dragging ? { left: drag.x, top: drag.y } : spot((stack ? stack.icons[i.id] : layout[i.id]) ?? { c: 0, r: 0 });
             return (
               <div
                 key={i.id}
@@ -962,7 +996,7 @@ function IconGrid({
                       : "absolute"
                 }
                 onPointerDown={(e) => {
-                  if (e.button !== 0) return;
+                  if (e.button !== 0 || stack) return;
                   const r = e.currentTarget.getBoundingClientRect();
                   press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
                 }}
@@ -994,6 +1028,12 @@ function IconGrid({
                   press.current = null;
                   setDrag(null);
                 }}
+                // (the pointer let go without a pointerup reaching here: the window lost it mid-drag. The drag ends
+                // where it began, or it would stay drawn mid-air with its drop target, for good)
+                onLostPointerCapture={() => {
+                  press.current = null;
+                  setDrag(null);
+                }}
                 onClickCapture={(e) => {
                   if (!swallowClick.current) return;
                   e.preventDefault();
@@ -1017,6 +1057,7 @@ function IconGrid({
               key={id}
               label={WIDGET_LABEL[id]}
               at={at}
+              locked={stack?.widgets[id]}
               folded={folded}
               rows={rows}
               moveCols={dropRange(others, at.w, cols, shift, W)}
@@ -1134,6 +1175,7 @@ function DeskMenu({
 function WidgetFrame({
   label,
   at,
+  locked,
   folded,
   rows,
   moveCols,
@@ -1145,6 +1187,8 @@ function WidgetFrame({
   label: string;
   /** its span, as placed (folded: its header's row) */
   at: CellRect;
+  /** where the stacked desktop puts it: there, and not moved or resized by hand */
+  locked?: Rect;
   folded: boolean;
   rows: number;
   /** the columns it can start at, moved (dropRange) */
@@ -1160,12 +1204,13 @@ function WidgetFrame({
   const [settling, setSettling] = useState(false);
   const settleTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(settleTimer.current), []);
-  const px = cellsRect(at);
+  const px = locked ?? cellsRect(at);
   const fits = (to: CellRect) => !others.some((o) => overlaps(o, to));
 
   // Follows the pointer from a press on the grip or an edge (short of a few pixels, it's a click).
   function track(e: React.PointerEvent<HTMLElement>, step: (dx: number, dy: number) => { rect: Rect; to: CellRect }) {
-    e.currentTarget.setPointerCapture(e.pointerId);
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
     const x0 = e.clientX;
     const y0 = e.clientY;
     let last: { rect: Rect; to: CellRect } | null = null;
@@ -1179,10 +1224,14 @@ function WidgetFrame({
       last = step(dx, dy);
       setLive(last);
     };
-    const up = (ev: PointerEvent) => {
+    // (ends on the pointer's release; also when the window loses the pointer, or itself the focus, mid-drag, which
+    // sends no pointerup: then it goes back, rather than stay half-way for good)
+    const up = (ev: Event) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
+      window.removeEventListener("blur", up);
+      el.removeEventListener("lostpointercapture", up);
       if (!last) return;
       setLive(null);
       deskDrag.next(false);
@@ -1194,11 +1243,13 @@ function WidgetFrame({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
+    window.addEventListener("blur", up);
+    el.addEventListener("lostpointercapture", up);
   }
 
   function onGripDown(e: React.PointerEvent<HTMLElement>) {
     const el = e.target as HTMLElement;
-    if (e.button !== 0 || !el.closest("[data-widget-grip]") || el.closest("button, a, input")) return;
+    if (locked || e.button !== 0 || !el.closest("[data-widget-grip]") || el.closest("button, a, input")) return;
     track(e, (dx, dy) => ({
       rect: { ...px, x: px.x + dx, y: px.y + dy },
       to: moveCells(at, dx / ICON_GRID.x, dy / ICON_GRID.y, moveCols, rows),
@@ -1244,7 +1295,7 @@ function WidgetFrame({
         }`}
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">{children}</div>
-        {!folded && <ResizeHandles onPointerDown={onResizeDown} />}
+        {!folded && !locked && <ResizeHandles onPointerDown={onResizeDown} />}
       </aside>
     </>
   );
@@ -1428,6 +1479,7 @@ function Dock({
   };
 
   const appItem = (href: string) => {
+    if (href === VSCODE_ICON) return <VsCodeDockItem key={href} size={size} />;
     const it = BY_HREF.get(href);
     if (!it) return null;
     const entry = open.find((o) => o.app === href);
@@ -1583,6 +1635,32 @@ function DockDivider({ size, resizable, onStart, onEnd }: { size: number; resiza
   );
 }
 
+/**
+ * VS Code in the dock, once kept there (from its icon's menu, the Launchpad's): code-server, outside the basePath, so
+ * a raw link to a new tab, as its desktop icon is. Its menu takes it out of the dock, or off the desktop and back.
+ */
+function VsCodeDockItem({ size }: { size: number }) {
+  const [{ removedIcons }] = useSubject(desk);
+  const onDesktop = !removedIcons?.includes(VSCODE_ICON);
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>
+        <DockSlot label="VS Code" size={size}>
+          <a href="/vscode/" target="_blank" rel="noreferrer" aria-label="VS Code" className="block outline-none focus-visible:rounded-[24%] focus-visible:ring-2 focus-visible:ring-ring">
+            <VsCodeIcon size={size} />
+          </a>
+        </DockSlot>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => setPinned(VSCODE_ICON, false)}>Remove from Dock</ContextMenuItem>
+        <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, !onDesktop)}>{onDesktop ? "Remove from Desktop" : "Add to Desktop"}</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 /** One place in the dock: it widens with its scale, its tile grows from the bottom, its name shows above on hover. */
 function DockSlot({
   label,
@@ -1713,7 +1791,7 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
               </LaunchpadMenu>
             ))}
             {(!ql || "vs code".includes(ql)) && (
-              <LaunchpadMenu id={VSCODE_ICON} removed={!!removedIcons?.includes(VSCODE_ICON)}>
+              <LaunchpadMenu id={VSCODE_ICON} removed={!!removedIcons?.includes(VSCODE_ICON)} pinned={pinned.includes(VSCODE_ICON)}>
                 <a href="/vscode/" target="_blank" rel="noreferrer" onClick={close} className={tile}>
                   <span className={pop}>
                     <VsCodeIcon size={64} />

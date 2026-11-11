@@ -286,6 +286,11 @@ export function setWidgetMode(id: WidgetId, mode: WidgetMode) {
   patchWidget(id, { mode: mode === "open" && !WIDGETS_OFF.has(id) ? undefined : mode });
 }
 
+/** One of a widget's choices of how to show (`key`: the Disk's "chart", the Memory's "split" and "period"), remembered. */
+export function setWidgetView(id: WidgetId, key: string, value: string) {
+  patchWidget(id, { views: { ...desk.getValue().widgets?.[id]?.views, [key]: value } });
+}
+
 /** Where a widget is on the icon grid, and how big (`show`: and on the desktop, if it was off it). */
 export function setWidgetAt(id: WidgetId, at: CellRect, show = false) {
   patchWidget(id, show ? { at, mode: WIDGETS_OFF.has(id) ? "open" : undefined } : { at });
