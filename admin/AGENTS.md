@@ -183,7 +183,9 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     On at first: Terminals, Projects (`status-widget.tsx`); Disk (`disk-widget.tsx`: /opt/project,
     /tmp, the home folder, /usr, /var with their largest entries, Docker from `docker system df`, and
     the rest as Other; as a list, a bar, a donut or a squarified treemap, `src/lib/treemap.ts`; /api/disk,
-    `disk-overview.ts`, du at `nice` in the background at most every 10 min); Memory
+    `disk-overview.ts`, du at `nice` in the background at most every 10 min; a click on a treemap
+    folder drills into it, a breadcrumb back up: /api/disk/dir, du two levels deep, within the Files
+    explorer's roots, kept 5 min); Memory
     (`memory-widget.tsx`: now, the RAM as one segmented bar by project, agents striped, or by
     terminal; or over 24 h / 7 / 30 days (30 by default), a stacked area from the per-minute history,
     /api/widgets/memory, `memory-history-core.ts`); Processes (the busiest by CPU or memory, named by

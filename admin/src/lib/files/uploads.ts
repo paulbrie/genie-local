@@ -1,7 +1,8 @@
 // Uploads of any size (T243): the browser sends the file in chunks (CHUNK_BYTES, under the 10 MB a request body may be
-// through the proxy), each written at its offset into a hidden temp file in the target folder; a dropped connection
-// resumes from what the server has (`status`); the last step renames the temp file into place (atomic, same folder).
-// Nothing holds the whole file in memory. Sessions are kept as small JSON files, so a restart of the admin resumes too.
+// through the proxy), several at once and in any order, each written at its offset into a hidden temp file in the
+// target folder; the session keeps which chunks it has, so a dropped connection resumes with only the missing ones;
+// the last step renames the temp file into place (atomic, same folder). Nothing holds the whole file in memory.
+// Sessions are kept as small JSON files, so a restart of the admin resumes too.
 
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -19,10 +20,36 @@ export interface UploadSession {
   dir: string;
   name: string;
   size: number;
+  /** bytes received so far (the chunks' sizes added up) */
   received: number;
+  /** the chunks' size: each chunk n is the bytes from n × chunkBytes (the last one shorter) */
+  chunkBytes?: number;
+  /** the chunks received, by number, in order */
+  chunks?: number[];
   tmp: string;
   overwrite: boolean;
   createdAt: string;
+}
+
+/** A session's chunk size, and the chunks it has (one from before chunks were kept: the ones its bytes in order made). */
+const chunkBytesOf = (s: UploadSession) => s.chunkBytes ?? CHUNK_BYTES;
+export const chunksOf = (s: UploadSession): number[] => s.chunks ?? Array.from({ length: Math.floor(s.received / chunkBytesOf(s)) }, (_, i) => i);
+/** how many chunks the whole file is */
+const chunkCount = (s: UploadSession) => Math.ceil(s.size / chunkBytesOf(s));
+
+// The session's state is read, changed and written back as each chunk lands; chunks land at once, so those steps are
+// taken one at a time per upload (in this process: the admin is one), or two would lose each other's chunk.
+const g = globalThis as { __uploadLocks?: Map<string, Promise<unknown>> };
+const locks = (g.__uploadLocks ??= new Map());
+async function locked<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const run = (locks.get(id) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => {});
+  locks.set(id, tail);
+  try {
+    return await run;
+  } finally {
+    if (locks.get(id) === tail) locks.delete(id);
+  }
 }
 
 /** ADMIN_FILES_UPLOADS, else /home/genie/.admin-uploads (session state only; the data goes to the target folder) */
@@ -67,7 +94,14 @@ export async function freeBytes(p: string): Promise<number> {
  * Starts an upload of `size` bytes as `final` (already path-checked by the caller): refuses when the disk hasn't room
  * (size + SPARE_BYTES) or when the file exists (unless `overwrite`); creates the temp file.
  */
-export async function startUpload(final: string, size: number, overwrite: boolean, dir = uploadsDir(), free: (p: string) => Promise<number> = freeBytes): Promise<UploadSession> {
+export async function startUpload(
+  final: string,
+  size: number,
+  overwrite: boolean,
+  dir = uploadsDir(),
+  free: (p: string) => Promise<number> = freeBytes,
+  chunkBytes = CHUNK_BYTES,
+): Promise<UploadSession> {
   if (!Number.isSafeInteger(size) || size < 0) throw new UploadError("bad size", 400);
   const target = path.dirname(final);
   const room = await free(target);
@@ -77,7 +111,7 @@ export async function startUpload(final: string, size: number, overwrite: boolea
   await clearStale(dir);
   const id = randomUUID();
   const s: UploadSession = {
-    id, dir: target, name: path.basename(final), size, received: 0,
+    id, dir: target, name: path.basename(final), size, received: 0, chunkBytes, chunks: [],
     tmp: path.join(target, `.${path.basename(final)}.${id.slice(0, 8)}.part`), overwrite, createdAt: new Date().toISOString(),
   };
   await fs.writeFile(s.tmp, "", { flag: "wx" });
@@ -86,18 +120,20 @@ export async function startUpload(final: string, size: number, overwrite: boolea
 }
 
 /**
- * Writes a chunk at `offset`. The next chunk must start at what the server has: an earlier one (a retry) is taken as
- * already there; a later one is refused (409, with what the server has, so the browser resumes from there).
+ * Writes a chunk at `offset`, in any order: several are sent at once. A chunk starts where one does (a multiple of the
+ * chunk size) and is that long (the last one, what's left); one it has already (a retry) is taken as there. The bytes
+ * go in at once, at their place; the session's note of them is taken one chunk at a time (`locked`).
  */
 export async function writeChunk(id: string, offset: number, chunk: Uint8Array, dir = uploadsDir()): Promise<UploadSession> {
   const s = await getSession(id, dir);
+  const cb = chunkBytesOf(s);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new UploadError("bad offset", 400);
-  if (chunk.byteLength > CHUNK_BYTES) throw new UploadError("chunk too big", 413);
+  if (chunk.byteLength > Math.min(cb, CHUNK_BYTES)) throw new UploadError("chunk too big", 413);
   if (offset + chunk.byteLength > s.size) throw new UploadError("past the file's end", 400);
-  if (offset !== s.received) {
-    if (offset + chunk.byteLength <= s.received) return s;
-    throw new UploadError("out of order", 409, s.received);
-  }
+  if (offset % cb !== 0) throw new UploadError(`a chunk starts at a multiple of ${cb} bytes`, 400);
+  const n = offset / cb;
+  if (chunk.byteLength !== Math.min(cb, s.size - offset)) throw new UploadError(`chunk ${n} is ${Math.min(cb, s.size - offset)} bytes`, 400);
+  if (chunksOf(s).includes(n)) return s;
   const fh = await fs.open(s.tmp, "r+");
   try {
     let done = 0;
@@ -108,16 +144,22 @@ export async function writeChunk(id: string, offset: number, chunk: Uint8Array, 
   } finally {
     await fh.close();
   }
-  s.received += chunk.byteLength;
-  await save(s, dir);
-  return s;
+  return locked(id, async () => {
+    const now = await getSession(id, dir);
+    const have = chunksOf(now);
+    if (have.includes(n)) return now;
+    const next = { ...now, chunks: [...have, n].sort((a, b) => a - b), received: now.received + chunk.byteLength };
+    await save(next, dir);
+    return next;
+  });
 }
 
 /** Puts the finished file in place: its size checked, then renamed over the name (atomic: same folder). */
 export async function completeUpload(id: string, dir = uploadsDir()): Promise<{ path: string; size: number }> {
-  const s = await getSession(id, dir);
+  const s = await locked(id, () => getSession(id, dir));
   const st = await fs.stat(s.tmp).catch(() => null);
-  if (!st || s.received !== s.size || st.size !== s.size) throw new UploadError(`incomplete: ${s.received} of ${s.size} bytes`, 409, s.received);
+  if (!st || s.received !== s.size || chunksOf(s).length !== chunkCount(s) || st.size !== s.size)
+    throw new UploadError(`incomplete: ${s.received} of ${s.size} bytes`, 409, s.received);
   const final = path.join(s.dir, s.name);
   if (!s.overwrite && (await fs.lstat(final).then(() => true, () => false))) throw new UploadError("a file with that name is already there", 409);
   await fs.rename(s.tmp, final);

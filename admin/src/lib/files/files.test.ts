@@ -10,7 +10,7 @@ import { isSecretPath, listDir, runningInside } from "./listing";
 import { deletePath, makeFolder, movePath, planDelete, renamePath } from "./ops";
 import { HEX_PAGE, TEXT_PAGE, hexDump, readPage, utf8Boundary } from "./preview";
 import { emptyTrash, listTrash, restoreFromTrash } from "./trash";
-import { cancelUpload, CHUNK_BYTES, clearStale, completeUpload, getSession, startUpload, writeChunk } from "./uploads";
+import { cancelUpload, CHUNK_BYTES, chunksOf, clearStale, completeUpload, getSession, startUpload, writeChunk } from "./uploads";
 
 let base: string, root: string, outside: string, trash: string, uploads: string, runDir: string;
 const roots = () => [root];
@@ -59,19 +59,31 @@ describe("the path guard (T243)", () => {
 
 describe("chunked uploads (T243)", () => {
   const bytes = (n: number, fill: number) => new Uint8Array(n).fill(fill);
-  it("writes chunks at their offsets, takes a retried chunk as there, refuses a gap with what it has, and renames into place", async () => {
+  it("writes chunks at their offsets in any order and at once, takes a retried chunk as there, and renames into place", async () => {
     const final = path.join(root, "docs", "big.bin");
-    const s = await startUpload(final, 25, false, uploads, bigDisk);
-    assert.equal((await writeChunk(s.id, 0, bytes(10, 1), uploads)).received, 10);
-    assert.equal((await writeChunk(s.id, 0, bytes(10, 1), uploads)).received, 10, "a retry of a chunk it has");
-    await assert.rejects(writeChunk(s.id, 20, bytes(5, 3), uploads), (e: { status: number; received: number }) => e.status === 409 && e.received === 10);
-    await assert.rejects(completeUpload(s.id, uploads), /incomplete: 10 of 25/);
+    const s = await startUpload(final, 25, false, uploads, bigDisk, 10);
+    // (the last chunk and the first, at once)
+    await Promise.all([writeChunk(s.id, 20, bytes(5, 3), uploads), writeChunk(s.id, 0, bytes(10, 1), uploads)]);
+    assert.deepEqual(chunksOf(await getSession(s.id, uploads)), [0, 2]);
+    assert.equal((await writeChunk(s.id, 0, bytes(10, 1), uploads)).received, 15, "a retry of a chunk it has");
+    await assert.rejects(writeChunk(s.id, 5, bytes(10, 9), uploads), /multiple of 10/);
+    await assert.rejects(writeChunk(s.id, 10, bytes(4, 9), uploads), /chunk 1 is 10 bytes/);
+    await assert.rejects(completeUpload(s.id, uploads), /incomplete: 15 of 25/);
     await writeChunk(s.id, 10, bytes(10, 2), uploads);
-    await writeChunk(s.id, 20, bytes(5, 3), uploads);
     assert.deepEqual(await completeUpload(s.id, uploads), { path: final, size: 25 });
     assert.deepEqual([...(await fs.readFile(final))], [...bytes(10, 1), ...bytes(10, 2), ...bytes(5, 3)]);
     assert.equal((await fs.readdir(path.join(root, "docs"))).some((n) => n.endsWith(".part")), false, "no temp file left");
     await assert.rejects(getSession(s.id, uploads), /no such upload/);
+  });
+  it("keeps every chunk that lands at the same time", async () => {
+    const final = path.join(root, "docs", "many.bin");
+    const s = await startUpload(final, 10, false, uploads, bigDisk, 1);
+    await Promise.all([...Array(10).keys()].reverse().map((i) => writeChunk(s.id, i, bytes(1, i), uploads)));
+    const now = await getSession(s.id, uploads);
+    assert.equal(now.received, 10);
+    assert.deepEqual(chunksOf(now), [...Array(10).keys()]);
+    await completeUpload(s.id, uploads);
+    assert.deepEqual([...(await fs.readFile(final))], [...Array(10).keys()]);
   });
   it("refuses a chunk past the end or too big, a taken name unless overwriting, and a disk without room", async () => {
     const s = await startUpload(path.join(root, "docs", "two.bin"), 4, false, uploads, bigDisk);

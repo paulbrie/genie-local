@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { otherPart, parseDf, parseDockerDf, parseDockerSize, parseDuTop } from "./disk-overview-core";
+import { otherPart, parseDf, parseDockerDf, parseDockerSize, parseDuTop, parseDuTree } from "./disk-overview-core";
 
 describe("parseDf", () => {
   it("reads each filesystem once, two folders on one disk being one", () => {
@@ -63,5 +63,30 @@ describe("otherPart", () => {
     ];
     assert.equal(otherPart(100, parts).bytes, 15);
     assert.equal(otherPart(50, parts).bytes, 0);
+  });
+});
+
+describe("parseDuTree", () => {
+  it("is the folder's entries, the biggest first, each with its own biggest", () => {
+    const out = [
+      "300\t/opt/p/projects/shop/node_modules",
+      "100\t/opt/p/projects/shop/src",
+      "450\t/opt/p/projects/shop",
+      "80\t/opt/p/projects/blog/src",
+      "90\t/opt/p/projects/blog",
+      "40\t/opt/p/projects/notes.md",
+      "580\t/opt/p/projects",
+      "",
+    ].join("\n");
+    assert.deepEqual(parseDuTree(out, "/opt/p/projects/", 2, 1), {
+      path: "/opt/p/projects",
+      bytes: 580,
+      entries: [
+        { name: "shop", bytes: 450, dir: true, top: [{ name: "node_modules", bytes: 300 }] },
+        { name: "blog", bytes: 90, dir: true, top: [{ name: "src", bytes: 80 }] },
+      ],
+    });
+    assert.equal(parseDuTree(out, "/opt/p/projects")?.entries.find((e) => e.name === "notes.md")?.dir, undefined);
+    assert.equal(parseDuTree("", "/x"), null);
   });
 });

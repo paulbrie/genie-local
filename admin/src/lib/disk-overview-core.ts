@@ -4,11 +4,15 @@
 export type DiskFs = { mount: string; size: number; used: number; avail: number };
 /** A folder's space on disk, and its largest entries (folders and files right under it). */
 export type DiskPath = { path: string; bytes: number; top: { name: string; bytes: number }[] };
+/** An entry of a folder: its name, its size, and (once looked at) whether it's a folder itself, to drill into. */
+export type DiskEntry = { name: string; bytes: number; dir?: boolean };
 /**
  * A part of what's used on the disk: a folder (its path the key), Docker (what `docker system df` counts, its own key:
  * its folder isn't readable), or the rest (`other`: the used space nothing measured accounts for).
  */
-export type DiskPart = { key: string; label: string; bytes: number; top: { name: string; bytes: number }[] };
+export type DiskPart = { key: string; label: string; bytes: number; top: DiskEntry[] };
+/** A folder drilled into: its entries, the biggest first, each with its own biggest entries (the treemap's two levels). */
+export type DiskDir = { path: string; bytes: number; entries: (DiskEntry & { top: DiskEntry[] })[]; measuredAt: number };
 /**
  * What the widget shows: the filesystems the folders are on (always fresh: df is instant), the parts of what's used
  * (null until the first measuring is done: du on a big tree takes a while), when they were measured, and whether
@@ -70,4 +74,38 @@ export function parseDuTop(stdout: string, root: string, n = 5): DiskPath | null
   if (bytes === null) return null;
   entries.sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name));
   return { path: base, bytes, top: entries.slice(0, n) };
+}
+
+/**
+ * `du -axB1 --max-depth=2 <root>`: the root's total, its `maxEntries` biggest entries, and each one's `maxKids` biggest
+ * (an entry with any is a folder; whether the others are is for the caller to look at). Null: du said nothing of it.
+ */
+export function parseDuTree(stdout: string, root: string, maxEntries = 40, maxKids = 8): Omit<DiskDir, "measuredAt"> | null {
+  const base = root.replace(/\/+$/, "") || "/";
+  const prefix = base === "/" ? "/" : `${base}/`;
+  let bytes: number | null = null;
+  const entries = new Map<string, { bytes: number; kids: DiskEntry[] }>();
+  const entry = (name: string) => entries.get(name) ?? entries.set(name, { bytes: 0, kids: [] }).get(name)!;
+  for (const line of stdout.split("\n")) {
+    const tab = line.indexOf("\t");
+    if (tab <= 0) continue;
+    const size = Number(line.slice(0, tab));
+    const p = line.slice(tab + 1);
+    if (p === base) bytes = size;
+    else if (p.startsWith(prefix)) {
+      const rel = p.slice(prefix.length).split("/");
+      if (rel.length === 1) entry(rel[0]).bytes = size;
+      else if (rel.length === 2) entry(rel[0]).kids.push({ name: rel[1], bytes: size });
+    }
+  }
+  if (bytes === null) return null;
+  const byBytes = (a: DiskEntry, b: DiskEntry) => b.bytes - a.bytes || a.name.localeCompare(b.name);
+  return {
+    path: base,
+    bytes,
+    entries: [...entries.entries()]
+      .map(([name, e]) => ({ name, bytes: e.bytes, ...(e.kids.length ? { dir: true } : {}), top: e.kids.sort(byBytes).slice(0, maxKids) }))
+      .sort(byBytes)
+      .slice(0, maxEntries),
+  };
 }

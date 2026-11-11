@@ -100,6 +100,7 @@ export const API_ROUTES = [
   "/api/diagrams/[id]",
   "/api/diagrams/validate",
   "/api/disk",
+  "/api/disk/dir",
   "/api/disk-usage",
   "/api/docker",
   "/api/docker/action",

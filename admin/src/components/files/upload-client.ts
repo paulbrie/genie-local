@@ -1,8 +1,9 @@
 "use client";
 
 // The browser's side of uploads of any size (T243): a File sent in chunks (File.slice: never read whole into memory),
-// each retried on a network error, the offset taken from the server when it says otherwise (409), and the server's
-// session kept in localStorage per file so dropping the same file again after a reload resumes where it stopped.
+// PARALLEL of them at once (a link that holds each connection back goes as many times faster), each retried on a
+// network error, and the server's session kept in localStorage per file so dropping the same file again after a
+// reload resumes with only the chunks the server doesn't have.
 
 import { BASE_PATH } from "@/lib/config";
 
@@ -14,6 +15,8 @@ export interface UploadProgress {
 }
 
 const KEY = "admin.files.uploads";
+/** chunks in flight at once (the browser's connections to a host are 6: some kept for the rest of the page) */
+const PARALLEL = 4;
 /** the same file again: same folder, name, size and modification time */
 const fileKey = (dir: string, file: File, name: string) => `${dir}\n${name}\n${file.size}\n${file.lastModified}`;
 const remembered = (): Record<string, string> => {
@@ -86,9 +89,10 @@ function progressMeter(size: number, onProgress: (p: UploadProgress) => void) {
 }
 
 /**
- * Uploads `file` as `name` into folder `dir`. Resumes a session this browser started for the same file; retries a chunk
- * up to 6 times (1, 2, 4… s apart), asking the server what it has after a failure; on `signal` abort, the server drops
- * the upload. Resolves with the file's path once it is in place.
+ * Uploads `file` as `name` into folder `dir`, PARALLEL chunks at once. Resumes a session this browser started for the
+ * same file (sending only the chunks the server hasn't); retries a chunk up to 6 times (1, 2, 4… s apart: a chunk sent
+ * twice is taken as there); on `signal` abort, or a chunk that can't be sent, the others stop and the server drops the
+ * upload. Resolves with the file's path once it is in place.
  */
 export async function uploadFile(
   file: File,
@@ -97,10 +101,12 @@ export async function uploadFile(
   opts: { overwrite?: boolean; project?: string; signal: AbortSignal; onProgress: (p: UploadProgress) => void },
 ): Promise<string> {
   const api = `${BASE_PATH}/api/files/upload`, key = fileKey(dir, file, name);
-  let id: string | null = remembered()[key] ?? null, offset = 0, chunkBytes = 8 * 1024 * 1024;
+  let id: string | null = remembered()[key] ?? null, chunkBytes = 8 * 1024 * 1024, have: number[] = [];
   if (id) {
-    const s = await fetch(`${api}/${id}`, { cache: "no-store" }).then((r) => (r.ok ? json<{ received: number; size: number }>(r) : null)).catch(() => null);
-    if (s && s.size === file.size) offset = s.received;
+    const s = await fetch(`${api}/${id}`, { cache: "no-store" })
+      .then((r) => (r.ok ? json<{ received: number; size: number; chunkBytes: number; chunks: number[] }>(r) : null))
+      .catch(() => null);
+    if (s && s.size === file.size) [chunkBytes, have] = [s.chunkBytes, s.chunks];
     else id = null;
   }
   if (!id) {
@@ -114,37 +120,56 @@ export async function uploadFile(
   }
   const cancel = () => { void fetch(`${api}/${id}`, { method: "DELETE" }); remember(key, null); };
   opts.signal.addEventListener("abort", cancel, { once: true });
+  // (the chunks stop together: on the caller's abort, or when one can't be sent)
+  const stop = new AbortController();
+  const onAbort = () => stop.abort();
+  opts.signal.addEventListener("abort", onAbort, { once: true });
   const report = progressMeter(file.size, opts.onProgress);
-  try {
-    report(offset, true);
-    while (offset < file.size) {
-      const chunk = file.slice(offset, Math.min(file.size, offset + chunkBytes));
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const from = offset;
-          const res = await putChunk(`${api}/${id}?offset=${offset}`, chunk, opts.signal, (n) => report(from + n));
-          if (res.status === 409) {
-            offset = res.body.received ?? offset;
-            break;
-          }
-          if (res.status < 200 || res.status >= 300) throw Object.assign(new Error(res.body.error ?? `HTTP ${res.status}`), { status: res.status, body: res.body });
-          offset = res.body.received ?? offset + chunk.size;
-          break;
-        } catch (err) {
-          if (opts.signal.aborted || (err as { status?: number }).status === 404 || attempt >= 5) throw err;
-          await sleep(1000 * 2 ** attempt, opts.signal);
-          // (what the server has now: the chunk may have landed before the connection dropped)
-          const s = await fetch(`${api}/${id}`, { cache: "no-store" }).then((r) => json<{ received: number }>(r)).catch(() => null);
-          if (s) { offset = s.received; break; }
-        }
+  const lenOf = (n: number) => Math.min(chunkBytes, file.size - n * chunkBytes);
+  const count = Math.ceil(file.size / chunkBytes);
+  const queue = [...Array(count).keys()].filter((n) => !have.includes(n));
+  let done = have.reduce((sum, n) => sum + lenOf(n), 0);
+  const flying = new Map<number, number>();
+  const sent = () => done + [...flying.values()].reduce((a, b) => a + b, 0);
+  const send = async (n: number) => {
+    const offset = n * chunkBytes;
+    const chunk = file.slice(offset, offset + lenOf(n));
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await putChunk(`${api}/${id}?offset=${offset}`, chunk, stop.signal, (loaded) => {
+          flying.set(n, loaded);
+          report(sent());
+        });
+        if (res.status < 200 || res.status >= 300) throw Object.assign(new Error(res.body.error ?? `HTTP ${res.status}`), { status: res.status, body: res.body });
+        flying.delete(n);
+        done += chunk.size;
+        report(sent(), true);
+        return;
+      } catch (err) {
+        flying.delete(n);
+        const status = (err as { status?: number }).status;
+        // (a refusal won't change by trying again: a gone session, a bad chunk)
+        if (stop.signal.aborted || status === 404 || (status && status >= 400 && status < 500) || attempt >= 5) throw err;
+        await sleep(1000 * 2 ** attempt, stop.signal);
       }
-      report(offset, true);
     }
-    const done = await json<{ path: string }>(await fetch(`${api}/${id}`, { method: "POST", signal: opts.signal }));
+  };
+  try {
+    report(done, true);
+    await Promise.all(
+      Array.from({ length: Math.min(PARALLEL, queue.length) }, async () => {
+        for (let n = queue.shift(); n !== undefined; n = queue.shift()) await send(n);
+      }),
+    ).catch((err) => {
+      stop.abort();
+      throw err;
+    });
+    const finished = await json<{ path: string }>(await fetch(`${api}/${id}`, { method: "POST", signal: opts.signal }));
     remember(key, null);
-    return done.path;
+    return finished.path;
   } finally {
     opts.signal.removeEventListener("abort", cancel);
+    opts.signal.removeEventListener("abort", onAbort);
   }
 }
 

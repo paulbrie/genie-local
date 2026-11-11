@@ -1,9 +1,9 @@
-// /api/files/upload/<id>: PUT ?offset=N with a chunk as the body (at most CHUNK_BYTES); GET what the server has (to
-// resume); POST to finish (renamed into place); DELETE to cancel (T243).
+// /api/files/upload/<id>: PUT ?offset=N with a chunk as the body (at most CHUNK_BYTES; several at once, in any order);
+// GET what the server has (the chunks, to resume); POST to finish (renamed into place); DELETE to cancel (T243).
 import { NextRequest, NextResponse } from "next/server";
 
 import { audit } from "@/lib/files/ops";
-import { cancelUpload, CHUNK_BYTES, completeUpload, getSession, UploadError, writeChunk } from "@/lib/files/uploads";
+import { cancelUpload, CHUNK_BYTES, chunksOf, completeUpload, getSession, UploadError, writeChunk } from "@/lib/files/uploads";
 import { errorResponse, whoOf } from "../../shared";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
     const s = await getSession((await params).id);
-    return NextResponse.json({ id: s.id, size: s.size, received: s.received });
+    return NextResponse.json({ id: s.id, size: s.size, received: s.received, chunkBytes: s.chunkBytes ?? CHUNK_BYTES, chunks: chunksOf(s) });
   } catch (err) {
     return errorResponse(err);
   }
