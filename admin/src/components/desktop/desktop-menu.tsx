@@ -2,7 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { Activity, ArrowDownAZ, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, Sun } from "lucide-react";
+import { ArrowDownAZ, FolderKanban, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, SquareTerminal, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSubject } from "subjecto/react";
 
@@ -10,14 +10,14 @@ import { Wisp } from "@/components/brand/wisp";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf, iconGridSize, sortedIcons, VSCODE_ICON } from "@/lib/desktop";
+import { appOf, type CellRect, deskWidgets, iconGridSize, sortedIcons, VSCODE_ICON, WIDGETS } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
-import { desk, deskView, launchpad, minimizeWindow, setIcons, setWidget } from "@/store/desktop";
+import { desk, deskView, launchpad, minimizeWindow, setIcons, setWidgetMode } from "@/store/desktop";
 
 /**
  * The top bar's left end in the desktop interface, where a desktop OS keeps its
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
- * menu (show the desktop, Launchpad, sort or reset the icons, the status widget, back to classic, theme, log
+ * menu (show the desktop, Launchpad, sort or reset the icons, show or hide the widgets, back to classic, theme, log
  * out), then
  * the name of the app in the window.
  */
@@ -27,8 +27,7 @@ export function DesktopMenu() {
   const { motion, title, wink } = useWispState();
   const { resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
-  const [{ widget }] = useSubject(desk);
-  const widgetHidden = widget === "hidden";
+  const [{ widgets }] = useSubject(desk);
   const rootRef = useRef<HTMLDivElement>(null);
   const app = NAV_FLAT.find((i) => i.href === appOf(pathname, NAV_HREFS));
 
@@ -90,10 +89,11 @@ export function DesktopMenu() {
             type="button"
             role="menuitem"
             onClick={pick(() => {
-              // (the desktop: the window under the 40px top bar)
-              const { rows } = iconGridSize(window.innerWidth, window.innerHeight - 40);
+              // (the desktop: the window under the 40px top bar; the icons flow around the widgets)
+              const { cols, rows } = iconGridSize(window.innerWidth, window.innerHeight - 40);
+              const around = Object.values(deskWidgets(widgets, cols, rows)).filter((r): r is CellRect => !!r);
               const labels = new Map<string, string>([...NAV_FLAT.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
-              setIcons(sortedIcons([...labels.keys()], (id) => labels.get(id) ?? id, rows));
+              setIcons(sortedIcons([...labels.keys()], (id) => labels.get(id) ?? id, rows, around));
             })}
             className={row}
           >
@@ -102,14 +102,14 @@ export function DesktopMenu() {
           <button type="button" role="menuitem" onClick={pick(() => setIcons(null))} className={row}>
             <RotateCcw /> Reset icon order
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={pick(() => setWidget(widgetHidden ? "open" : "hidden"))}
-            className={row}
-          >
-            <Activity /> {widgetHidden ? "Show the status widget" : "Hide the status widget"}
-          </button>
+          {WIDGETS.map((id) => {
+            const hidden = widgets?.[id]?.mode === "hidden";
+            return (
+              <button key={id} type="button" role="menuitem" onClick={pick(() => setWidgetMode(id, hidden ? "open" : "hidden"))} className={row}>
+                {id === "terminals" ? <SquareTerminal /> : <FolderKanban />} {hidden ? "Show" : "Hide"} the {id} widget
+              </button>
+            );
+          })}
           <div className="-mx-1 my-1 h-px bg-border" />
           <button type="button" role="menuitem" onClick={pick(() => setMode("classic"))} className={row}>
             <PanelLeft /> Classic view

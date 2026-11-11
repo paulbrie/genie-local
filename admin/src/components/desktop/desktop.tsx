@@ -18,7 +18,7 @@ import { useSubject } from "subjecto/react";
 
 import { WISP_BODY, WISP_EYES } from "@/brand/spiridus";
 import { AppIcon, LaunchpadIcon, ProjectIcon, VsCodeIcon } from "@/components/desktop/app-icon";
-import { STATUS_WIDGET_W, StatusWidget } from "@/components/desktop/status-widget";
+import { ProjectsWidget, TerminalsWidget } from "@/components/desktop/status-widget";
 import { NAV_FLAT, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import {
   ContextMenu,
@@ -32,20 +32,30 @@ import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import {
   appOf,
   type Cell,
+  type CellRect,
+  cellsRect,
   clampRect,
   defaultGeom,
+  defaultWidgetAt,
+  type DeskSaved,
+  deskWidgets,
   DOCK_SPACE,
   type Edges,
   ICON_GRID,
   iconGridSize,
   layoutIcons,
   maxRect,
+  moveCells,
   moveIcon,
+  overlaps,
   type Rect,
+  resizeCells,
   resizeRect,
   subPath,
   unmaximizeUnder,
   VSCODE_ICON,
+  WIDGET_MIN,
+  WIDGETS,
 } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useNavBadges } from "@/lib/use-nav-badges";
@@ -63,6 +73,7 @@ import {
   openApps,
   setGeom,
   setIcons,
+  setWidgetAt,
   closeFrame,
   deskDrag,
   focusWin,
@@ -695,15 +706,12 @@ function Wallpaper() {
 }
 
 /**
- * Every app as an icon on the wallpaper: on a computer, each where it was dragged to (IconGrid); on a phone, a home
- * screen grid in the default order.
+ * Every app as an icon on the wallpaper: on a computer, each where it was dragged to, the widgets among them
+ * (IconGrid); on a phone, a home screen grid in the default order.
  */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned, icons, widget, widgetSide }] = useSubject(desk);
+  const [{ pinned, icons, widgets }] = useSubject(desk);
   const [open] = useSubject(openApps);
-  const widgetMode = widget ?? "open";
-  const side = widgetSide ?? "right";
-  const widgetRoom = widgetMode === "hidden" ? 0 : STATUS_WIDGET_W + 12;
   const items = [
     ...NAV_FLAT.map((it) => ({
       id: it.href,
@@ -750,11 +758,7 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           ))}
         </nav>
       ) : (
-        <>
-          {/* (the icons keep clear of the status widget, on whichever side it is) */}
-          <IconGrid items={items} saved={icons} reserveLeft={side === "left" ? widgetRoom : 0} reserveRight={side === "right" ? widgetRoom : 0} />
-          <StatusWidget mode={widgetMode} side={side} />
-        </>
+        <IconGrid items={items} saved={icons} widgets={widgets} />
       )}
     </>
   );
@@ -763,32 +767,26 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
 type DeskItem = { id: string; label: string; node: React.ReactNode };
 
 /**
- * The desktop's icons on a grid (lib/desktop.ts layoutIcons): drag one anywhere and it snaps to the nearest spot,
- * swapping with an icon already there; the arrangement is remembered (desk.icons). A press that doesn't move is a
- * click, as before.
+ * The desktop's icons and widgets on one grid (lib/desktop.ts). Drag an icon anywhere and it snaps to the nearest
+ * spot, swapping with an icon already there (layoutIcons, moveIcon; desk.icons); a press that doesn't move is a click,
+ * as before. A widget takes a span of spots (WidgetFrame; deskWidgets, desk.widgets), and the icons keep off it.
  */
-function IconGrid({
-  items,
-  saved,
-  reserveLeft = 0,
-  reserveRight = 0,
-}: {
-  items: DeskItem[];
-  saved?: Record<string, Cell>;
-  /** room kept clear on either side (the status widget's) */
-  reserveLeft?: number;
-  reserveRight?: number;
-}) {
-  const box = useRef<HTMLElement>(null);
+function IconGrid({ items, saved, widgets }: { items: DeskItem[]; saved?: Record<string, Cell>; widgets: DeskSaved["widgets"] }) {
+  const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
   const press = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
   const swallowClick = useRef(false);
-  // Icons glide only to settle a drop (the one swapped with sliding over); placed any other way (the first
-  // measure, the saved arrangement and the widget's side restored, a resize) they're simply there.
+  // Icons glide only to settle a drop (the one swapped with sliding over, or those a widget dropped on makes move);
+  // placed any other way (the first measure, the saved arrangement restored, a resize) they're simply there.
   const [glide, setGlide] = useState(false);
   const glideTimer = useRef(0);
   useEffect(() => () => window.clearTimeout(glideTimer.current), []);
+  const settle = () => {
+    setGlide(true);
+    window.clearTimeout(glideTimer.current);
+    glideTimer.current = window.setTimeout(() => setGlide(false), 260);
+  };
 
   useEffect(() => {
     const el = box.current;
@@ -798,14 +796,18 @@ function IconGrid({
     return () => ro.disconnect();
   }, []);
 
-  const { cols, rows } = size ? iconGridSize(size.w - reserveLeft - reserveRight, size.h) : { cols: 1, rows: 1 };
+  const { cols, rows } = size ? iconGridSize(size.w, size.h) : { cols: 1, rows: 1 };
+  const placed = useMemo(() => deskWidgets(widgets, cols, rows), [widgets, cols, rows]);
+  const blocked = useMemo(() => Object.values(placed).filter((r): r is CellRect => !!r), [placed]);
   const idsKey = items.map((i) => i.id).join("\n");
-  const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows), [idsKey, saved, cols, rows]);
-  const spot = (c: Cell) => ({ left: reserveLeft + ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
+  const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows, blocked), [idsKey, saved, cols, rows, blocked]);
+  const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
   const cellAt = (x: number, y: number): Cell => ({
-    c: Math.min(Math.max(Math.round((x - reserveLeft - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
+    c: Math.min(Math.max(Math.round((x - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
     r: Math.min(Math.max(Math.round((y - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
   });
+  /** not under a widget */
+  const free = (c: Cell) => !blocked.some((b) => overlaps(b, { ...c, w: 1, h: 1 }));
   /** where the dragged icon's top-left is now, in the grid's own coordinates */
   const dragPos = (e: React.PointerEvent, p: NonNullable<typeof press.current>) => {
     const b = box.current!.getBoundingClientRect();
@@ -814,76 +816,220 @@ function IconGrid({
   const target = drag ? cellAt(drag.x, drag.y) : null;
 
   return (
-    <nav
+    <div
       ref={box}
-      aria-label="Apps"
       className="absolute inset-0 overflow-hidden"
       // (measured first: until then nothing is placed, so nothing jumps)
       style={{ visibility: size ? "visible" : "hidden" }}
     >
-      {target && <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />}
-      {items.map((i) => {
-        const dragging = drag?.id === i.id;
-        const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+      <nav aria-label="Apps" className="absolute inset-0">
+        {target && free(target) && (
+          <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />
+        )}
+        {items.map((i) => {
+          const dragging = drag?.id === i.id;
+          const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+          return (
+            <div
+              key={i.id}
+              style={at}
+              className={
+                dragging
+                  ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
+                  : glide
+                    ? "absolute transition-[left,top] duration-200 ease-out"
+                    : "absolute"
+              }
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                const r = e.currentTarget.getBoundingClientRect();
+                press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
+              }}
+              onPointerMove={(e) => {
+                const p = press.current;
+                if (!p || p.id !== i.id) return;
+                if (!p.moved) {
+                  if (Math.hypot(e.clientX - p.px, e.clientY - p.py) < 5) return;
+                  p.moved = true;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                }
+                setDrag({ id: i.id, ...dragPos(e, p) });
+              }}
+              onPointerUp={(e) => {
+                const p = press.current;
+                press.current = null;
+                if (!p?.moved || p.id !== i.id) return;
+                // (the click that ends a drag doesn't open the app)
+                swallowClick.current = true;
+                setTimeout(() => (swallowClick.current = false), 0);
+                const { x, y } = dragPos(e, p);
+                setDrag(null);
+                // (dropped on a widget, it goes back)
+                const to = cellAt(x, y);
+                const next = free(to) ? moveIcon(layout, i.id, to) : layout;
+                if (next !== layout) {
+                  settle();
+                  setIcons(next);
+                }
+              }}
+              onPointerCancel={() => {
+                press.current = null;
+                setDrag(null);
+              }}
+              onClickCapture={(e) => {
+                if (!swallowClick.current) return;
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDragStart={(e) => e.preventDefault()}
+            >
+              {i.node}
+            </div>
+          );
+        })}
+      </nav>
+      {WIDGETS.map((id) => {
+        const at = placed[id];
+        if (!at) return null;
+        const folded = widgets?.[id]?.mode === "collapsed";
+        // (folded, it's placed as its header's row: moving it keeps the height it unfolds to)
+        const full = widgets?.[id]?.at ?? defaultWidgetAt(id, cols);
         return (
-          <div
-            key={i.id}
-            style={at}
-            className={
-              dragging
-                ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
-                : glide
-                  ? "absolute transition-[left,top] duration-200 ease-out"
-                  : "absolute"
-            }
-            onPointerDown={(e) => {
-              if (e.button !== 0) return;
-              const r = e.currentTarget.getBoundingClientRect();
-              press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
+          <WidgetFrame
+            key={id}
+            label={id === "terminals" ? "Terminals" : "Projects"}
+            at={at}
+            folded={folded}
+            cols={cols}
+            rows={rows}
+            others={blocked.filter((b) => b !== at)}
+            onPlace={(to) => {
+              settle();
+              setWidgetAt(id, folded ? { ...to, h: full.h } : to);
             }}
-            onPointerMove={(e) => {
-              const p = press.current;
-              if (!p || p.id !== i.id) return;
-              if (!p.moved) {
-                if (Math.hypot(e.clientX - p.px, e.clientY - p.py) < 5) return;
-                p.moved = true;
-                e.currentTarget.setPointerCapture(e.pointerId);
-              }
-              setDrag({ id: i.id, ...dragPos(e, p) });
-            }}
-            onPointerUp={(e) => {
-              const p = press.current;
-              press.current = null;
-              if (!p?.moved || p.id !== i.id) return;
-              // (the click that ends a drag doesn't open the app)
-              swallowClick.current = true;
-              setTimeout(() => (swallowClick.current = false), 0);
-              const { x, y } = dragPos(e, p);
-              setDrag(null);
-              const next = moveIcon(layout, i.id, cellAt(x, y));
-              if (next !== layout) {
-                setGlide(true);
-                window.clearTimeout(glideTimer.current);
-                glideTimer.current = window.setTimeout(() => setGlide(false), 260);
-                setIcons(next);
-              }
-            }}
-            onPointerCancel={() => {
-              press.current = null;
-              setDrag(null);
-            }}
-            onClickCapture={(e) => {
-              if (!swallowClick.current) return;
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onDragStart={(e) => e.preventDefault()}
           >
-            {i.node}
-          </div>
+            {id === "terminals" ? <TerminalsWidget folded={folded} /> : <ProjectsWidget folded={folded} />}
+          </WidgetFrame>
         );
       })}
-    </nav>
+    </div>
+  );
+}
+
+/**
+ * A widget on the desktop's grid (IconGrid): dragged anywhere by its header ([data-widget-grip]), resized from any
+ * edge or corner down to WIDGET_MIN (three icons by three). Either way it follows the pointer with the span it will
+ * take outlined (red where it would cover the other widget: let go there, it goes back), and settles on that span when
+ * let go. Folded, it's its header alone, and only moves.
+ */
+function WidgetFrame({
+  label,
+  at,
+  folded,
+  cols,
+  rows,
+  others,
+  onPlace,
+  children,
+}: {
+  label: string;
+  /** its span, as placed (folded: its header's row) */
+  at: CellRect;
+  folded: boolean;
+  cols: number;
+  rows: number;
+  /** the other widgets' spans, which it can't cover */
+  others: CellRect[];
+  onPlace: (to: CellRect) => void;
+  children: React.ReactNode;
+}) {
+  const [live, setLive] = useState<{ rect: Rect; to: CellRect } | null>(null);
+  const [settling, setSettling] = useState(false);
+  const settleTimer = useRef(0);
+  useEffect(() => () => window.clearTimeout(settleTimer.current), []);
+  const px = cellsRect(at);
+  const fits = (to: CellRect) => !others.some((o) => overlaps(o, to));
+
+  // Follows the pointer from a press on the grip or an edge (short of a few pixels, it's a click).
+  function track(e: React.PointerEvent<HTMLElement>, step: (dx: number, dy: number) => { rect: Rect; to: CellRect }) {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let last: { rect: Rect; to: CellRect } | null = null;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const dy = ev.clientY - y0;
+      if (!last) {
+        if (Math.abs(dx) + Math.abs(dy) < 4) return;
+        deskDrag.next(true);
+      }
+      last = step(dx, dy);
+      setLive(last);
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!last) return;
+      setLive(null);
+      deskDrag.next(false);
+      setSettling(true);
+      window.clearTimeout(settleTimer.current);
+      settleTimer.current = window.setTimeout(() => setSettling(false), 260);
+      if (ev.type === "pointerup" && fits(last.to)) onPlace(last.to);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function onGripDown(e: React.PointerEvent<HTMLElement>) {
+    const el = e.target as HTMLElement;
+    if (e.button !== 0 || !el.closest("[data-widget-grip]") || el.closest("button, a, input")) return;
+    track(e, (dx, dy) => ({
+      rect: { ...px, x: px.x + dx, y: px.y + dy },
+      to: moveCells(at, dx / ICON_GRID.x, dy / ICON_GRID.y, cols, rows),
+    }));
+  }
+
+  function onResizeDown(edges: Edges, e: React.PointerEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const grid = cellsRect({ c: 0, r: 0, w: cols, h: rows });
+    const min = cellsRect({ c: 0, r: 0, ...WIDGET_MIN });
+    track(e, (dx, dy) => ({
+      rect: resizeRect(px, edges, dx, dy, grid.x + grid.w, grid.y + grid.h, min),
+      to: resizeCells(at, edges, dx / ICON_GRID.x, dy / ICON_GRID.y, cols, rows),
+    }));
+  }
+
+  const rect = live?.rect ?? px;
+  const outline = live ? { ...cellsRect(live.to), ok: fits(live.to) } : null;
+  return (
+    <>
+      {outline && (
+        <div
+          aria-hidden
+          // (above the other widget, which it would cover: the dragged one, later, is above it)
+          className={`pointer-events-none absolute z-10 rounded-2xl border-2 border-dashed ${
+            outline.ok ? "border-foreground/30 bg-foreground/5" : "border-destructive/60 bg-destructive/10"
+          }`}
+          style={{ left: outline.x, top: outline.y, width: outline.w, height: outline.h }}
+        />
+      )}
+      <aside
+        aria-label={label}
+        onPointerDown={onGripDown}
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: folded ? undefined : rect.h }}
+        className={`absolute flex flex-col rounded-2xl border border-white/40 bg-white/55 text-foreground shadow-[0_18px_40px_-16px_rgb(0_0_0/0.35)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/55 dark:ring-white/5 ${
+          live ? `z-10 ${outline?.ok ? "" : "ring-2 ring-destructive/60"}` : settling ? "transition-[left,top,width,height] duration-200 ease-out" : ""
+        }`}
+      >
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[inherit]">{children}</div>
+        {!folded && <ResizeHandles onPointerDown={onResizeDown} />}
+      </aside>
+    </>
   );
 }
 

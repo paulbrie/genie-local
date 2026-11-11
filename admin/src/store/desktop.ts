@@ -3,7 +3,7 @@
 import { Subject } from "subjecto";
 
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetMode, type WidgetSection, type WinGeom } from "@/lib/desktop";
+import { appOf, type Cell, type CellRect, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetId, type WidgetMode, type WidgetSaved, type WinGeom } from "@/lib/desktop";
 
 /**
  * The desktop shell's state (components/desktop). The page you're on is the
@@ -11,8 +11,8 @@ import { appOf, type Cell, DEFAULT_PINNED, type DeskSaved, parseDesk, type Widge
  * reopened at the path you left it on), so switching apps feels like switching
  * windows.
  *
- * `desk`      — the dock's pinned apps, each app window's place and the desktop
- *               icons' arrangement (once moved): localStorage.
+ * `desk`      — the dock's pinned apps, each app window's place, the desktop
+ *               icons' arrangement (once moved) and the widgets': localStorage.
  * `openApps`  — the apps open in this tab, in the order opened: sessionStorage.
  * `deskView`  — the window minimized (kept mounted) or closed (the page unmounted,
  *               the bare desktop showing); not persisted: a reload shows the page.
@@ -250,26 +250,19 @@ export function setPinned(app: string, on: boolean) {
   save({ ...cur, pinned });
 }
 
-/** The status widget: open, folded to its header, or off (the Spiridus menu brings it back). */
-export function setWidget(mode: WidgetMode) {
-  const { widget: _old, ...rest } = desk.getValue();
-  void _old;
-  save(mode === "open" ? rest : { ...rest, widget: mode });
+/** A widget: open, folded to its header, or off (the Spiridus menu brings it back). */
+export function setWidgetMode(id: WidgetId, mode: WidgetMode) {
+  patchWidget(id, { mode: mode === "open" ? undefined : mode });
 }
 
-/** Fold or unfold one of the status widget's sections (Terminals, Projects). */
-export function toggleWidgetSection(section: WidgetSection) {
-  const { widgetFolded, ...rest } = desk.getValue();
-  const cur = widgetFolded ?? [];
-  const next = cur.includes(section) ? cur.filter((x) => x !== section) : [...cur, section];
-  save(next.length ? { ...rest, widgetFolded: next } : rest);
+/** Where a widget is on the icon grid, and how big. */
+export function setWidgetAt(id: WidgetId, at: CellRect) {
+  patchWidget(id, { at });
 }
 
-/** The status widget against the desktop's left edge or its right one. */
-export function setWidgetSide(side: "left" | "right") {
-  const { widgetSide: _old, ...rest } = desk.getValue();
-  void _old;
-  save(side === "left" ? { ...rest, widgetSide: "left" } : rest);
+function patchWidget(id: WidgetId, patch: WidgetSaved) {
+  const cur = desk.getValue();
+  save({ ...cur, widgets: { ...cur.widgets, [id]: { ...cur.widgets?.[id], ...patch } } });
 }
 
 /**

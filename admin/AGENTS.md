@@ -159,10 +159,13 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   z-index (its title bar's buttons, a page's sticky parts) would show through the windows in front.
   · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
     a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
-  · The status widget (`status-widget.tsx`, top right of the wallpaper; the icon grid keeps clear of
-    it): terminals with their state (waiting for you first, from `liveTerminals`) and projects (running,
-    ports, memory, tickets, from /api/projects every 15 s). A terminal opens floating; a project in
-    the window already on it, else a new one (`openPathWindow`). Folded / hidden is `desk.widget`.
+  · Two widgets (`status-widget.tsx`, framed by `WidgetFrame` in desktop.tsx): Terminals, with their
+    state (waiting for you first, from `liveTerminals`), and Projects (running, ports, memory, tickets,
+    from /api/projects every 15 s). A terminal opens floating; a project in the window already on it,
+    else a new one (`openPathWindow`). Each sits on the icon grid, in cells: dragged anywhere by its
+    header, resized from any edge down to 3×3 icons (`moveCells` / `resizeCells`), never over the other
+    (`placeWidgets`), the icons keeping off its cells (`deskWidgets` → `layoutIcons`' `blocked`). Its
+    spot, folded (its header's row only) or hidden is `desk.widgets`; the Spiridus menu shows or hides each.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
     sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
     `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal

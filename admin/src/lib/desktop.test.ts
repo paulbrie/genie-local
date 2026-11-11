@@ -18,6 +18,14 @@ import {
   layoutIcons,
   moveIcon,
   sortedIcons,
+  cellsRect,
+  defaultWidgetAt,
+  deskWidgets,
+  moveCells,
+  overlaps,
+  placeWidgets,
+  resizeCells,
+  WIDGET_MIN,
 } from "./desktop";
 
 const APPS = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks", "/teams", "/agents", "/agents3d"];
@@ -190,15 +198,68 @@ describe("desktop icons", () => {
     const d = parseDesk(JSON.stringify({ pinned: [], icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
     assert.deepEqual(d.icons, { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } });
   });
-  it("remembers the status widget folded or hidden, open by default", () => {
-    assert.equal(parseDesk(JSON.stringify({ widget: "collapsed" }), ["/"]).widget, "collapsed");
-    assert.equal(parseDesk(JSON.stringify({ widget: "hidden" }), ["/"]).widget, "hidden");
-    assert.equal(parseDesk(JSON.stringify({ widget: "sideways" }), ["/"]).widget, undefined);
-    assert.equal(parseDesk(JSON.stringify({ widgetSide: "left" }), ["/"]).widgetSide, "left");
-    assert.equal(parseDesk(JSON.stringify({ widgetSide: "up" }), ["/"]).widgetSide, undefined);
-    assert.deepEqual(parseDesk(JSON.stringify({ widgetFolded: ["projects", "projects", "other"] }), ["/"]).widgetFolded, ["projects"]);
+  it("keep off the widgets' cells", () => {
+    const l = layoutIcons(["a", "b", "c"], { a: { c: 1, r: 0 } }, 4, 2, [{ c: 0, r: 0, w: 2, h: 1 }]);
+    assert.deepEqual(l.a, { c: 1, r: 1 }, "a saved spot under a widget: the nearest free one");
+    assert.deepEqual(l.b, { c: 0, r: 1 });
+    assert.deepEqual(l.c, { c: 2, r: 0 });
+    const sorted = sortedIcons(["/z", "/a", "/m"], (id) => id, 2, [{ c: 0, r: 0, w: 1, h: 1 }]);
+    assert.deepEqual(sorted, { "/a": { c: 0, r: 1 }, "/m": { c: 1, r: 0 }, "/z": { c: 1, r: 1 } });
   });
   it("fits as many columns and rows as the desktop has room for", () => {
     assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });
+  });
+});
+
+describe("desktop widgets", () => {
+  it("are three icons by three at the least, on the icons' own grid", () => {
+    const r = cellsRect({ c: 1, r: 2, ...WIDGET_MIN });
+    assert.deepEqual(r, { x: 12 + 92, y: 12 + 2 * 96, w: 3 * 92 - 4, h: 3 * 96 - 4 });
+  });
+  it("start at the top right, the projects under the terminals", () => {
+    assert.deepEqual(deskWidgets(undefined, 15, 7), { terminals: { c: 12, r: 0, w: 3, h: 3 }, projects: { c: 12, r: 3, w: 3, h: 4 } });
+    assert.deepEqual(defaultWidgetAt("terminals", 15), { c: 12, r: 0, w: 3, h: 3 });
+  });
+  it("a hidden one isn't placed, and a folded one takes its header's row", () => {
+    assert.deepEqual(deskWidgets({ terminals: { mode: "hidden" }, projects: { mode: "collapsed", at: { c: 2, r: 1, w: 4, h: 5 } } }, 15, 7), {
+      projects: { c: 2, r: 1, w: 4, h: 1 },
+    });
+  });
+  it("are kept on a smaller grid, and off each other", () => {
+    const p = placeWidgets(
+      [
+        { id: "a", at: { c: 20, r: 0, w: 3, h: 3 } },
+        { id: "b", at: { c: 20, r: 1, w: 3, h: 3 } },
+      ],
+      10,
+      5,
+    );
+    assert.deepEqual(p.a, { c: 7, r: 0, w: 3, h: 3 });
+    assert.ok(!overlaps(p.a, p.b));
+    assert.deepEqual(p.b, { c: 4, r: 1, w: 3, h: 3 }, "the nearest spot clear of the first");
+    assert.deepEqual(placeWidgets([{ id: "a", at: { c: 0, r: 0, w: 30, h: 9 } }], 10, 5).a, { c: 0, r: 0, w: 10, h: 5 });
+  });
+  it("move by whole cells, the nearest to the pointer, and stay on the grid", () => {
+    const a = { c: 2, r: 1, w: 3, h: 3 };
+    assert.deepEqual(moveCells(a, 1.4, 0.6, 15, 7), { c: 3, r: 2, w: 3, h: 3 });
+    assert.deepEqual(moveCells(a, -9, 9, 15, 7), { c: 0, r: 4, w: 3, h: 3 });
+  });
+  it("resize from any edge, never under three by three, the other edges staying", () => {
+    const a = { c: 4, r: 1, w: 4, h: 4 };
+    assert.deepEqual(resizeCells(a, { r: true, b: true }, 1.6, 0.4, 15, 7), { c: 4, r: 1, w: 6, h: 4 });
+    assert.deepEqual(resizeCells(a, { r: true, b: true }, -5, -5, 15, 7), { c: 4, r: 1, ...WIDGET_MIN });
+    assert.deepEqual(resizeCells(a, { l: true, t: true }, 5, 5, 15, 7), { c: 5, r: 2, ...WIDGET_MIN });
+    assert.deepEqual(resizeCells(a, { l: true }, -9, 0, 15, 7), { c: 0, r: 1, w: 8, h: 4 });
+    assert.deepEqual(resizeCells(a, { b: true }, 0, 9, 15, 7), { c: 4, r: 1, w: 4, h: 6 });
+  });
+  it("remember their spot, folded or hidden, and carry over the one status widget's", () => {
+    const d = parseDesk(
+      JSON.stringify({ widgets: { terminals: { at: { c: 1, r: 2, w: 1, h: 5 }, mode: "collapsed" }, projects: { mode: "sideways", at: { c: -1, r: 0, w: 3, h: 3 } } } }),
+      ["/"],
+    );
+    assert.deepEqual(d.widgets, { terminals: { at: { c: 1, r: 2, w: 3, h: 5 }, mode: "collapsed" } });
+    assert.deepEqual(parseDesk(JSON.stringify({ widget: "hidden" }), ["/"]).widgets, { terminals: { mode: "hidden" }, projects: { mode: "hidden" } });
+    assert.deepEqual(parseDesk(JSON.stringify({ widgetFolded: ["projects"] }), ["/"]).widgets, { projects: { mode: "collapsed" } });
+    assert.equal(parseDesk(JSON.stringify({ widgetSide: "left" }), ["/"]).widgets, undefined);
   });
 });

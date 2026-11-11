@@ -1,7 +1,7 @@
 "use client";
 
 // The terminals' and projects' status as the classic sidebar shows it (app-sidebar.tsx), shared with the desktop's
-// status widget (desktop/status-widget.tsx) so both read the same: the small terminal dot, its words, sizes.
+// Terminals and Projects widgets (desktop/status-widget.tsx) so both read the same: the small terminal dot, its words, sizes.
 
 import { ClaudeGlyph, claudeGlyphState } from "@/components/claude-glyph";
 import { StatusDot } from "@/components/ui/status-dot";

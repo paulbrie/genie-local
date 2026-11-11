@@ -92,18 +92,18 @@ export function clampRect(r: Rect, W: number, H: number): Rect {
 /** Which sides a resize handle moves. */
 export type Edges = { l?: boolean; r?: boolean; t?: boolean; b?: boolean };
 
-/** A rect resized from `start` by dragging `edges` (dx, dy), kept at least MIN_WIN and inside the workspace's top/left. */
-export function resizeRect(start: Rect, edges: Edges, dx: number, dy: number, W: number, H: number): Rect {
+/** A rect resized from `start` by dragging `edges` (dx, dy), kept at least `min` (a window's: MIN_WIN) and inside the workspace's top/left. */
+export function resizeRect(start: Rect, edges: Edges, dx: number, dy: number, W: number, H: number, min: { w: number; h: number } = MIN_WIN): Rect {
   let { x, y, w, h } = start;
-  if (edges.r) w = Math.min(Math.max(MIN_WIN.w, start.w + dx), W - start.x);
-  if (edges.b) h = Math.min(Math.max(MIN_WIN.h, start.h + dy), H - start.y);
+  if (edges.r) w = Math.min(Math.max(min.w, start.w + dx), W - start.x);
+  if (edges.b) h = Math.min(Math.max(min.h, start.h + dy), H - start.y);
   if (edges.l) {
-    const nx = Math.min(Math.max(0, start.x + dx), start.x + start.w - MIN_WIN.w);
+    const nx = Math.min(Math.max(0, start.x + dx), start.x + start.w - min.w);
     w = start.w + (start.x - nx);
     x = nx;
   }
   if (edges.t) {
-    const ny = Math.min(Math.max(0, start.y + dy), start.y + start.h - MIN_WIN.h);
+    const ny = Math.min(Math.max(0, start.y + dy), start.y + start.h - min.h);
     h = start.h + (start.y - ny);
     y = ny;
   }
@@ -128,17 +128,17 @@ export type DeskSaved = {
   geoms: Record<string, WinGeom>;
   /** Where each desktop icon sits, by app href (and VSCODE_ICON), once placed by hand; absent: the default order. */
   icons?: Record<string, Cell>;
-  /** The status widget (terminals and projects): absent is "open". */
-  widget?: WidgetMode;
-  /** Which side of the desktop it's on: absent is the right. */
-  widgetSide?: "left";
-  /** Its sections folded to their heading. */
-  widgetFolded?: WidgetSection[];
+  /** The widgets on the wallpaper, by id: where each is and how big (absent: its default spot), folded or hidden (absent: open). */
+  widgets?: Partial<Record<WidgetId, WidgetSaved>>;
 };
 
-export type WidgetSection = "terminals" | "projects";
+/** The desktop's widgets, among the icons: the terminals and the projects. */
+export const WIDGETS = ["terminals", "projects"] as const;
+export type WidgetId = (typeof WIDGETS)[number];
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
+
+export type WidgetSaved = { at?: CellRect; mode?: "collapsed" | "hidden" };
 
 export const DEFAULT_PINNED = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks"];
 
@@ -167,12 +167,8 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
     }
     if (Object.keys(icons).length) out.icons = icons;
   }
-  if (s.widget === "collapsed" || s.widget === "hidden") out.widget = s.widget;
-  if (s.widgetSide === "left") out.widgetSide = "left";
-  if (Array.isArray(s.widgetFolded)) {
-    const folded = [...new Set(s.widgetFolded.filter((x): x is WidgetSection => x === "terminals" || x === "projects"))];
-    if (folded.length) out.widgetFolded = folded;
-  }
+  const widgets = parseWidgets(s);
+  if (widgets) out.widgets = widgets;
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;
@@ -204,14 +200,28 @@ export function iconGridSize(W: number, H: number): { cols: number; rows: number
 
 const cellKey = (c: Cell) => `${c.c},${c.r}`;
 
+/** Every cell the spans cover, by cellKey. */
+function covered(spans: readonly CellRect[]): Set<string> {
+  const out = new Set<string>();
+  for (const s of spans) for (let c = s.c; c < s.c + s.w; c++) for (let r = s.r; r < s.r + s.h; r++) out.add(`${c},${r}`);
+  return out;
+}
+
 /**
- * Where every icon goes on a grid of `cols` × `rows`: its saved spot when that's on the grid and free; a saved one
- * that no longer fits (a smaller window) the nearest free spot to it; one never placed the first free spot in the
- * default order (down the first column, then the next). Past a full grid, more columns.
+ * Where every icon goes on a grid of `cols` × `rows`, off the cells `blocked` covers (the widgets'): its saved spot
+ * when that's on the grid and free; a saved one that no longer fits (a smaller window, a widget over it) the nearest
+ * free spot to it; one never placed the first free spot in the default order (down the first column, then the next).
+ * Past a full grid, more columns.
  */
-export function layoutIcons(ids: readonly string[], saved: Record<string, Cell> | undefined, cols: number, rows: number): Record<string, Cell> {
+export function layoutIcons(
+  ids: readonly string[],
+  saved: Record<string, Cell> | undefined,
+  cols: number,
+  rows: number,
+  blocked: readonly CellRect[] = [],
+): Record<string, Cell> {
   const out: Record<string, Cell> = {};
-  const taken = new Set<string>();
+  const taken = covered(blocked);
   const put = (id: string, c: Cell) => {
     out[id] = c;
     taken.add(cellKey(c));
@@ -265,8 +275,138 @@ export function moveIcon(layout: Record<string, Cell>, id: string, to: Cell): Re
   return out;
 }
 
-/** The icons in alphabetical order (by `labelOf`), in the default flow: "Sort by name". */
-export function sortedIcons(ids: readonly string[], labelOf: (id: string) => string, rows: number): Record<string, Cell> {
+/** The icons in alphabetical order (by `labelOf`), in the default flow around the `blocked` cells: "Sort by name". */
+export function sortedIcons(ids: readonly string[], labelOf: (id: string) => string, rows: number, blocked: readonly CellRect[] = []): Record<string, Cell> {
   const order = [...ids].sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
-  return Object.fromEntries(order.map((id, i) => [id, { c: Math.floor(i / rows), r: i % rows }]));
+  const taken = covered(blocked);
+  const out: Record<string, Cell> = {};
+  let next = 0;
+  for (const id of order) {
+    while (taken.has(`${Math.floor(next / rows)},${next % rows}`)) next++;
+    out[id] = { c: Math.floor(next / rows), r: next % rows };
+    next++;
+  }
+  return out;
+}
+
+/* ------------------------------- the widgets ------------------------------- */
+
+/** A span of the icon grid: from column c, row r, w columns wide and h rows tall. */
+export type CellRect = Cell & { w: number; h: number };
+
+/** The smallest a widget gets: three icons by three. */
+export const WIDGET_MIN = { w: 3, h: 3 } as const;
+
+/** The gap between two columns of icons, which a widget leaves after its last column and row too. */
+const CELL_GAP = ICON_GRID.x - 88;
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+
+/** Where a span of cells is on the desktop, in pixels. */
+export function cellsRect(a: CellRect): Rect {
+  return {
+    x: ICON_GRID.pad + a.c * ICON_GRID.x,
+    y: ICON_GRID.pad + a.r * ICON_GRID.y,
+    w: a.w * ICON_GRID.x - CELL_GAP,
+    h: a.h * ICON_GRID.y - CELL_GAP,
+  };
+}
+
+/** Whether two spans share a cell. */
+export function overlaps(a: CellRect, b: CellRect): boolean {
+  return a.c < b.c + b.w && b.c < a.c + a.w && a.r < b.r + b.h && b.r < a.r + a.h;
+}
+
+/** A widget's spot until it's moved: the terminals at the top right, the projects under them. */
+export function defaultWidgetAt(id: WidgetId, cols: number): CellRect {
+  const { w } = WIDGET_MIN;
+  return id === "terminals" ? { c: cols - w, r: 0, w, h: 3 } : { c: cols - w, r: 3, w, h: 4 };
+}
+
+/**
+ * Where the widgets go on a grid of `cols` × `rows`, in order: each where it wants to be, moved onto the grid when
+ * it's off it (and no bigger than the grid); one that would then cover a widget placed before it, the nearest spot
+ * that doesn't (where it wanted, when there's none).
+ */
+export function placeWidgets(wants: readonly { id: string; at: CellRect }[], cols: number, rows: number): Record<string, CellRect> {
+  const out: Record<string, CellRect> = {};
+  const placed: CellRect[] = [];
+  for (const { id, at } of wants) {
+    const w = Math.min(at.w, cols);
+    const h = Math.min(at.h, rows);
+    const want = { c: clamp(at.c, 0, cols - w), r: clamp(at.r, 0, rows - h), w, h };
+    let best = want;
+    if (placed.some((p) => overlaps(p, want))) {
+      let bestD = Infinity;
+      for (let c = 0; c + w <= cols; c++)
+        for (let r = 0; r + h <= rows; r++) {
+          const spot = { c, r, w, h };
+          const d = (c - want.c) ** 2 + (r - want.r) ** 2;
+          if (d < bestD && !placed.some((p) => overlaps(p, spot))) {
+            bestD = d;
+            best = spot;
+          }
+        }
+    }
+    out[id] = best;
+    placed.push(best);
+  }
+  return out;
+}
+
+/**
+ * The widgets that show (not hidden), placed on a grid of `cols` × `rows` (placeWidgets). A folded one takes only
+ * the row its header is on, so the icons can have the rest.
+ */
+export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: number): Partial<Record<WidgetId, CellRect>> {
+  const wants = WIDGETS.filter((id) => saved?.[id]?.mode !== "hidden").map((id) => {
+    const at = saved?.[id]?.at ?? defaultWidgetAt(id, cols);
+    return { id, at: saved?.[id]?.mode === "collapsed" ? { ...at, h: 1 } : at };
+  });
+  return placeWidgets(wants, cols, rows);
+}
+
+/** A widget dragged (dc, dr) cells (fractions: where the pointer is), snapped to the nearest spot on the grid. */
+export function moveCells(a: CellRect, dc: number, dr: number, cols: number, rows: number): CellRect {
+  return { ...a, c: clamp(Math.round(a.c + dc), 0, Math.max(0, cols - a.w)), r: clamp(Math.round(a.r + dr), 0, Math.max(0, rows - a.h)) };
+}
+
+/**
+ * A widget resized by dragging `edges` (dc, dr) cells, snapped: the other edges stay, it stays on the grid, and it's
+ * at least WIDGET_MIN (or the grid, when that's smaller).
+ */
+export function resizeCells(a: CellRect, edges: Edges, dc: number, dr: number, cols: number, rows: number): CellRect {
+  const minW = Math.min(WIDGET_MIN.w, cols);
+  const minH = Math.min(WIDGET_MIN.h, rows);
+  let [l, t, r, b] = [a.c, a.r, a.c + a.w, a.r + a.h];
+  if (edges.l) l = clamp(Math.round(l + dc), 0, r - minW);
+  if (edges.r) r = clamp(Math.round(r + dc), l + minW, cols);
+  if (edges.t) t = clamp(Math.round(t + dr), 0, b - minH);
+  if (edges.b) b = clamp(Math.round(b + dr), t + minH, rows);
+  return { c: l, r: t, w: r - l, h: b - t };
+}
+
+/** The widgets as stored; before there were two, the one status widget's folded or hidden carries over to both. */
+function parseWidgets(s: Record<string, unknown>): DeskSaved["widgets"] {
+  const src = s.widgets && typeof s.widgets === "object" && !Array.isArray(s.widgets) ? (s.widgets as Record<string, unknown>) : null;
+  const isInt = (v: unknown): v is number => Number.isInteger(v);
+  const out: NonNullable<DeskSaved["widgets"]> = {};
+  for (const id of WIDGETS) {
+    const one: WidgetSaved = {};
+    const v = src?.[id];
+    if (v && typeof v === "object") {
+      const { at, mode } = v as Record<string, unknown>;
+      if (mode === "collapsed" || mode === "hidden") one.mode = mode;
+      if (at && typeof at === "object") {
+        const { c, r, w, h } = at as Record<string, unknown>;
+        if (isInt(c) && isInt(r) && isInt(w) && isInt(h) && c >= 0 && r >= 0)
+          one.at = { c, r, w: Math.max(w, WIDGET_MIN.w), h: Math.max(h, WIDGET_MIN.h) };
+      }
+    } else if (!src) {
+      if (s.widget === "collapsed" || s.widget === "hidden") one.mode = s.widget;
+      else if (Array.isArray(s.widgetFolded) && s.widgetFolded.includes(id)) one.mode = "collapsed";
+    }
+    if (one.mode || one.at) out[id] = one;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
