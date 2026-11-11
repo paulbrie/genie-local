@@ -20,7 +20,10 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -57,6 +60,12 @@ type SafeConnection = {
   username: string;
   defaultDatabase: string | null;
   hasPassword: boolean;
+  /** found on this server (a project's env file, a container, the admin's own): it follows its source */
+  found: boolean;
+  /** where it was found */
+  from: string[];
+  /** something answers on its port (null: added by hand, not checked) */
+  running: boolean | null;
 };
 type TableRef = { schema: string | null; name: string; id: string };
 type ColumnInfo = {
@@ -374,14 +383,33 @@ export function DbExplorer() {
             onValueChange={(v) => v && selectConnection(Number(v))}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a connection…" />
+              <SelectValue placeholder="Select a connection…">
+                {(v: string | null) => {
+                  const c = connections.find((x) => String(x.id) === v);
+                  return c ? `${c.name} · ${c.engine}` : "Select a connection…";
+                }}
+              </SelectValue>
             </SelectTrigger>
-            <SelectContent>
-              {connections.map((c) => (
-                <SelectItem key={c.id} value={String(c.id)}>
-                  {c.name} · {c.engine}
-                </SelectItem>
-              ))}
+            {/* (as wide as its names need: wider than the sidebar's picker) */}
+            <SelectContent className="w-auto min-w-(--anchor-width)">
+              {/* (the databases found on this server first, then the ones added by hand) */}
+              {[
+                { label: "On this server", list: connections.filter((c) => c.found) },
+                { label: "Added", list: connections.filter((c) => !c.found) },
+              ]
+                .filter((g) => g.list.length)
+                .map((g, i) => (
+                  <SelectGroup key={g.label}>
+                    {i > 0 && <SelectSeparator />}
+                    <SelectLabel>{g.label}</SelectLabel>
+                    {g.list.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.name} · {c.engine}
+                        {c.running === false && <span className="text-muted-foreground"> · not running</span>}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
             </SelectContent>
           </Select>
           {conn && (
@@ -389,13 +417,23 @@ export function DbExplorer() {
               <span className="truncate">
                 {conn.username}@{conn.host}:{conn.port}
               </span>
-              <button
-                className="hover:underline"
-                onClick={() => setConnSheet({ open: true, editing: conn })}
-              >
-                edit
-              </button>
+              {!conn.found && (
+                <button
+                  className="hover:underline"
+                  onClick={() => setConnSheet({ open: true, editing: conn })}
+                >
+                  edit
+                </button>
+              )}
             </div>
+          )}
+          {conn?.found && (
+            <p className="text-xs text-muted-foreground" title={conn.from.join("\n")}>
+              {conn.from.length
+                ? `Found in ${conn.from.join(", ")}`
+                : "No longer found on this server (kept for its saved queries)"}
+              {conn.running === false && " · nothing answers on its port"}
+            </p>
           )}
         </div>
 

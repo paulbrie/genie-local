@@ -273,7 +273,10 @@ export const projectRecipes = pgTable(
   (t) => [uniqueIndex("project_recipes_name_key").on(t.name)],
 );
 
-/** A saved database connection for the DB explorer. Password is encrypted. */
+/**
+ * A saved database connection for the DB explorer. Password is encrypted. One found on this box (a project's env
+ * file, a database container: lib/db-discovery.ts) has its `auto_key` and follows what was found; null: added by hand.
+ */
 export const connections = pgTable("connections", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -283,6 +286,7 @@ export const connections = pgTable("connections", {
   username: text("username").notNull(),
   passwordEnc: text("password_enc"), // AES-GCM ciphertext (nullable = no password)
   defaultDatabase: text("default_database"),
+  autoKey: text("auto_key").unique(), // engine|host|port|user, for one found on this box
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

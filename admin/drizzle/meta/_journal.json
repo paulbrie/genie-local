@@ -183,6 +183,13 @@
       "when": 1794241267674,
       "tag": "0025_vercel_issues",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1794412111657,
+      "tag": "0026_db_found_connections",
+      "breakpoints": true
     }
   ]
 }

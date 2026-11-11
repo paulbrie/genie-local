@@ -232,6 +232,15 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   JSON schema reviews the pushed range, findings at or above the setting stop the push, results go
   to `.review/results/` (shown on the Git tab). It fails open (busy, timeout, no Claude);
   `REVIEW=skip git push` overrides and is logged. Decisions: `src/lib/code-review/core.mjs` (tested).
+- **DB Explorer (`/db`) finds this box's databases itself** (`src/lib/db-discovery.ts`, pure parts
+  in `db-discovery-core.ts`, tested): the admin's own `DATABASE_URL`, every local postgres:// / mysql://
+  URL in the projects' and their apps' `.env*` files (remote hosts left out), and the running database
+  containers (the user, password and database their image's env sets up, at the port they publish).
+  One connection per server and user (`connKey`), so admin_app on :5432 is one for every database it
+  owns. Listing the connections looks (at most every 30 s) and syncs them into `connections` rows with
+  an `auto_key`: kept up to date from their source, not editable by hand (409), removed when their
+  source goes unless they have saved queries; one the same as a connection added by hand is left to
+  that one. A port nothing answers on shows as "not running".
 - **Boards (`/boards`) — real-time whiteboards** (a light FigJam: stickies, text,
   shapes, sections, connectors, pen, images, comments, dot voting, a shared timer,
   reactions, live cursors, follow mode). Two more object types: a **link** (its own card with address, title and note —
