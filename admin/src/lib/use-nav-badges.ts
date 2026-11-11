@@ -100,6 +100,9 @@ export function useNavBadges(pathname: string, enabled = true) {
   return { dockerStats, liveRuns, workingTerms, badgeOf };
 }
 
+/** What useNavBadges gives (app-shell.tsx polls once, for the sidebar and the desktop's icons). */
+export type NavBadges = ReturnType<typeof useNavBadges>;
+
 /**
  * The wisp's state (brand motion): looking for you while an agent waits on
  * you, flickering while one works, else idle blinking; a wink on hover.

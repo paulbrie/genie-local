@@ -11,6 +11,7 @@ import {
   KanbanSquare,
   KeyRound,
   LayoutDashboard,
+  Monitor,
   UsersRound,
   MessagesSquare,
   Network,
@@ -38,10 +39,12 @@ export type NavItem = {
   exact?: boolean;
   /** A collapsible group: the item itself links to its own page, these under it. */
   children?: NavItem[];
+  /** What it is in the desktop interface instead (the home: the desktop itself, not a page in a window). */
+  desktop?: { label: string; icon: typeof LayoutDashboard };
 };
 
 export const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true, desktop: { label: "Desktop", icon: Monitor } },
   // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
   { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },
@@ -81,6 +84,8 @@ export const isActive = (item: NavItem, pathname: string) =>
     ? pathname === item.href
     : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
-/** Every page as one list, a group's children after it: the desktop's icons. */
+/** Every page as one list, a group's children after it. */
 export const NAV_FLAT: NavItem[] = NAV.flatMap((i) => [i, ...(i.children ?? [])]);
 export const NAV_HREFS = NAV_FLAT.map((i) => i.href);
+/** The apps on the desktop (its icons, the Launchpad's): every page but the home, which there is the desktop itself. */
+export const DESK_APPS: NavItem[] = NAV_FLAT.filter((i) => !i.desktop);

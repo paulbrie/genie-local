@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -10,13 +10,17 @@ import { rememberShellMode, ShellModeContext } from "@/components/desktop/shell-
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { isPaletteShortcut } from "@/lib/command-search";
 import type { ShellMode } from "@/lib/desktop";
+import { useNavBadges } from "@/lib/use-nav-badges";
 import { useScrollActivity } from "@/lib/use-scroll-activity";
 import { openTerminalsIn } from "@/store/terminals";
 
 /**
- * The app's frame around every page: the top bar, and either the classic
- * sidebar beside the page or the desktop around it (the top bar's switch picks;
- * the layout passes what the cookie says). The login page has neither.
+ * The app's frame around every page: the top bar, the sidebar, and the page
+ * beside it (classic) or the desktop with the page in a window (the top bar's
+ * switch picks; the layout passes what the cookie says). In the desktop the top
+ * bar runs the whole width, the sidebar under it: a grid, its inner column
+ * `display: contents`, so the page keeps its place in the tree either way. The
+ * login page has none of it.
  */
 export function AppShell({
   initialMode,
@@ -29,6 +33,7 @@ export function AppShell({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [mode, setMode] = useState(initialMode);
   // (scrollbars show while hovered or scrolling: globals.css)
   useScrollActivity();
@@ -38,11 +43,15 @@ export function AppShell({
       setMode: (m: ShellMode) => {
         rememberShellMode(m);
         setMode(m);
+        // (the home's page is the Dashboard in classic only: the desktop's home had nothing to render)
+        if (m === "classic" && pathname === "/") router.refresh();
       },
     }),
-    [mode],
+    [mode, pathname, router],
   );
   const desktop = mode === "desktop" && pathname !== "/login";
+  // the live counts on the sidebar's items and the desktop's icons, polled once for both
+  const badges = useNavBadges(pathname, !embedded);
   if (embedded) {
     return (
       <ShellModeContext value={ctx}>
@@ -52,11 +61,25 @@ export function AppShell({
   }
   return (
     <ShellModeContext value={ctx}>
-      <div className="flex h-screen overflow-hidden">
-        {desktop ? null : <AppSidebar />}
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div
+        className={
+          desktop
+            ? "grid h-screen grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden [&>aside]:col-start-1 [&>aside]:row-start-2"
+            : "flex h-screen overflow-hidden"
+        }
+      >
+        <AppSidebar badges={badges} />
+        <div
+          className={
+            desktop
+              ? "contents [&>div]:col-start-2 [&>div]:row-start-2 [&>header]:col-span-2 [&>header]:row-start-1"
+              : "flex min-w-0 flex-1 flex-col"
+          }
+        >
           <StatsToolbar />
-          <Workspace desktop={desktop}>{children}</Workspace>
+          <Workspace desktop={desktop} badgeOf={badges.badgeOf}>
+            {children}
+          </Workspace>
         </div>
       </div>
       <CommandPalette />

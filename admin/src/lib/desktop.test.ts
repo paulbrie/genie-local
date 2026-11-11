@@ -3,10 +3,11 @@ import { describe, it } from "node:test";
 
 import {
   appOf,
+  atRest,
   clampRect,
-  DEFAULT_PINNED,
   defaultGeom,
-  DOCK_SPACE,
+  magnify,
+  MAGNIFY,
   maxRect,
   MIN_WIN,
   parseDesk,
@@ -27,13 +28,14 @@ import {
   resizeCells,
   WIDGET_MIN,
   alignShift,
-  dockSpace,
-  DOCK_ICON,
   dropRange,
   fitShift,
   widgetMode,
   arrangementFits,
+  SIDEBAR_ICON,
+  sidebarWidth,
   stackDesktop,
+  tileSlot,
   widgetWants,
 } from "./desktop";
 
@@ -78,19 +80,21 @@ describe("subPath", () => {
 });
 
 describe("window geometry", () => {
-  it("a first window leaves two icon columns on a wide screen and the dock below", () => {
+  // (the workspace is right of the sidebar and under the top bar: nothing in it is kept clear for either)
+  it("a first window leaves two icon columns on a wide screen, and fills the rest down to a small gap", () => {
     const g = defaultGeom(1600, 900);
     assert.equal(g.x, 204);
     assert.equal(g.x + g.w, 1600 - 16);
-    assert.equal(g.y + g.h, 900 - DOCK_SPACE);
+    assert.equal(g.y, 12);
+    assert.equal(g.y + g.h, 900 - 12);
   });
   it("a first window on a narrow screen fills the width", () => {
     const g = defaultGeom(1000, 700);
     assert.ok(g.x <= 24);
     assert.ok(g.x + g.w <= 1000);
   });
-  it("maximized fills the workspace above the dock", () => {
-    assert.deepEqual(maxRect(1200, 800), { x: 8, y: 8, w: 1184, h: 800 - 8 - DOCK_SPACE });
+  it("maximized fills the whole workspace, a small gap around it", () => {
+    assert.deepEqual(maxRect(1200, 800), { x: 8, y: 8, w: 1184, h: 784 });
   });
   it("clamps size to the workspace and the minimum", () => {
     assert.deepEqual(clampRect({ x: 0, y: 0, w: 5000, h: 5000 }, 1200, 800), { x: 0, y: 0, w: 1200, h: 800 });
@@ -142,12 +146,10 @@ describe("unmaximizeUnder", () => {
 
 describe("parseDesk", () => {
   it("gives the defaults for nothing stored or anything unreadable", () => {
-    for (const raw of [null, "", "nope", "[]", "42"])
-      assert.deepEqual(parseDesk(raw, APPS), { pinned: DEFAULT_PINNED.filter((a) => APPS.includes(a)), geoms: {} });
+    for (const raw of [null, "", "nope", "[]", "42"]) assert.deepEqual(parseDesk(raw, APPS), { geoms: {} });
   });
-  it("keeps known apps only, once each, and valid geometry only", () => {
+  it("keeps known apps only, and valid geometry only", () => {
     const raw = JSON.stringify({
-      pinned: ["/files", "/gone", "/files", 7, "/"],
       geoms: {
         "/files": { x: 1, y: 2, w: 300, h: 200, max: true },
         "/": { x: 1, y: 2, w: 0, h: 200 },
@@ -157,12 +159,11 @@ describe("parseDesk", () => {
       },
     });
     assert.deepEqual(parseDesk(raw, APPS), {
-      pinned: ["/files", "/"],
       geoms: { "/files": { x: 1, y: 2, w: 300, h: 200, max: true }, "/boards": { x: 0, y: 0, w: 500, h: 300 } },
     });
   });
-  it("an emptied dock stays empty", () => {
-    assert.deepEqual(parseDesk(JSON.stringify({ pinned: [] }), APPS).pinned, []);
+  it("lets go of what the dock kept (its apps, VS Code)", () => {
+    assert.deepEqual(parseDesk(JSON.stringify({ pinned: ["/", "vscode", "/files"] }), APPS), { geoms: {} });
   });
 });
 
@@ -204,7 +205,7 @@ describe("desktop icons", () => {
     assert.deepEqual(l, { "/a": { c: 0, r: 0 }, "/m": { c: 0, r: 1 }, "/z": { c: 1, r: 0 } });
   });
   it("reads saved spots back, dropping what it doesn't know", () => {
-    const d = parseDesk(JSON.stringify({ pinned: [], icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
+    const d = parseDesk(JSON.stringify({ icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
     assert.deepEqual(d.icons, { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } });
   });
   it("keep off the widgets' cells", () => {
@@ -216,14 +217,12 @@ describe("desktop icons", () => {
     assert.deepEqual(sorted, { "/a": { c: 0, r: 1 }, "/m": { c: 1, r: 0 }, "/z": { c: 1, r: 1 } });
   });
   it("fits as many columns and rows as the desktop has room for", () => {
-    assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });
+    assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 8 });
   });
-  it("lose a row to a bigger dock, and gain one from a smaller", () => {
-    assert.equal(dockSpace(), DOCK_SPACE);
-    assert.equal(iconGridSize(1440, 780).rows, 7);
-    assert.equal(iconGridSize(1440, 780, dockSpace(DOCK_ICON.max)).rows, 6);
-    assert.equal(iconGridSize(1440, 760).rows, 6);
-    assert.equal(iconGridSize(1440, 760, dockSpace(DOCK_ICON.min)).rows, 7);
+  it("take the whole height, inset as from the sides (nothing kept at the bottom)", () => {
+    assert.equal(iconGridSize(1440, 12 + 7 * 96 + 12).rows, 7);
+    assert.equal(iconGridSize(1440, 12 + 7 * 96 + 11).rows, 6);
+    assert.equal(iconGridSize(1440, 50).rows, 1, "always one");
   });
 });
 
@@ -330,17 +329,17 @@ describe("the arrangement across the desktop", () => {
     assert.equal(fitShift([{ c: 13, r: 0, w: 3, h: 3 }], 15), -1);
     assert.equal(fitShift([], 15), 0);
   });
-  it("remembers icons taken off the desktop, the dock's size and the arrangement's side", () => {
+  it("remembers icons taken off the desktop, the sidebar's size and the arrangement's side", () => {
     const d = parseDesk(
-      JSON.stringify({ removedIcons: ["/files", "/files", "vscode", "/gone", 3], dockSize: 64, align: "right" }),
+      JSON.stringify({ removedIcons: ["/files", "/files", "vscode", "/gone", 3], sidebarSize: 32, align: "right" }),
       ["/", "/files"],
     );
     assert.deepEqual(d.removedIcons, ["/files", "vscode"]);
-    assert.equal(d.dockSize, 64);
+    assert.equal(d.sidebarSize, 32);
     assert.equal(d.align, "right");
-    const bad = parseDesk(JSON.stringify({ removedIcons: [], dockSize: 500, align: "up" }), ["/"]);
+    const bad = parseDesk(JSON.stringify({ removedIcons: [], sidebarSize: 500, align: "up" }), ["/"]);
     assert.equal(bad.removedIcons, undefined);
-    assert.equal(bad.dockSize, undefined);
+    assert.equal(bad.sidebarSize, undefined);
     assert.equal(bad.align, undefined);
   });
 });
@@ -400,9 +399,58 @@ describe("the stacked desktop", () => {
   });
 });
 
-describe("VS Code in the dock", () => {
-  it("can be kept in the dock, as the apps are", () => {
-    assert.deepEqual(parseDesk(JSON.stringify({ pinned: ["/", "vscode", "vscode", "/gone"] }), ["/"]).pinned, ["/", "vscode"]);
+describe("the sidebar, in the desktop", () => {
+  it("takes the dock's size over, at the same place in the range (half), when it has none of its own", () => {
+    assert.equal(parseDesk(JSON.stringify({ dockSize: 64 }), ["/"]).sidebarSize, 32);
+    assert.equal(parseDesk(JSON.stringify({ dockSize: 32 }), ["/"]).sidebarSize, SIDEBAR_ICON.min);
+    assert.equal(parseDesk(JSON.stringify({ dockSize: 80 }), ["/"]).sidebarSize, SIDEBAR_ICON.max);
+    assert.equal(parseDesk(JSON.stringify({ dockSize: 64, sidebarSize: 20 }), ["/"]).sidebarSize, 20);
+    assert.equal(parseDesk(JSON.stringify({ dockSize: 2 }), ["/"]).sidebarSize, undefined);
+  });
+  it("gives each icon the room it grows to, and is classic's width at the default size", () => {
+    assert.equal(tileSlot(24), 24 * (1 + MAGNIFY.by));
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224);
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 60);
+    assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= SIDEBAR_ICON.max * (1 + MAGNIFY.by) + 12 + 10, "the list's padding, a scrollbar");
+  });
+
+  // ten rows of 32px, 24px icons, at rest
+  const rows = Array.from({ length: 10 }, (_, i) => ({ top: i * 32, h: 32 }));
+  it("swells the item under the pointer most, its neighbours less, the far ones not at all", () => {
+    const { scales } = magnify(rows, 5 * 32 + 16, 24);
+    assert.equal(scales[5], 1 + MAGNIFY.by);
+    assert.ok(scales[4] < scales[5] && scales[4] > 1);
+    assert.equal(scales[4], scales[6], "the same either side");
+    assert.ok(scales[3] < scales[4]);
+    assert.equal(scales[0], 1);
+    assert.equal(scales[9], 1);
+  });
+  it("draws the list up by what grew above the pointer, so the point under it stays there", () => {
+    const size = 24;
+    for (const y of [3, 100, 5 * 32 + 16, 170, 300]) {
+      const { scales, shift } = magnify(rows, y, size);
+      // where the point at y is drawn: its row's top, pushed down by the rows above, plus its way into its own row
+      const k = rows.findIndex((r) => y >= r.top && y < r.top + r.h);
+      const above = scales.slice(0, k).reduce((sum, s) => sum + (s - 1) * size, 0);
+      const into = ((y - rows[k].top) / rows[k].h) * (rows[k].h + (scales[k] - 1) * size);
+      assert.ok(Math.abs(rows[k].top + above + into - shift - y) < 1e-9, `y = ${y}`);
+    }
+    assert.equal(magnify(rows, -50, 24).shift, 0, "nothing grows above the first");
+  });
+  it("finds where the items are at rest from where they're drawn mid-swell", () => {
+    const size = 24;
+    const { scales, shift } = magnify(rows, 140, size);
+    let above = 0;
+    const drawn = rows.map((r, i) => {
+      const grow = (scales[i] - 1) * size;
+      const d = { top: r.top + above - shift, h: r.h + grow, grow };
+      above += grow;
+      return d;
+    });
+    atRest(drawn, shift).forEach((r, i) => {
+      assert.ok(Math.abs(r.top - rows[i].top) < 1e-9);
+      assert.ok(Math.abs(r.h - rows[i].h) < 1e-9);
+    });
   });
 });
 

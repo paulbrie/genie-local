@@ -70,19 +70,16 @@ export function StatsToolbar() {
           : "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
       }`}
     >
-      {desktop ? (
-        <DesktopMenu />
-      ) : (
-        // Mobile nav trigger — the sidebar is an off-canvas drawer below `md`.
-        <button
-          type="button"
-          onClick={() => mobileNav.next(true)}
-          aria-label="Open navigation"
-          className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:hidden"
-        >
-          <Menu className="size-5" />
-        </button>
-      )}
+      {/* Mobile nav trigger — the sidebar is an off-canvas drawer below `md` (in either interface). */}
+      <button
+        type="button"
+        onClick={() => mobileNav.next(true)}
+        aria-label="Open navigation"
+        className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent/50 hover:text-foreground md:hidden"
+      >
+        <Menu className="size-5" />
+      </button>
+      {desktop && <DesktopMenu />}
       <div className="flex min-w-0 flex-1 items-center">
         <Gauges stats={stats} error={error} />
       </div>

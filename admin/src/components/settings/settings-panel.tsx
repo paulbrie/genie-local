@@ -7,16 +7,16 @@ import { useSubject } from "subjecto/react";
 
 import { AppIcon, VsCodeIcon } from "@/components/desktop/app-icon";
 import { useShellMode } from "@/components/desktop/shell-mode";
-import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
+import { DESK_APPS, NAV_HREFS } from "@/components/nav-items";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { type DeskAlign, DOCK_ICON, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
+import { type DeskAlign, SIDEBAR_ICON, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { desk, loadDesk, restoreIcons, setAlign, setDockSize, setIcons, setOnDesktop, setWidgetMode } from "@/store/desktop";
+import { desk, loadDesk, restoreIcons, setAlign, setIcons, setOnDesktop, setSidebarSize, setWidgetMode } from "@/store/desktop";
 
 /**
- * The Settings app (/settings): the interface and the theme, and the desktop's arrangement, dock, widgets and icons
+ * The Settings app (/settings): the interface and the theme, and the desktop's arrangement, sidebar, widgets and icons
  * (`desk`, this browser's localStorage). It reads them itself (loadDesk), so it works from the classic interface too,
  * and a change made here in a window's frame reaches the desktop around it.
  */
@@ -32,10 +32,10 @@ export function SettingsPanel() {
   );
   useEffect(() => loadDesk(NAV_HREFS), []);
 
-  const dock = d.dockSize ?? DOCK_ICON.default;
+  const side = d.sidebarSize ?? SIDEBAR_ICON.default;
   const removed = new Set(d.removedIcons ?? []);
   const icons = [
-    ...NAV_FLAT.map((i) => ({ id: i.href, label: i.label, icon: <AppIcon item={i} size={22} /> })),
+    ...DESK_APPS.map((i) => ({ id: i.href, label: i.label, icon: <AppIcon item={i} size={22} /> })),
     { id: VSCODE_ICON, label: "VS Code", icon: <VsCodeIcon size={22} /> },
   ];
 
@@ -46,7 +46,7 @@ export function SettingsPanel() {
           <CardTitle>Appearance</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <Setting label="Interface" hint="The classic view with its sidebar, or a desktop with windows, icons and a dock.">
+          <Setting label="Interface" hint="The classic view with its sidebar, or a desktop with windows, icons and widgets, the sidebar beside it.">
             <Segmented
               value={mode}
               onChange={setMode}
@@ -74,7 +74,7 @@ export function SettingsPanel() {
         <CardHeader>
           <CardTitle>Desktop</CardTitle>
           <CardDescription>
-            {mode === "desktop" ? "The desktop interface: its icons, widgets and dock." : "For the desktop interface (switch to it above)."}
+            {mode === "desktop" ? "The desktop interface: its icons, widgets and sidebar." : "For the desktop interface (switch to it above)."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -90,21 +90,21 @@ export function SettingsPanel() {
             />
           </Setting>
 
-          <Setting label="Dock size" hint="Or drag the line between the dock's icons up or down.">
+          <Setting label="Sidebar size" hint="How big the apps' icons are in the desktop's sidebar; they grow as the pointer passes over them.">
             <div className="flex items-center gap-3">
               <input
                 type="range"
-                min={DOCK_ICON.min}
-                max={DOCK_ICON.max}
+                min={SIDEBAR_ICON.min}
+                max={SIDEBAR_ICON.max}
                 step={2}
-                value={dock}
-                onChange={(e) => setDockSize(Number(e.target.value))}
-                aria-label="Dock size"
+                value={side}
+                onChange={(e) => setSidebarSize(Number(e.target.value))}
+                aria-label="Sidebar size"
                 className="w-48 accent-primary"
               />
-              <span className="w-12 text-sm text-muted-foreground tabular-nums">{dock} px</span>
-              {dock !== DOCK_ICON.default && (
-                <Button variant="ghost" size="sm" onClick={() => setDockSize(DOCK_ICON.default)}>
+              <span className="w-12 text-sm text-muted-foreground tabular-nums">{side} px</span>
+              {side !== SIDEBAR_ICON.default && (
+                <Button variant="ghost" size="sm" onClick={() => setSidebarSize(SIDEBAR_ICON.default)}>
                   Default
                 </Button>
               )}
@@ -127,7 +127,7 @@ export function SettingsPanel() {
 
           <Setting
             label="Icons on the desktop"
-            hint="One taken off stays in the Launchpad and the dock, whose menus put it back too."
+            hint="One taken off stays in the sidebar and the Launchpad, whose menus put it back too."
             actions={
               <>
                 {removed.size > 0 && (

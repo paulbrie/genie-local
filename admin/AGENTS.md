@@ -164,32 +164,48 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   `admin_shell` cookie (path = basePath, so /admin and /admin-dev keep their own), read by the root
   layout, so the server already renders the right one. `src/components/desktop/app-shell.tsx` puts the
   page at the same place in the tree in both (`Workspace`, whose wrappers are `display: contents` in
-  classic), so switching never remounts it. Desktop (`desktop.tsx`): a wallpaper with every page of
-  `NAV` (`src/components/nav-items.ts`, shared with the sidebar) as an icon in its own colours
-  (`app-icon.tsx`), live badges (`useNavBadges`, also the sidebar's), the page as a window (drag,
-  resize from any edge, maximize, minimize, close; placed per app), a dock of pinned apps plus the
-  apps open in the tab (each reopened at the path it was left on), a Launchpad with search (apps and
-  projects), and the Spiridus menu at the bar's left. Its state is `src/store/desktop.ts`; the
-  geometry is pure and tested (`src/lib/desktop.ts`). The window has no transform or filter, so a
-  page's own `fixed` panels behave as they do in classic; alone it has no z-index either, but with
-  other windows open every window is a layer at its place in `stack` (`winZ`), or what it holds with a
-  z-index (its title bar's buttons, a page's sticky parts) would show through the windows in front.
+  classic), so switching never remounts it; in desktop the shell is a grid (the top bar the whole
+  width, the sidebar under it at the left, the workspace beside it), its inner column `contents` too.
+  Desktop (`desktop.tsx`): a wallpaper with every page of `NAV` (`src/components/nav-items.ts`,
+  shared with the sidebar) but the home as an icon in its own colours (`app-icon.tsx`), live badges
+  (`useNavBadges`, polled once in app-shell for the sidebar and the icons), the page as a window
+  (drag, resize from any edge, maximize, minimize, close; placed per app), the classic sidebar
+  (`AppSidebar`, always there, see below), a Launchpad with search (apps and projects), and the
+  Spiridus menu at the bar's left. The home ("/") is the desktop itself: no window (`atHome`: the
+  page's own window is closed there, so the next app opens in it), the sidebar's first item is
+  Desktop instead of Dashboard (`NavItem.desktop`), and `src/app/page.tsx` skips the Dashboard's
+  metrics when the cookie says desktop (switching to classic there refreshes it). Its state is
+  `src/store/desktop.ts`; the geometry is pure and tested (`src/lib/desktop.ts`). The window has no
+  transform or filter, so a page's own `fixed` panels behave as they do in classic; alone it has no
+  z-index either, but with other windows open every window is a layer at its place in `stack`
+  (`winZ`), or what it holds with a z-index (its title bar's buttons, a page's sticky parts) would
+  show through the windows in front.
   · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
     a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
-    Right-click → Remove from Desktop (`desk.removedIcons`); the dock's and the Launchpad's menus,
+    Right-click → Remove from Desktop (`desk.removedIcons`); the sidebar's and the Launchpad's menus,
     Settings, and the Spiridus menu's "Put back" bring one back (at its old spot when that's free).
     The icons and widgets are drawn as one arrangement against the left, centred or against the right
     (`desk.align`, `alignShift`); there a drop can land left of column 0, and the whole moves over to
     stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen.
-  · VS Code (code-server, outside the basePath) can be kept in the dock too (`VSCODE_ICON` in
-    `desk.pinned`, `VsCodeDockItem`): its desktop icon's and the Launchpad's menus keep it there.
   · Drags (an icon, a widget's move or resize) also end when the window loses the pointer or the
     focus mid-drag (`lostpointercapture`, `blur`), which sends no pointerup: they go back, rather
     than stay drawn half-way with their drop target.
-  · The dock resizes as macOS's does: drag the line between its parts up or down (`DockDivider`,
-    `desk.dockSize`, 32–80 px). Windows and the icon grid keep clear of it at its size (`dockSpace`).
+  · The sidebar in desktop (no dock): classic's, under the top bar, the Launchpad at its head and VS
+    Code where classic has it; the apps as tiles at Settings' "Sidebar size" (`desk.sidebarSize`,
+    `SIDEBAR_ICON` 16–40 px; an old `dockSize` carries over halved), each in a slot as wide as it
+    grows (`tileSlot`, `sidebarWidth`), the rail collapse in its footer. The pointer swells them as
+    macOS's dock does (`useMagnify` in desktop.tsx, `--s` per `[data-magnify]` item; `magnify` /
+    `atRest` in lib/desktop.ts draw the list up so what's under the pointer stays there); off on
+    touch, on a phone and for reduced motion. Lit is the window in front (`useFrontPath`,
+    desktop-menu.tsx), or Desktop when none is; a dot marks an app open in the tab or with a window.
+    A click (`DeskNavLink`, through Link's `onNavigate`, so a modifier-click is a new tab): the app's
+    window in front goes down, else it comes up, else it opens (`openAppWindow`); Desktop puts every
+    window down (`showDesktop`, also the Spiridus menu's and ⌘K's). Projects and boards under their
+    items open in their window (`openPathWindow`). Right-click: open, in a new window or tab, on or off
+    the desktop, close. On a phone it's classic's drawer (the top bar's menu button), the Spiridus
+    menu from `md` up. Windows and the icon grid have the whole workspace: nothing is kept clear.
   · Settings (`/settings`, in `NAV`): panes listed in `SETTINGS_PANES` (also in ⌘K). General
-    (`settings-panel.tsx`): interface, theme, and the desktop's arrangement, dock size, widgets and
+    (`settings-panel.tsx`): interface, theme, and the desktop's arrangement, sidebar size, widgets and
     icons. Users (`/settings/users`; `/users` redirects there): who may Sign in with Genie. It reads `desk` itself
     (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
     made in a window's frame (a separate document) reaches the desktop around it.

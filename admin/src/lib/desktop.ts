@@ -47,14 +47,6 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** A window's place: its restored rect, and whether it is maximized instead. */
 export type WinGeom = Rect & { max?: boolean };
 
-/** The dock's icons, in px: by default, and how small or big dragging its divider makes them. */
-export const DOCK_ICON = { min: 32, max: 80, default: 48 } as const;
-/** Room kept at the bottom of the workspace for a dock of `icon` px icons (its padding, and the gap under it). */
-export function dockSpace(icon: number = DOCK_ICON.default): number {
-  return icon + 36;
-}
-/** Room kept at the bottom of the workspace for the dock, at its default size. */
-export const DOCK_SPACE = dockSpace();
 /** The smallest a window gets. */
 export const MIN_WIN = { w: 380, h: 240 };
 /** How much of a window's title bar has to stay on screen. */
@@ -64,20 +56,22 @@ const MAX_GAP = 8;
 /** Icon columns left uncovered by a new window on a wide screen. */
 const ICON_COLUMNS_W = 204;
 
-/** A first window: right of two columns of icons on a wide screen, filling the rest above the dock (`dock`: its room). */
-export function defaultGeom(W: number, H: number, dock = DOCK_SPACE): Rect {
+// (the workspace is the area right of the sidebar and under the top bar: nothing in it is kept clear for either)
+
+/** A first window: right of two columns of icons on a wide screen, filling the rest down to a small gap. */
+export function defaultGeom(W: number, H: number): Rect {
   const x = W >= 1280 ? ICON_COLUMNS_W : Math.min(24, Math.round(W * 0.03));
   const y = 12;
-  return clampRect({ x, y, w: W - x - 16, h: H - y - dock }, W, H);
+  return clampRect({ x, y, w: W - x - 16, h: H - 2 * y }, W, H);
 }
 
-/** The maximized rect: the whole workspace above the dock (`dock`: its room), a small gap around it. */
-export function maxRect(W: number, H: number, dock = DOCK_SPACE): Rect {
+/** The maximized rect: the whole workspace, a small gap around it. */
+export function maxRect(W: number, H: number): Rect {
   return {
     x: MAX_GAP,
     y: MAX_GAP,
     w: Math.max(0, W - 2 * MAX_GAP),
-    h: Math.max(0, H - MAX_GAP - dock),
+    h: Math.max(0, H - 2 * MAX_GAP),
   };
 }
 
@@ -126,10 +120,60 @@ export function unmaximizeUnder(restored: Rect, max: Rect, px: number): Rect {
   return { ...restored, x: Math.round(px - frac * restored.w), y: max.y };
 }
 
+/* -------------------------- the sidebar, in the desktop -------------------------- */
+
+/** The sidebar's app icons in the desktop interface, in px: by default, and how small or big Settings makes them. */
+export const SIDEBAR_ICON = { min: 16, max: 40, default: 24 } as const;
+
+/** How much the icon under the pointer grows (by half), and how far from its centre the swell reaches (px). */
+export const MAGNIFY = { by: 0.5, reach: 120 } as const;
+
+/** The room an icon of `size` px has in the sidebar: as wide as it grows, so the names beside it never move. */
+export function tileSlot(size: number): number {
+  return Math.round(size * (1 + MAGNIFY.by));
+}
+
+/**
+ * The sidebar's width with icons of `size` px: with the names (classic's at the default), or an icon rail, each icon's
+ * room plus the list's padding, its border and a thin scrollbar's width.
+ */
+export function sidebarWidth(size: number, rail: boolean): number {
+  return tileSlot(size) + (rail ? 24 : 188);
+}
+
+/**
+ * A macOS dock's swell, down the sidebar: each item's scale (from 1 + MAGNIFY.by under the pointer, smoothly down to 1 as
+ * its centre is further from it), and how far up to draw the list so the point under the pointer stays there while
+ * the items above it grow (each `size` × (scale − 1) taller; the one under the pointer counts up to the pointer).
+ * `items`: their tops and heights at rest, `y`: the pointer, both in the list's own coordinates.
+ */
+export function magnify(items: readonly { top: number; h: number }[], y: number, size: number): { scales: number[]; shift: number } {
+  let shift = 0;
+  const scales = items.map(({ top, h }) => {
+    const t = Math.max(0, 1 - Math.abs(y - (top + h / 2)) / MAGNIFY.reach);
+    const s = 1 + MAGNIFY.by * t * t * (3 - 2 * t);
+    const grow = (s - 1) * size;
+    shift += y >= top + h ? grow : y > top ? (grow * (y - top)) / h : 0;
+    return s;
+  });
+  return { scales, shift };
+}
+
+/**
+ * Where the items are at rest, from where they're drawn now, mid-swell: each `grow` px taller than at rest, the list
+ * drawn `shift` px up. (So the swell can be measured at any moment, a scroll or one still settling included.)
+ */
+export function atRest(drawn: readonly { top: number; h: number; grow: number }[], shift: number): { top: number; h: number }[] {
+  let above = 0;
+  return drawn.map(({ top, h, grow }) => {
+    const r = { top: top + shift - above, h: h - grow };
+    above += grow;
+    return r;
+  });
+}
+
 /** What the desktop remembers on this browser (localStorage). */
 export type DeskSaved = {
-  /** Apps kept in the dock, in order (by href; VS Code by VSCODE_ICON). */
-  pinned: string[];
   /** Each app window's place, by app href. */
   geoms: Record<string, WinGeom>;
   /** Where each desktop icon sits, by app href (and VSCODE_ICON), once placed by hand; absent: the default order. */
@@ -138,8 +182,8 @@ export type DeskSaved = {
   widgets?: Partial<Record<WidgetId, WidgetSaved>>;
   /** Icons taken off the desktop (by app href, and VSCODE_ICON). */
   removedIcons?: string[];
-  /** The dock's icon size, in px (absent: DOCK_ICON.default). */
-  dockSize?: number;
+  /** The sidebar's icon size in the desktop, in px (absent: SIDEBAR_ICON.default). */
+  sidebarSize?: number;
   /** Where the icons and widgets sit across the desktop, as one arrangement: absent is against the left. */
   align?: "center" | "right";
 };
@@ -194,14 +238,15 @@ export function widgetMode(saved: DeskSaved["widgets"], id: WidgetId): WidgetMod
   return saved?.[id]?.mode ?? (WIDGETS_OFF.has(id) ? "hidden" : "open");
 }
 
-export const DEFAULT_PINNED = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks"];
-
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** A stored desktop, kept to the apps that still exist; anything unreadable gives the defaults. */
+/**
+ * A stored desktop, kept to the apps that still exist; anything unreadable gives the defaults. (What the dock kept, its
+ * apps, is let go; its size carries over to the sidebar's, at the same place in the range: half.)
+ */
 export function parseDesk(raw: string | null, apps: readonly string[]): DeskSaved {
   const known = new Set(apps);
-  const out: DeskSaved = { pinned: DEFAULT_PINNED.filter((a) => known.has(a)), geoms: {} };
+  const out: DeskSaved = { geoms: {} };
   let v: unknown;
   try {
     v = raw ? JSON.parse(raw) : null;
@@ -210,8 +255,6 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   }
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   const s = v as Record<string, unknown>;
-  if (Array.isArray(s.pinned))
-    out.pinned = [...new Set(s.pinned.filter((a): a is string => typeof a === "string" && (known.has(a) || a === VSCODE_ICON)))];
   if (s.icons && typeof s.icons === "object" && !Array.isArray(s.icons)) {
     const icons: Record<string, Cell> = {};
     for (const [id, cell] of Object.entries(s.icons as Record<string, unknown>)) {
@@ -227,7 +270,8 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
     const removed = [...new Set(s.removedIcons.filter((id): id is string => typeof id === "string" && (known.has(id) || id === VSCODE_ICON)))];
     if (removed.length) out.removedIcons = removed;
   }
-  if (Number.isInteger(s.dockSize) && (s.dockSize as number) >= DOCK_ICON.min && (s.dockSize as number) <= DOCK_ICON.max) out.dockSize = s.dockSize as number;
+  const side = s.sidebarSize ?? (Number.isInteger(s.dockSize) ? Math.round((s.dockSize as number) / 2) : undefined);
+  if (Number.isInteger(side) && (side as number) >= SIDEBAR_ICON.min && (side as number) <= SIDEBAR_ICON.max) out.sidebarSize = side as number;
   if (s.align === "center" || s.align === "right") out.align = s.align;
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
@@ -250,11 +294,11 @@ export const VSCODE_ICON = "vscode";
 /** The icon grid: each spot's size (an 88px column and a 4px gap; a 96px row), and its inset from the edges. */
 export const ICON_GRID = { x: 92, y: 96, pad: 12 } as const;
 
-/** How many columns and rows of icons fit in a desktop of W × H (the dock's strip kept clear: `dock`, its room). */
-export function iconGridSize(W: number, H: number, dock = DOCK_SPACE): { cols: number; rows: number } {
+/** How many columns and rows of icons fit in a desktop of W × H (inset from every edge). */
+export function iconGridSize(W: number, H: number): { cols: number; rows: number } {
   return {
     cols: Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x)),
-    rows: Math.max(1, Math.floor((H - ICON_GRID.pad - dock) / ICON_GRID.y)),
+    rows: Math.max(1, Math.floor((H - ICON_GRID.pad * 2) / ICON_GRID.y)),
   };
 }
 

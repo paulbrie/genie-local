@@ -218,8 +218,8 @@
 /*
  * The desktop interface (components/desktop). Its wallpaper: the brand's
  * grounds (Paper / a deeper Night) lit by soft Catppuccin glows, static, so
- * nothing repaints while it shows. Its window: opening, and going down to the
- * dock (forwards: it stays out of sight until it's hidden).
+ * nothing repaints while it shows. Its window: opening, and going down when
+ * minimized (forwards: it stays out of sight until it's hidden).
  */
 .desk-wallpaper {
   background:

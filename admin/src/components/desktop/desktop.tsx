@@ -22,7 +22,7 @@ import { WISP_BODY, WISP_EYES } from "@/brand/spiridus";
 import { AppIcon, LaunchpadIcon, ProjectIcon, VsCodeIcon } from "@/components/desktop/app-icon";
 import { openSettings, sortIconsByName } from "@/components/desktop/desktop-menu";
 import { WIDGET_BODY, WIDGET_ICON } from "@/components/desktop/widget-registry";
-import { NAV_FLAT, NAV_HREFS, type NavItem } from "@/components/nav-items";
+import { DESK_APPS, NAV_FLAT, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -34,6 +34,7 @@ import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import {
   appOf,
+  atRest,
   type Cell,
   type CellRect,
   cellsRect,
@@ -43,14 +44,13 @@ import {
   defaultWidgetAt,
   type DeskAlign,
   type DeskSaved,
-  DOCK_ICON,
   dropRange,
-  dockSpace,
   type Edges,
   fitShift,
   ICON_GRID,
   iconGridSize,
   layoutIcons,
+  magnify,
   maxRect,
   moveCells,
   moveIcon,
@@ -63,6 +63,7 @@ import {
   resizeCells,
   resizeRect,
   subPath,
+  tileSlot,
   unmaximizeUnder,
   VSCODE_ICON,
   WIDGET_LABEL,
@@ -72,11 +73,11 @@ import {
   WIDGETS,
 } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { useNavBadges } from "@/lib/use-nav-badges";
 import { Z_LAUNCHPAD } from "@/lib/z-layers";
 import { openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 import {
+  atHome,
   closeApp,
   desk,
   deskView,
@@ -87,7 +88,6 @@ import {
   openApps,
   setGeom,
   setArrangement,
-  setDockSize,
   setIcons,
   setOnDesktop,
   setWidgetAt,
@@ -103,7 +103,7 @@ import {
   stack,
   updateFrame,
   type FrameWin,
-  setPinned,
+  showDesktop,
   showWindow,
 } from "@/store/desktop";
 
@@ -115,7 +115,8 @@ type BadgeOf = (href: string) => number | null;
  * Where the page goes, in either interface. Classic: the scrolling column next
  * to the sidebar. Desktop: a wallpaper with every app as an icon, the page in a
  * window over it (drag it by its title bar, resize it from any edge, maximize,
- * minimize to the dock, close), and a dock of pinned and open apps.
+ * minimize, close), the sidebar beside it (app-sidebar.tsx: the apps open, the
+ * one in front). Its home ("/") is the desktop itself, with no window.
  *
  * The page sits at the same place in the tree in both, so switching interfaces
  * doesn't remount it (the extra wrappers are `display: contents` in classic).
@@ -125,16 +126,15 @@ type BadgeOf = (href: string) => number | null;
  * windows open it's a layer at its place among them (winZ), so nothing in it
  * shows through the windows in front (dialogs and menus are portalled out).
  */
-export function Workspace({ desktop, children }: { desktop: boolean; children: React.ReactNode }) {
+export function Workspace({ desktop, badgeOf, children }: { desktop: boolean; badgeOf: BadgeOf; children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const mobile = useIsMobile();
   const areaRef = useRef<HTMLDivElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
   const [ws, setWs] = useState<{ w: number; h: number } | null>(null);
-  const [{ geoms, dockSize }] = useSubject(desk);
-  const dock = dockSpace(dockSize);
-  const [{ hidden }] = useSubject(deskView);
+  const [{ geoms }] = useSubject(desk);
+  const [view] = useSubject(deskView);
   const [others] = useSubject(frames);
   const [order] = useSubject(stack);
   // the rect while it's being dragged or resized (saved on release)
@@ -143,16 +143,19 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
   // animate left/top/width/height for a moment (maximize / restore)
   const [glide, setGlide] = useState(false);
   const [anim, setAnim] = useState<"in" | "out" | null>("in");
-  const { badgeOf } = useNavBadges(pathname, desktop);
 
   const app = appOf(pathname, NAV_HREFS);
   const item = app ? (BY_HREF.get(app) ?? null) : null;
-  // a page outside every app keeps the Dashboard's window
+  // The home is the desktop itself (the sidebar's Desktop): no page in a window. The window is closed there, so the
+  // next app opens in it (atHome, below); it reads as closed from the first paint, so the home's page never shows.
+  const home = desktop && app === "/";
+  const hidden = home ? "closed" : view.hidden;
+  // a page outside every app has one window for all of them (kept under the home's key, which has none of its own)
   const key = app ?? "/";
   const saved = geoms[key];
   const max = !!saved?.max;
 
-  // Another app in the window, or the window back from the dock: it opens like one.
+  // Another app in the window, or the window back from minimized: it opens like one.
   const [shown, setShown] = useState({ app, hidden });
   if (desktop && (shown.app !== app || shown.hidden !== hidden)) {
     setShown({ app, hidden });
@@ -169,11 +172,15 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
     keptHidden.current = hydrateDesk(NAV_HREFS);
   }, [desktop]);
 
-  // The page you go to is the window in front (and its app open, at that path).
+  // The page you go to is the window in front (and its app open, at that path); the home, the desktop.
   useEffect(() => {
     if (!desktop) return;
     const kept = keptHidden.current;
     keptHidden.current = null;
+    if (app === "/") {
+      atHome();
+      return;
+    }
     if (kept === "closed") return;
     if (app) noteApp(app, pathname + window.location.search);
     if (kept !== "min") showWindow();
@@ -234,7 +241,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         if (Math.abs(dx) + Math.abs(dy) < 4) return;
         setDragging(true);
         deskDrag.next(true);
-        if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H, dock), r0, x0 - area.getBoundingClientRect().left);
+        if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H), r0, x0 - area.getBoundingClientRect().left);
       }
       last = { ...start, x: start.x + dx, y: Math.max(0, start.y + dy) };
       setLive(last);
@@ -294,8 +301,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
     : (live ??
       (ws
         ? max
-          ? maxRect(ws.w, ws.h, dock)
-          : clampRect(saved ?? defaultGeom(ws.w, ws.h, dock), ws.w, ws.h)
+          ? maxRect(ws.w, ws.h)
+          : clampRect(saved ?? defaultGeom(ws.w, ws.h), ws.w, ws.h)
         : saved && !max
           ? saved
           : null));
@@ -310,8 +317,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       : rect
         ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h }
         : max
-          ? { left: 8, top: 8, right: 8, bottom: dock }
-          : { top: 12, right: 16, bottom: dock };
+          ? { inset: 8 }
+          : { top: 12, right: 16, bottom: 12 };
   const winStyle = place && z !== undefined ? { ...place, zIndex: z } : place;
 
   return (
@@ -320,7 +327,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
     >
       {desktop && <DesktopBackground mobile={mobile} badgeOf={badgeOf} />}
-      {desktop && <FrameWindows area={ws} mobile={mobile} dock={dock} />}
+      {desktop && <FrameWindows area={ws} mobile={mobile} />}
       <div
         ref={winRef}
         onPointerDownCapture={desktop ? () => focusWin(MAIN_WIN) : undefined}
@@ -366,7 +373,6 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         </div>
         {desktop && !mobile && !max && <ResizeHandles onPointerDown={onResizePointerDown} />}
       </div>
-      {desktop && <Dock app={app} mobile={mobile} windowShown={!hidden} badgeOf={badgeOf} onMinimize={minimize} />}
       {desktop && <Launchpad badgeOf={badgeOf} />}
     </div>
   );
@@ -412,7 +418,7 @@ function TitleBar({
       {/* the traffic lights: their glyphs show while the pointer is over them */}
       <div className="group/lights z-10 mr-2 flex items-center gap-2">
         <Light color="bg-[#ff5f57]" label="Close window" onClick={onClose} glyph={X} mobile={mobile} />
-        <Light color="bg-[#febc2e]" label="Minimize to the dock" onClick={onMinimize} glyph={Minus} mobile={mobile} />
+        <Light color="bg-[#febc2e]" label="Minimize" onClick={onMinimize} glyph={Minus} mobile={mobile} />
         {!mobile && (
           <Light
             color="bg-[#28c840]"
@@ -520,7 +526,7 @@ function ResizeHandles({ onPointerDown }: { onPointerDown: (edges: Edges, e: Rea
 
 /* ------------------------------ more windows ------------------------------ */
 
-/** A window's layer: its place in the stack, back to front, from 1 (all under the dock's 40). */
+/** A window's layer: its place in the stack, back to front, from 1 (all under the phone's sidebar drawer, from 40). */
 function winZ(order: string[], id: string): number {
   return Math.min(order.indexOf(id) + 1, 39);
 }
@@ -530,7 +536,7 @@ function winZ(order: string[], id: string): number {
  * app-shell's FramedPage), back to front as `stack` says, each a layer at its place in it (winZ), as the page's own
  * window is while they're open.
  */
-function FrameWindows({ area, mobile, dock }: { area: { w: number; h: number } | null; mobile: boolean; dock: number }) {
+function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null; mobile: boolean }) {
   const [list] = useSubject(frames);
   const [order] = useSubject(stack);
 
@@ -555,7 +561,7 @@ function FrameWindows({ area, mobile, dock }: { area: { w: number; h: number } |
   return (
     <>
       {list.map((f, i) => (
-        <FrameWindow key={f.id} win={f} z={winZ(order, f.id)} cascade={i} area={area} mobile={mobile} dock={dock} />
+        <FrameWindow key={f.id} win={f} z={winZ(order, f.id)} cascade={i} area={area} mobile={mobile} />
       ))}
     </>
   );
@@ -567,15 +573,12 @@ function FrameWindow({
   cascade,
   area,
   mobile,
-  dock,
 }: {
   win: FrameWin;
   z: number;
   cascade: number;
   area: { w: number; h: number };
   mobile: boolean;
-  /** the room kept for the dock, at its size */
-  dock: number;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
@@ -590,12 +593,12 @@ function FrameWindow({
   const max = !!win.geom?.max;
   // a new window: the default place, each one a step down and right from the one before
   const start = (): Rect => {
-    const d = defaultGeom(W, H, dock);
+    const d = defaultGeom(W, H);
     const step = 28 * ((cascade % 6) + 1);
     return clampRect({ ...d, x: d.x + step, y: d.y + step }, W, H);
   };
   const placed = win.geom ? clampRect(win.geom, W, H) : start();
-  const rect = live ?? (max ? maxRect(W, H, dock) : placed);
+  const rect = live ?? (max ? maxRect(W, H) : placed);
 
   const saveGeom = (r: Rect, isMax = max) => updateFrame(win.id, { geom: { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) } });
 
@@ -740,24 +743,17 @@ function Wallpaper() {
 }
 
 /**
- * Every app as an icon on the wallpaper: on a computer, each where it was dragged to, the widgets among them
- * (IconGrid); on a phone, a home screen grid in the default order.
+ * Every app as an icon on the wallpaper (but the home: this is it): on a computer, each where it was dragged to, the
+ * widgets among them (IconGrid); on a phone, a home screen grid in the default order.
  */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned, icons, widgets, removedIcons, dockSize, align }] = useSubject(desk);
+  const [{ icons, widgets, removedIcons, align }] = useSubject(desk);
   const [open] = useSubject(openApps);
   const all = [
-    ...NAV_FLAT.map((it) => ({
+    ...DESK_APPS.map((it) => ({
       id: it.href,
       label: it.label,
-      node: (
-        <DeskIcon
-          item={it}
-          badge={badgeOf(it.href)}
-          pinned={pinned.includes(it.href)}
-          path={open.find((o) => o.app === it.href)?.path ?? it.href}
-        />
-      ),
+      node: <DeskIcon item={it} badge={badgeOf(it.href)} path={open.find((o) => o.app === it.href)?.path ?? it.href} />,
     })),
     // VS Code (code-server) lives outside the basePath: a raw <a>, gated by nginx.
     {
@@ -782,16 +778,13 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           <ContextMenuContent className="w-52">
             <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => setPinned(VSCODE_ICON, !pinned.includes(VSCODE_ICON))}>
-              {pinned.includes(VSCODE_ICON) ? "Remove from Dock" : "Keep in Dock"}
-            </ContextMenuItem>
             <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, false)}>Remove from Desktop</ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
       ),
     },
   ];
-  // (an icon taken off the desktop: the dock's, the Launchpad's and Settings' menus put it back)
+  // (an icon taken off the desktop: the sidebar's, the Launchpad's and Settings' menus put it back)
   const items = removedIcons ? all.filter((i) => !removedIcons.includes(i.id)) : all;
   return (
     <>
@@ -799,14 +792,14 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
       {mobile ? (
         <nav
           aria-label="Apps"
-          className="scrollbar-hover absolute inset-0 grid auto-rows-[96px] grid-cols-4 content-start justify-items-center overflow-y-auto p-3 pb-28"
+          className="scrollbar-hover absolute inset-0 grid auto-rows-[96px] grid-cols-4 content-start justify-items-center overflow-y-auto p-3"
         >
           {items.map((i) => (
             <div key={i.id}>{i.node}</div>
           ))}
         </nav>
       ) : (
-        <IconGrid items={items} saved={icons} widgets={widgets} dock={dockSpace(dockSize)} align={align ?? "left"} />
+        <IconGrid items={items} saved={icons} widgets={widgets} align={align ?? "left"} />
       )}
     </>
   );
@@ -825,14 +818,11 @@ function IconGrid({
   items,
   saved,
   widgets,
-  dock,
   align,
 }: {
   items: DeskItem[];
   saved?: Record<string, Cell>;
   widgets: DeskSaved["widgets"];
-  /** the room kept for the dock, at its size */
-  dock: number;
   align: DeskAlign;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -874,7 +864,7 @@ function IconGrid({
   }, []);
 
   const W = size?.w ?? 0;
-  const { cols, rows: fitRows } = size ? iconGridSize(size.w, size.h, dock) : { cols: 1, rows: 1 };
+  const { cols, rows: fitRows } = size ? iconGridSize(size.w, size.h) : { cols: 1, rows: 1 };
   // (widgets put further right than a narrower window has room for, but no wider than it: moved over together, as a
   // drop past the edge moves them, so they keep where they are to each other rather than one being pushed in alone)
   const wants = useMemo(() => {
@@ -955,6 +945,8 @@ function IconGrid({
   return (
     <div
       ref={box}
+      // (measured by "Sort icons by name", desktop-menu.tsx)
+      data-desk-grid
       // (it scrolls when the arrangement is taller than the window; the gutter's kept, so a scrollbar showing up doesn't
       // narrow the desktop by a column)
       className="scrollbar-hover absolute inset-0 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
@@ -977,7 +969,7 @@ function IconGrid({
     >
       <div
         className={`absolute top-0 ${glide ? "transition-[left] duration-200 ease-out" : ""}`}
-        style={{ left: shift, width: W, height: Math.max(size?.h ?? 0, ICON_GRID.pad * 2 + (stack ? stack.rows : usedRows) * ICON_GRID.y + dock) }}
+        style={{ left: shift, width: W, height: Math.max(size?.h ?? 0, ICON_GRID.pad * 2 + (stack ? stack.rows : usedRows) * ICON_GRID.y) }}
       >
         <nav aria-label="Apps" className="absolute inset-0">
           {target && free(target) && (
@@ -1315,12 +1307,10 @@ function IconLabel({ children }: { children: React.ReactNode }) {
 function DeskIcon({
   item,
   badge,
-  pinned,
   path,
 }: {
   item: NavItem;
   badge: number | null;
-  pinned: boolean;
   /** where it opens: the path it was left on, if it's open */
   path: string;
 }) {
@@ -1351,7 +1341,6 @@ function DeskIcon({
       <AppMenu
         href={item.href}
         label={item.label}
-        pinned={pinned}
         onOpen={() => {
           if (openAppWindow(item.href, path, mainApp)) return;
           showWindow();
@@ -1359,31 +1348,28 @@ function DeskIcon({
         }}
         onNewWindow={() => openFrame(path, item.href)}
         onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
-        onPin={() => setPinned(item.href, !pinned)}
       />
     </ContextMenu>
   );
 }
 
-/** An app's right-click menu, on the desktop and in the dock. */
+/** An app's right-click menu, on the desktop and in the sidebar (`children`: more of its own, at the end). */
 function AppMenu({
   href,
   label,
-  pinned,
   onOpen,
   onNewWindow,
   onNewTab,
-  onPin,
   onClose,
+  children,
 }: {
   href: string;
   label: string;
-  pinned: boolean;
   onOpen: () => void;
   onNewWindow: () => void;
   onNewTab: () => void;
-  onPin: () => void;
   onClose?: () => void;
+  children?: React.ReactNode;
 }) {
   const [{ removedIcons }] = useSubject(desk);
   const onDesktop = !removedIcons?.includes(href);
@@ -1393,7 +1379,6 @@ function AppMenu({
       <ContextMenuItem onClick={onNewWindow}>Open in a new window</ContextMenuItem>
       <ContextMenuItem onClick={onNewTab}>Open in a new browser tab</ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={onPin}>{pinned ? "Remove from Dock" : "Keep in Dock"}</ContextMenuItem>
       <ContextMenuItem onClick={() => setOnDesktop(href, !onDesktop)}>{onDesktop ? "Remove from Desktop" : "Add to Desktop"}</ContextMenuItem>
       {onClose && (
         <>
@@ -1401,303 +1386,297 @@ function AppMenu({
           <ContextMenuItem onClick={onClose}>Close window</ContextMenuItem>
         </>
       )}
+      {children && (
+        <>
+          <ContextMenuSeparator />
+          {children}
+        </>
+      )}
     </ContextMenuContent>
   );
 }
 
-/* -------------------------------- the dock -------------------------------- */
-
-const DOCK_ICON_MOBILE = 44;
-/** How much the icon under the pointer grows, and how far the swell reaches (px). */
-const MAGNIFY = 0.55;
-const MAGNIFY_RANGE = 130;
+/* ------------------------ the sidebar, in the desktop ----------------------- */
 
 /**
- * Launchpad, the pinned apps, then the apps open in this tab that aren't
- * pinned. Each grows as the pointer passes (a `--s` scale per item, set straight
- * on the DOM in a frame callback, so a pointer move re-renders nothing).
+ * A macOS dock's swell, down the sidebar (app-sidebar.tsx, in the desktop): each [data-magnify] item in `list` grows as the
+ * pointer passes (a `--s` scale per item, set straight on the DOM in a frame callback, so a pointer move re-renders
+ * nothing), and the list is drawn up by as much as the items above the pointer grew, so what's under the pointer stays
+ * there (magnify, lib/desktop.ts). Where they'd be at rest is worked out afresh each frame from where they're drawn
+ * (atRest), so a scroll, or a swell still settling, doesn't throw it. Returns the pointer handlers for `scroller` (the
+ * list's scrolling box); none when `on` isn't (a phone's drawer). Off on touch and for reduced motion.
  */
-function Dock({
-  app,
-  mobile,
-  windowShown,
-  badgeOf,
-  onMinimize,
-}: {
-  app: string | null;
-  mobile: boolean;
-  windowShown: boolean;
-  badgeOf: BadgeOf;
-  onMinimize: () => void;
-}) {
-  const router = useRouter();
-  const [{ pinned, dockSize }] = useSubject(desk);
-  const [open] = useSubject(openApps);
-  const [pad] = useSubject(launchpad);
-  const [wins] = useSubject(frames);
-  useSubject(stack); // (which window is in front decides what a click does)
-  const dockRef = useRef<HTMLDivElement>(null);
-  const centers = useRef<{ el: HTMLElement; c: number }[]>([]);
+export function useMagnify(
+  on: boolean,
+  size: number,
+  scroller: React.RefObject<HTMLElement | null>,
+  list: React.RefObject<HTMLDivElement | null>,
+): Pick<React.HTMLAttributes<HTMLElement>, "onPointerMove" | "onPointerLeave" | "onScroll"> {
   const frame = useRef(0);
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // the pointer's clientY while it's over the sidebar
+  const pointer = useRef<number | null>(null);
 
-  const frameApps = wins.map((f) => f.app).filter((a): a is string => !!a);
-  const extra = [...new Set([...open.map((o) => o.app), ...frameApps])].filter((a) => !pinned.includes(a));
-  const size = mobile ? DOCK_ICON_MOBILE : (dockSize ?? DOCK_ICON.default);
-  // (resizing from a divider: no swell meanwhile, and the icons' places measured afresh after)
-  const resizing = useRef(false);
+  useEffect(() => {
+    if (!on) unswell(list.current);
+    return () => cancelAnimationFrame(frame.current);
+  }, [on, list]);
 
-  // On a phone the open window has the whole screen; the dock is for the home screen.
-  if (mobile && windowShown) return null;
-
-  const measure = () => {
-    centers.current = [...(dockRef.current?.querySelectorAll<HTMLElement>("[data-dock-item]") ?? [])].map((el) => {
-      const r = el.getBoundingClientRect();
-      return { el, c: r.left + r.width / 2 };
-    });
-  };
-  const onMove = (e: React.PointerEvent) => {
-    if (mobile || e.pointerType === "touch" || resizing.current) return;
-    if (!centers.current.length) measure();
-    const x = e.clientX;
+  const swell = () => {
     cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => {
-      for (const { el, c } of centers.current) {
-        const t = Math.max(0, 1 - Math.abs(x - c) / MAGNIFY_RANGE);
-        el.style.setProperty("--s", (1 + MAGNIFY * t * t * (3 - 2 * t)).toFixed(3));
-      }
+      const box = scroller.current;
+      const ul = list.current;
+      if (!box || !ul || pointer.current === null) return;
+      const b = box.getBoundingClientRect();
+      const els = [...ul.querySelectorAll<HTMLElement>("[data-magnify]")];
+      const t = getComputedStyle(ul).transform;
+      const rest = atRest(
+        els.map((el) => {
+          const r = el.getBoundingClientRect();
+          const slot = el.querySelector("[data-magnify-slot]")?.getBoundingClientRect().height ?? size;
+          return { top: r.top - b.top + box.scrollTop, h: r.height, grow: slot - size };
+        }),
+        t && t !== "none" ? -new DOMMatrixReadOnly(t).m42 : 0,
+      );
+      const { scales, shift } = magnify(rest, pointer.current - b.top + box.scrollTop, size);
+      els.forEach((el, i) => el.style.setProperty("--s", scales[i].toFixed(3)));
+      ul.style.setProperty("transform", `translateY(${(-shift).toFixed(1)}px)`);
     });
   };
-  const onLeave = () => {
-    cancelAnimationFrame(frame.current);
-    for (const { el } of centers.current) el.style.setProperty("--s", "1");
-    centers.current = [];
-  };
-  const startResize = () => {
-    resizing.current = true;
-    onLeave();
-  };
-  const endResize = () => {
-    resizing.current = false;
-  };
 
-  const appItem = (href: string) => {
-    if (href === VSCODE_ICON) return <VsCodeDockItem key={href} size={size} />;
-    const it = BY_HREF.get(href);
-    if (!it) return null;
-    const entry = open.find((o) => o.app === href);
-    const appFrames = wins.filter((f) => f.app === href);
-    const isPinned = pinned.includes(href);
-    const path = entry?.path ?? appFrames[0]?.path ?? href;
-    return (
-      <ContextMenu key={href}>
-        <ContextMenuTrigger>
-          <DockSlot label={it.label} size={size} running={!!entry || appFrames.length > 0}>
-            <Link
-              href={path}
-              aria-label={it.label}
-              onClick={(e) => {
-                // the app in front: its window goes down to the dock (as a taskbar does)
-                const front = frontWin();
-                if (href === app && windowShown && front === MAIN_WIN) {
-                  e.preventDefault();
-                  onMinimize();
-                  return;
-                }
-                const inFront = appFrames.find((f) => f.id === front);
-                if (inFront) {
-                  e.preventDefault();
-                  updateFrame(inFront.id, { hidden: true });
-                  return;
-                }
-                if (openAppWindow(href, path, app)) e.preventDefault();
-                else showWindow();
-              }}
-              className="block outline-none focus-visible:rounded-[24%] focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <AppIcon item={it} size={size} badge={badgeOf(href)} />
-            </Link>
-          </DockSlot>
-        </ContextMenuTrigger>
-        <AppMenu
-          href={href}
-          label={it.label}
-          pinned={isPinned}
-          onOpen={() => {
-            if (openAppWindow(href, path, app)) return;
-            showWindow();
-            router.push(path);
-          }}
-          onNewWindow={() => openFrame(path, href)}
-          onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
-          onPin={() => setPinned(href, !isPinned)}
-          onClose={
-            entry || appFrames.length
-              ? () => {
-                  for (const f of appFrames) closeFrame(f.id);
-                  if (!entry) return;
-                  const next = closeApp(href);
-                  // closing the one in front shows the next (or the bare desktop)
-                  if (href === app && next) router.push(next);
-                  else if (href !== app) showWindow();
-                }
-              : undefined
-          }
-        />
-      </ContextMenu>
-    );
+  if (!on) return {};
+  return {
+    onPointerMove: (e) => {
+      if (e.pointerType === "touch" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      pointer.current = e.clientY;
+      swell();
+    },
+    onPointerLeave: () => {
+      pointer.current = null;
+      cancelAnimationFrame(frame.current);
+      unswell(list.current);
+    },
+    onScroll: () => {
+      if (pointer.current !== null) swell();
+    },
   };
-
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-2 z-40 flex justify-center px-2">
-      <div
-        ref={dockRef}
-        onPointerEnter={measure}
-        onPointerMove={onMove}
-        onPointerLeave={onLeave}
-        className={`pointer-events-auto flex items-end gap-1.5 rounded-[22px] border border-white/40 bg-white/45 px-2 pt-2 pb-2.5 shadow-[0_18px_40px_-12px_rgb(0_0_0/0.45)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/50 dark:ring-white/5 ${
-          mobile ? "scrollbar-hover max-w-full overflow-x-auto" : ""
-        }`}
-      >
-        <DockSlot label="Launchpad" size={size}>
-          <button
-            type="button"
-            aria-label="Launchpad: every app and project"
-            aria-pressed={pad}
-            onClick={() => launchpad.next(!pad)}
-            className="block rounded-[24%] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <LaunchpadIcon size={size} />
-          </button>
-        </DockSlot>
-        <DockDivider size={size} resizable={!mobile} onStart={startResize} onEnd={endResize} />
-        {pinned.map(appItem)}
-        {extra.length > 0 && (
-          <DockDivider size={size} resizable={!mobile} onStart={startResize} onEnd={endResize} />
-        )}
-        {extra.map(appItem)}
-      </div>
-    </div>
-  );
 }
 
-/**
- * The line between the dock's parts, which resizes it as macOS's does: drag it up for bigger icons, down for smaller
- * (DOCK_ICON's range, desk.dockSize), or use the arrow keys on it. The windows and the icon grid keep clear of the dock
- * at its size (dockSpace).
- */
-function DockDivider({ size, resizable, onStart, onEnd }: { size: number; resizable: boolean; onStart: () => void; onEnd: () => void }) {
-  const line = <span className="w-px bg-foreground/15 transition-colors group-hover/divider:bg-foreground/45" style={{ height: Math.round(size * 0.75) }} />;
-  if (!resizable)
-    return (
-      <span aria-hidden className="mx-0.5 flex self-center">
-        {line}
-      </span>
-    );
-  function onPointerDown(e: React.PointerEvent<HTMLElement>) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const y0 = e.clientY;
-    const from = size;
-    onStart();
-    deskDrag.next(true);
-    const move = (ev: PointerEvent) => setDockSize(from + (y0 - ev.clientY));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      deskDrag.next(false);
-      onEnd();
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  }
+/** Every item in the sidebar's list back to its size, and the list back in place. */
+function unswell(ul: HTMLElement | null) {
+  for (const el of ul?.querySelectorAll<HTMLElement>("[data-magnify]") ?? []) el.style.setProperty("--s", "1");
+  ul?.style.setProperty("transform", "translateY(0px)");
+}
+
+/** A row of the sidebar, in the desktop: classic's, a little roomier, its icon a tile. */
+function sideRow(active: boolean, rail: boolean) {
+  return `relative flex min-w-0 items-center gap-2 rounded-md py-1 leading-5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+    rail ? "justify-center" : "px-1.5"
+  } ${active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"}`;
+}
+
+/** The names' size beside icons of `size` px: classic's 13 px, a little more with the bigger ones. */
+const sideFont = (size: number) => Math.max(13, Math.round(10 + size / 8));
+
+/** An icon in the sidebar: a slot as wide as it grows (tileSlot) and as tall as it is now (`--s`), the tile scaled in it. */
+function SideTile({ size, children }: { size: number; children: React.ReactNode }) {
   return (
     <span
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Dock size"
-      aria-valuenow={size}
-      aria-valuemin={DOCK_ICON.min}
-      aria-valuemax={DOCK_ICON.max}
-      tabIndex={0}
-      title="Drag up or down to resize the dock"
-      onPointerDown={onPointerDown}
-      onKeyDown={(e) => {
-        const by = e.key === "ArrowUp" || e.key === "ArrowRight" ? 4 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -4 : 0;
-        if (!by) return;
-        e.preventDefault();
-        setDockSize(size + by);
-      }}
-      className="group/divider -mx-1 flex cursor-ns-resize touch-none items-center self-stretch rounded px-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      data-magnify-slot
+      className="flex shrink-0 items-center justify-center transition-[height] duration-100 ease-out"
+      style={{ width: tileSlot(size), height: `calc(var(--s, 1) * ${size}px)` }}
     >
-      {line}
+      <span className="flex transition-transform duration-100 ease-out" style={{ transform: "scale(var(--s, 1))" }}>
+        {children}
+      </span>
     </span>
   );
 }
 
 /**
- * VS Code in the dock, once kept there (from its icon's menu, the Launchpad's): code-server, outside the basePath, so
- * a raw link to a new tab, as its desktop icon is. Its menu takes it out of the dock, or off the desktop and back.
+ * An app in the sidebar, in the desktop interface (app-sidebar.tsx): its tile at the sidebar's size (desk.sidebarSize,
+ * swelling with useMagnify), a dot by it while it's open in this tab or has a window. A click: the app's window in front
+ * goes down (a taskbar's), else its window comes up, else it opens (openAppWindow), where it was left; a click with a
+ * modifier is the browser's (onNavigate isn't called). Right-click: open it, in a new window or tab, put it on the
+ * desktop or take it off, close it, and `menu`, its own. The home is the desktop itself: a click shows it (showDesktop).
  */
-function VsCodeDockItem({ size }: { size: number }) {
-  const [{ removedIcons }] = useSubject(desk);
-  const onDesktop = !removedIcons?.includes(VSCODE_ICON);
+export function DeskNavLink({
+  item,
+  size,
+  rail,
+  active,
+  badge,
+  indent = 0,
+  onClick,
+  menu,
+  children,
+}: {
+  item: NavItem;
+  size: number;
+  rail: boolean;
+  /** its window is the one in front (the home: none is) */
+  active: boolean;
+  /** a count on the tile (on the rail, which has no room for the row's own) */
+  badge?: number | null;
+  /** px further in (a group's item) */
+  indent?: number;
+  onClick?: () => void;
+  menu?: React.ReactNode;
+  /** after its name: a count, a badge */
+  children?: React.ReactNode;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const mainApp = appOf(pathname, NAV_HREFS);
+  const [open] = useSubject(openApps);
+  const [wins] = useSubject(frames);
+  const [{ hidden }] = useSubject(deskView);
+  const href = item.href;
+  const home = item.desktop;
+  const label = home?.label ?? item.label;
+  const entry = home ? undefined : open.find((o) => o.app === href);
+  const appFrames = home ? [] : wins.filter((f) => f.app === href);
+  const path = entry?.path ?? appFrames[0]?.path ?? href;
+
+  const link = (
+    <Link
+      href={path}
+      data-magnify
+      aria-current={active ? "page" : undefined}
+      aria-label={rail ? label : undefined}
+      title={rail ? `${label}${badge ? ` (${badge})` : ""}` : undefined}
+      onClick={onClick}
+      onNavigate={(e) => {
+        if (home) {
+          e.preventDefault();
+          showDesktop();
+          return;
+        }
+        // the app in front: its window goes down (as a taskbar's)
+        const front = frontWin();
+        if (href === mainApp && !hidden && front === MAIN_WIN) {
+          e.preventDefault();
+          minimizeWindow();
+          return;
+        }
+        const inFront = appFrames.find((f) => f.id === front);
+        if (inFront) {
+          e.preventDefault();
+          updateFrame(inFront.id, { hidden: true });
+          return;
+        }
+        if (openAppWindow(href, path, mainApp)) e.preventDefault();
+        else showWindow();
+      }}
+      className={`flex-1 ${sideRow(active, rail)}`}
+      style={{ fontSize: sideFont(size), paddingLeft: indent ? 6 + indent : undefined }}
+    >
+      {(entry || appFrames.length > 0) && (
+        <span aria-hidden className="absolute top-1/2 size-1 -translate-y-1/2 rounded-full bg-foreground/60" style={{ left: indent }} />
+      )}
+      <SideTile size={size}>
+        <AppIcon item={home ? { href, icon: home.icon } : item} size={size} badge={rail ? badge : null} />
+      </SideTile>
+      {!rail && <span className="truncate">{label}</span>}
+      {!rail && children}
+    </Link>
+  );
+  if (home) return link;
   return (
     <ContextMenu>
-      <ContextMenuTrigger>
-        <DockSlot label="VS Code" size={size}>
-          <a href="/vscode/" target="_blank" rel="noreferrer" aria-label="VS Code" className="block outline-none focus-visible:rounded-[24%] focus-visible:ring-2 focus-visible:ring-ring">
-            <VsCodeIcon size={size} />
-          </a>
-        </DockSlot>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
-        <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => setPinned(VSCODE_ICON, false)}>Remove from Dock</ContextMenuItem>
-        <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, !onDesktop)}>{onDesktop ? "Remove from Desktop" : "Add to Desktop"}</ContextMenuItem>
-      </ContextMenuContent>
+      <ContextMenuTrigger className="flex min-w-0 flex-1">{link}</ContextMenuTrigger>
+      <AppMenu
+        href={href}
+        label={item.label}
+        onOpen={() => {
+          if (openAppWindow(href, path, mainApp)) return;
+          showWindow();
+          router.push(path);
+        }}
+        onNewWindow={() => openFrame(path, href)}
+        onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
+        onClose={
+          entry || appFrames.length
+            ? () => {
+                for (const f of appFrames) closeFrame(f.id);
+                if (!entry) return;
+                const next = closeApp(href);
+                // closing the one in front shows the next (or the bare desktop)
+                if (href === mainApp && next) router.push(next);
+                else if (href !== mainApp) showWindow();
+              }
+            : undefined
+        }
+      >
+        {menu}
+      </AppMenu>
     </ContextMenu>
   );
 }
 
-/** One place in the dock: it widens with its scale, its tile grows from the bottom, its name shows above on hover. */
-function DockSlot({
-  label,
-  size,
-  running,
-  children,
-}: {
-  label: string;
-  size: number;
-  running?: boolean;
-  children: React.ReactNode;
-}) {
+/** The Launchpad, first in the sidebar in the desktop: every app and every project. */
+export function DeskLaunchpadLink({ size, rail, onClick }: { size: number; rail: boolean; onClick?: () => void }) {
+  const [pad] = useSubject(launchpad);
   return (
-    <div
-      data-dock-item
-      className="group relative shrink-0 transition-[width] duration-100 ease-out"
-      style={{ width: `calc(var(--s, 1) * ${size}px)`, height: size }}
+    <button
+      type="button"
+      data-magnify
+      aria-pressed={pad}
+      aria-label="Launchpad: every app and project"
+      title={rail ? "Launchpad" : undefined}
+      onClick={() => {
+        onClick?.();
+        launchpad.next(!pad);
+      }}
+      className={sideRow(pad, rail)}
+      style={{ fontSize: sideFont(size) }}
     >
-      <div
-        className="absolute bottom-0 left-1/2 origin-bottom transition-transform duration-100 ease-out"
-        style={{ transform: "translateX(-50%) scale(var(--s, 1))" }}
-      >
-        {children}
-      </div>
-      <span
-        className="pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-md bg-zinc-900/85 px-2 py-0.5 text-xs whitespace-nowrap text-white opacity-0 shadow-md transition-opacity group-hover:opacity-100"
-        style={{ bottom: `calc(var(--s, 1) * ${size}px + 10px)` }}
-      >
-        {label}
-      </span>
-      {running && (
-        <span aria-hidden className="absolute -bottom-[7px] left-1/2 size-1 -translate-x-1/2 rounded-full bg-foreground/70" />
-      )}
-    </div>
+      <SideTile size={size}>
+        <LaunchpadIcon size={size} />
+      </SideTile>
+      {!rail && <span className="truncate">Launchpad</span>}
+    </button>
+  );
+}
+
+/**
+ * VS Code in the sidebar, in the desktop: code-server, outside the basePath, so a raw link to a new tab, as classic's
+ * and its desktop icon are. Its menu takes that icon off the desktop or puts it back.
+ */
+export function DeskVsCodeLink({ size, rail, onClick }: { size: number; rail: boolean; onClick?: () => void }) {
+  const [{ removedIcons }] = useSubject(desk);
+  const onDesktop = !removedIcons?.includes(VSCODE_ICON);
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className="flex min-w-0">
+        <a
+          href="/vscode/"
+          target="_blank"
+          rel="noreferrer"
+          data-magnify
+          onClick={onClick}
+          aria-label={rail ? "VS Code" : undefined}
+          title={rail ? "VS Code" : undefined}
+          className={`flex-1 ${sideRow(false, rail)}`}
+          style={{ fontSize: sideFont(size) }}
+        >
+          <SideTile size={size}>
+            <VsCodeIcon size={size} />
+          </SideTile>
+          {!rail && (
+            <>
+              <span className="truncate">VS Code</span>
+              <ExternalLink className="ml-auto size-3.5 shrink-0 opacity-50" />
+            </>
+          )}
+        </a>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-52">
+        <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, !onDesktop)}>{onDesktop ? "Remove from Desktop" : "Add to Desktop"}</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -1711,7 +1690,7 @@ function Launchpad({ badgeOf }: { badgeOf: BadgeOf }) {
 
 function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
   const router = useRouter();
-  const [{ pinned, removedIcons }] = useSubject(desk);
+  const [{ removedIcons }] = useSubject(desk);
   const [q, setQ] = useState("");
   const [projects, setProjects] = useState<ProjectNavItem[] | null>(null);
   const close = () => launchpad.next(false);
@@ -1731,7 +1710,7 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
   }, []);
 
   const ql = q.trim().toLowerCase();
-  const apps = NAV_FLAT.filter((a) => !ql || a.label.toLowerCase().includes(ql) || a.href.slice(1).includes(ql));
+  const apps = DESK_APPS.filter((a) => !ql || a.label.toLowerCase().includes(ql) || a.href.slice(1).includes(ql));
   const projs = (projects ?? []).filter((p) => !ql || p.slug.toLowerCase().includes(ql));
   const projectHref = (slug: string) => `/projects/${encodeURIComponent(slug)}`;
   const go = () => {
@@ -1784,7 +1763,7 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
         {apps.length > 0 && (
           <div onClick={onBackdrop} className={grid}>
             {apps.map((a) => (
-              <LaunchpadMenu key={a.href} id={a.href} removed={!!removedIcons?.includes(a.href)} pinned={pinned.includes(a.href)}>
+              <LaunchpadMenu key={a.href} id={a.href} removed={!!removedIcons?.includes(a.href)}>
                 <Link href={a.href} onClick={go} className={tile}>
                   <span className={pop}>
                     <AppIcon item={a} size={64} badge={badgeOf(a.href)} />
@@ -1794,7 +1773,7 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
               </LaunchpadMenu>
             ))}
             {(!ql || "vs code".includes(ql)) && (
-              <LaunchpadMenu id={VSCODE_ICON} removed={!!removedIcons?.includes(VSCODE_ICON)} pinned={pinned.includes(VSCODE_ICON)}>
+              <LaunchpadMenu id={VSCODE_ICON} removed={!!removedIcons?.includes(VSCODE_ICON)}>
                 <a href="/vscode/" target="_blank" rel="noreferrer" onClick={close} className={tile}>
                   <span className={pop}>
                     <VsCodeIcon size={64} />
@@ -1836,14 +1815,13 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
   );
 }
 
-/** An app's right-click menu in the Launchpad: on the desktop or off it (the way back for one removed), in the dock or not. */
-function LaunchpadMenu({ id, removed, pinned, children }: { id: string; removed: boolean; pinned?: boolean; children: React.ReactNode }) {
+/** An app's right-click menu in the Launchpad: on the desktop or off it (the way back for one removed). */
+function LaunchpadMenu({ id, removed, children }: { id: string; removed: boolean; children: React.ReactNode }) {
   return (
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-48" positionerStyle={{ zIndex: Z_LAUNCHPAD + 1 }}>
         <ContextMenuItem onClick={() => setOnDesktop(id, removed)}>{removed ? "Add to Desktop" : "Remove from Desktop"}</ContextMenuItem>
-        {pinned !== undefined && <ContextMenuItem onClick={() => setPinned(id, !pinned)}>{pinned ? "Remove from Dock" : "Keep in Dock"}</ContextMenuItem>}
       </ContextMenuContent>
     </ContextMenu>
   );

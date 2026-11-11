@@ -7,11 +7,10 @@ import {
   appOf,
   type Cell,
   type CellRect,
-  DEFAULT_PINNED,
   type DeskAlign,
-  DOCK_ICON,
   type DeskSaved,
   parseDesk,
+  SIDEBAR_ICON,
   type WidgetId,
   type WidgetMode,
   type WidgetSaved,
@@ -21,12 +20,12 @@ import {
 
 /**
  * The desktop shell's state (components/desktop). The page you're on is the
- * one window; every app you've had in it this tab is "open" (a dot in the dock,
- * reopened at the path you left it on), so switching apps feels like switching
- * windows.
+ * one window; every app you've had in it this tab is "open" (a dot by it in the
+ * sidebar, reopened at the path you left it on), so switching apps feels like
+ * switching windows. Its home ("/") is the desktop itself: no page in a window.
  *
- * `desk`      — the dock's pinned apps, each app window's place, the desktop
- *               icons' arrangement (once moved) and the widgets': localStorage.
+ * `desk`      — each app window's place, the desktop icons' arrangement (once
+ *               moved) and the widgets', the sidebar's size: localStorage.
  * `openApps`  — the apps open in this tab, in the order opened: sessionStorage.
  * `deskView`  — the window minimized (kept mounted) or closed (the page unmounted,
  *               the bare desktop showing); not persisted: a reload shows the page.
@@ -43,7 +42,7 @@ export type DeskView = { hidden: "min" | "closed" | null };
 const KEY = "admin.desktop";
 const OPEN_KEY = "admin.desktop.open";
 
-export const desk = new Subject<DeskSaved>({ pinned: DEFAULT_PINNED, geoms: {} }, { name: "desk" });
+export const desk = new Subject<DeskSaved>({ geoms: {} }, { name: "desk" });
 export const openApps = new Subject<OpenApp[]>([], { name: "desk.open" });
 export const deskView = new Subject<DeskView>({ hidden: null }, { name: "desk.view" });
 export const launchpad = new Subject<boolean>(false, { name: "desk.launchpad" });
@@ -103,7 +102,7 @@ export function frontWin(): string | null {
 }
 
 /**
- * Open app `app` at `path` from the desktop or the dock: the window it already has comes to the front; with none,
+ * Open app `app` at `path` from the desktop or the sidebar: the window it already has comes to the front; with none,
  * the page's own window shows it if that's closed, else it gets a new window. True when it was handled here (the
  * link mustn't navigate the page); false when the page's own window is to show it.
  */
@@ -243,6 +242,21 @@ export function minimizeWindow() {
   rememberMain("min");
 }
 
+/** The desktop itself (the sidebar's Desktop, "Show desktop"): every window minimized, the page's own too (unless closed). */
+export function showDesktop() {
+  if (!deskView.getValue().hidden) minimizeWindow();
+  const list = frames.getValue();
+  if (list.some((f) => !f.hidden)) saveFrames(list.map((f) => (f.hidden ? f : { ...f, hidden: true })));
+}
+
+/**
+ * The home ("/") in the desktop: the desktop itself, so the page's own window has nothing to show. It's closed (not
+ * remembered: "/" always is), and the next app opened goes in it.
+ */
+export function atHome() {
+  if (deskView.getValue().hidden !== "closed") deskView.next({ hidden: "closed" });
+}
+
 // The page's own window minimized or closed, and on which page, for this tab: a reload loads the same address, and
 // would show that page's window again (hydrateDesk keeps it as it was instead).
 const MAIN_KEY = "admin.desktop.main";
@@ -259,9 +273,9 @@ function rememberMain(hidden: "min" | "closed" | null) {
 }
 
 /**
- * Close `app`'s window (null: a page outside every app): it leaves the dock's
- * open apps. Returns the path of the app to show instead (the one used last),
- * or null when none is left and the bare desktop shows.
+ * Close `app`'s window (null: a page outside every app): it leaves the open
+ * apps (the sidebar's dots). Returns the path of the app to show instead (the
+ * one used last), or null when none is left and the bare desktop shows.
  */
 export function closeApp(app: string | null): string | null {
   const rest = openApps.getValue().filter((o) => o.app !== app);
@@ -272,12 +286,6 @@ export function closeApp(app: string | null): string | null {
     rememberMain("closed");
   }
   return next?.path ?? null;
-}
-
-export function setPinned(app: string, on: boolean) {
-  const cur = desk.getValue();
-  const pinned = on ? [...cur.pinned.filter((a) => a !== app), app] : cur.pinned.filter((a) => a !== app);
-  save({ ...cur, pinned });
 }
 
 /** A widget: open, folded to its header, or off (the Spiridus menu brings it back). */
@@ -341,12 +349,12 @@ export function restoreIcons() {
   save(rest);
 }
 
-/** The dock's icon size, in px (kept within DOCK_ICON's range). */
-export function setDockSize(px: number) {
-  const size = Math.round(Math.min(Math.max(px, DOCK_ICON.min), DOCK_ICON.max));
-  const { dockSize, ...rest } = desk.getValue();
-  if (size === (dockSize ?? DOCK_ICON.default)) return;
-  save(size === DOCK_ICON.default ? rest : { ...rest, dockSize: size });
+/** The sidebar's icon size in the desktop, in px (kept within SIDEBAR_ICON's range). */
+export function setSidebarSize(px: number) {
+  const size = Math.round(Math.min(Math.max(px, SIDEBAR_ICON.min), SIDEBAR_ICON.max));
+  const { sidebarSize, ...rest } = desk.getValue();
+  if (size === (sidebarSize ?? SIDEBAR_ICON.default)) return;
+  save(size === SIDEBAR_ICON.default ? rest : { ...rest, sidebarSize: size });
 }
 
 /** The icons and widgets, as one arrangement, against the left, centred or against the right. */

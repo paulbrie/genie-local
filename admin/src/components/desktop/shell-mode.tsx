@@ -61,7 +61,7 @@ export function ShellSwitch() {
         role="radio"
         aria-checked={desktop}
         aria-label="Desktop view"
-        title="Desktop view: app icons, a dock and windows"
+        title="Desktop view: app icons, widgets and windows"
         onClick={() => setMode("desktop")}
         className={seg(desktop)}
       >

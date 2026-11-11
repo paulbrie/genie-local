@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -19,8 +19,11 @@ import {
 import { useSubject } from "subjecto/react";
 
 import { Lockup, Wisp } from "@/components/brand/wisp";
+import { DeskLaunchpadLink, DeskNavLink, DeskVsCodeLink, useMagnify } from "@/components/desktop/desktop";
+import { useFrontPath } from "@/components/desktop/desktop-menu";
+import { useShellMode } from "@/components/desktop/shell-mode";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
-import { isActive, NAV, type NavItem } from "@/components/nav-items";
+import { isActive, NAV, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import { NewProjectDialog } from "@/components/new-project-dialog";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -29,8 +32,10 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
+import { SIDEBAR_ICON, sidebarWidth, tileSlot } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { useNavBadges, useWispState } from "@/lib/use-nav-badges";
+import { type NavBadges, useWispState } from "@/lib/use-nav-badges";
+import { desk, openPathWindow, showDesktop } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { openRun } from "@/store/runs";
@@ -42,11 +47,30 @@ const STORAGE_KEY = "admin.sidebar.collapsed";
 const GROUPS_KEY = "admin.sidebar.closedGroups";
 
 /**
+ * The sidebar in the desktop interface (null in classic): its icons' size (Settings: desk.sidebarSize), the indent that
+ * puts a sub-item under its heading's name, and how a page (a project's, a board) opens there: in the window already on
+ * it, else a new one (openPathWindow; false: the page's own window goes there, the link navigates).
+ */
+type DeskSide = { size: number; sub: React.CSSProperties; openPage: (href: string, e: { preventDefault: () => void }) => void };
+const DeskSideContext = createContext<DeskSide | null>(null);
+
+/**
  * Collapsible left navigation rail. Holds every top-level route plus the global
  * theme + logout controls. Collapsed/expanded state persists in localStorage.
+ *
+ * The desktop interface has it too, under its top bar: the apps as tiles at the
+ * size Settings picks, swelling as the pointer passes, a dot by the ones open,
+ * and lit what's in the window in front, or the Desktop (the home) when none is
+ * (desktop.tsx's DeskNavLink, useMagnify). The Launchpad heads it.
  */
-export function AppSidebar() {
+export function AppSidebar({ badges }: { badges: NavBadges }) {
   const pathname = usePathname();
+  const desktop = useShellMode().mode === "desktop";
+  const front = useFrontPath();
+  // what's lit: the page (classic), the window in front (desktop)
+  const current = desktop ? front : pathname;
+  const [{ sidebarSize }] = useSubject(desk);
+  const size = sidebarSize ?? SIDEBAR_ICON.default;
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen] = useSubject(mobileNav);
   const isMobile = useIsMobile();
@@ -54,7 +78,23 @@ export function AppSidebar() {
   // full-width off-canvas drawer, so it never uses the rail.
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
-  const { dockerStats, liveRuns, workingTerms, badgeOf } = useNavBadges(pathname);
+  const { dockerStats, liveRuns, workingTerms, badgeOf } = badges;
+  const navRef = useRef<HTMLElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const swell = useMagnify(desktop && !isMobile, size, navRef, listRef);
+  const side = useMemo<DeskSide | null>(
+    () =>
+      desktop
+        ? {
+            size,
+            sub: { paddingLeft: tileSlot(size) + 8 },
+            openPage: (href, e) => {
+              if (openPathWindow(href, pathname, NAV_HREFS)) e.preventDefault();
+            },
+          }
+        : null,
+    [desktop, size, pathname],
+  );
   const [boards] = useSubject(recentBoards);
   // The boards last opened on this browser, as sub-items under Boards: their
   // names refreshed (and archived ones dropped) from the board list.
@@ -112,7 +152,7 @@ export function AppSidebar() {
   if (pathname === "/login") return null;
 
   return (
-    <>
+    <DeskSideContext value={side}>
       {/* Scrim behind the mobile drawer (below md only). */}
       {mobileOpen && (
         <div
@@ -122,11 +162,14 @@ export function AppSidebar() {
         />
       )}
       <aside
+        // (in the desktop: under the top bar, in app-shell's grid, as wide as its icons need)
+        style={desktop ? ({ "--side-w": `${sidebarWidth(size, rail)}px` } as React.CSSProperties) : undefined}
         className={`fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r bg-background/95 transition-transform duration-200 md:static md:z-auto md:transition-[width] ${
-          rail ? "md:w-14" : "md:w-56"
+          desktop ? "md:h-auto md:w-(--side-w)" : rail ? "md:w-14" : "md:w-56"
         } ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
       >
-        <div className={`flex h-10 shrink-0 items-center gap-2 border-b ${rail ? "justify-center px-2" : "px-3"}`}>
+        {/* (in the desktop, the top bar has the wisp: this is the phone's drawer's only) */}
+        <div className={`flex h-10 shrink-0 items-center gap-2 border-b ${rail ? "justify-center px-2" : "px-3"} ${desktop ? "md:hidden" : ""}`}>
           {/* The Spiridus lockup (mark only on the rail, where it expands the
               sidebar). The wisp shows the agents' state; winks on hover. */}
           {rail ? (
@@ -144,8 +187,16 @@ export function AppSidebar() {
             <Link
               href="/"
               onClick={closeMobile}
+              onNavigate={
+                desktop
+                  ? (e) => {
+                      e.preventDefault();
+                      showDesktop();
+                    }
+                  : undefined
+              }
               onMouseEnter={wink}
-              aria-label="Spiridus · Dashboard"
+              aria-label={desktop ? "Spiridus · Desktop" : "Spiridus · Dashboard"}
               title={wispTitle}
               className="flex min-w-0 flex-1 items-center"
             >
@@ -175,17 +226,31 @@ export function AppSidebar() {
           </button>
         </div>
 
-      {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). */}
-      <nav className="scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
+      {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). In the desktop the
+          items swell as the pointer passes, the list drawn up to keep the one under it there (useMagnify). */}
+      <nav
+        ref={navRef}
+        onPointerMove={swell.onPointerMove}
+        onPointerLeave={swell.onPointerLeave}
+        onScroll={swell.onScroll}
+        className={`scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5 ${desktop ? "overflow-x-hidden" : ""}`}
+      >
+        <div ref={listRef} className={desktop ? "flex flex-col gap-px transition-transform duration-100 ease-out" : "contents"}>
+        {desktop && (
+          <>
+            <DeskLaunchpadLink size={size} rail={rail} onClick={closeMobile} />
+            <div aria-hidden className="mx-1.5 my-1 h-px bg-border" />
+          </>
+        )}
         {NAV.map((item) => {
           if (item.href === "/projects")
             return (
               <ProjectsGroup
                 key={item.href}
                 item={item}
-                pathname={pathname}
+                pathname={current}
                 rail={rail}
-                open={!closedGroups.includes(item.href) || pathname.startsWith("/projects/")}
+                open={!closedGroups.includes(item.href) || current.startsWith("/projects/")}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
@@ -195,15 +260,15 @@ export function AppSidebar() {
               <NavGroup
                 key={item.href}
                 item={item}
-                pathname={pathname}
+                pathname={current}
                 rail={rail}
                 // a group with the page you're on stays open
-                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, pathname))}
+                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, current))}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
             );
-          const active = isActive(item, pathname);
+          const active = isActive(item, current);
           const Icon = item.icon;
           // Numeric count drives the collapsed-rail pill; Docker also gets a
           // wider text badge (count · memory) in the expanded sidebar.
@@ -220,6 +285,16 @@ export function AppSidebar() {
           return (
             <div key={item.href}>
               <div className="flex items-center">
+              {side ? (
+                <DeskNavLink item={item} size={size} rail={rail} active={active} badge={badge} onClick={closeMobile}>
+                  {foldable && <span className="ml-auto text-xs tabular-nums opacity-60">{subCount}</span>}
+                  {badge != null && !foldable && (
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium whitespace-nowrap text-primary">
+                      {badgeText}
+                    </span>
+                  )}
+                </DeskNavLink>
+              ) : (
               <Link
                 href={item.href}
                 onClick={closeMobile}
@@ -252,6 +327,7 @@ export function AppSidebar() {
                     </span>
                   ))}
               </Link>
+              )}
               {foldable && (
                 <button
                   type="button"
@@ -285,6 +361,7 @@ export function AppSidebar() {
                             ? ` — ${r.stepsDone}/${r.stepsTotal}`
                             : ""
                         }`}
+                        style={side?.sub}
                         className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
                         <StatusDot color="bg-emerald-500" pulse size="sm" />
@@ -305,14 +382,16 @@ export function AppSidebar() {
               {item.href === "/boards" && !rail && !folded && boards.length > 0 && (
                 <div className="mt-px flex flex-col gap-px">
                   {boards.map((b) => {
-                    const here = pathname === `/boards/${b.id}`;
+                    const here = current === `/boards/${b.id}`;
                     return (
                       <Link
                         key={b.id}
                         href={`/boards/${b.id}`}
                         onClick={closeMobile}
+                        onNavigate={side ? (e) => side.openPage(`/boards/${b.id}`, e) : undefined}
                         aria-current={here ? "page" : undefined}
                         title={b.title}
+                        style={side?.sub}
                         className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
                           here
                             ? "font-medium text-foreground"
@@ -353,6 +432,7 @@ export function AppSidebar() {
                               : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`) +
                             (t.memBytes ? ` · ${shortBytes(t.memBytes)} in memory` : "")
                           }
+                          style={side?.sub}
                           className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                         >
                           <TermDot status={t.status} />
@@ -384,6 +464,9 @@ export function AppSidebar() {
         {/* VS Code (code-server) — lives outside the /admin basePath, so a raw
             <a> (Next <Link> would prefix it with basePath). Gated by the admin
             session cookie in nginx. */}
+        {desktop ? (
+          <DeskVsCodeLink size={size} rail={rail} onClick={closeMobile} />
+        ) : (
         <a
           href="/vscode/"
           target="_blank"
@@ -402,6 +485,8 @@ export function AppSidebar() {
             </>
           )}
         </a>
+        )}
+        </div>
       </nav>
 
         <div
@@ -420,9 +505,20 @@ export function AppSidebar() {
             <LogOut className="size-[15px] shrink-0" />
             {!rail && <span>Logout</span>}
           </button>
+          {/* Collapse to the icon rail — in the desktop, where the header (and its toggle) is the phone's only. */}
+          {desktop && (
+            <button
+              onClick={toggle}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? "Expand" : "Collapse"}
+              className="hidden rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground md:block"
+            >
+              {collapsed ? <PanelLeftOpen className="size-[15px]" /> : <PanelLeftClose className="size-[15px]" />}
+            </button>
+          )}
         </div>
       </aside>
-    </>
+    </DeskSideContext>
   );
 }
 
@@ -454,11 +550,26 @@ function NavGroup({
   onToggle: () => void;
   onNavigate: () => void;
 }) {
+  const side = useContext(DeskSideContext);
   const Icon = item.icon;
   const active = isActive(item, pathname);
   const row = (it: NavItem, sub: boolean) => {
     const on = isActive(it, pathname);
     const ItIcon = it.icon;
+    // (in the desktop, its apps are the sidebar's like any: tiles, a group's items set in a little)
+    if (side)
+      return (
+        <div key={it.href} className="flex">
+          <DeskNavLink
+            item={it}
+            size={side.size}
+            rail={rail}
+            active={on}
+            indent={sub && !rail ? Math.round(tileSlot(side.size) / 2) : 0}
+            onClick={onNavigate}
+          />
+        </div>
+      );
     return (
       <Link
         key={it.href}
@@ -484,6 +595,25 @@ function NavGroup({
       <div className="flex flex-col gap-px">
         {row(item, false)}
         {item.children!.map((c) => row(c, true))}
+      </div>
+    );
+  if (side)
+    return (
+      <div>
+        <div className="flex items-center">
+          <DeskNavLink item={item} size={side.size} rail={false} active={active} onClick={onNavigate} />
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
+            title={open ? "Fold" : "Unfold"}
+            className="mr-1 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100"
+          >
+            <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+          </button>
+        </div>
+        {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
       </div>
     );
   return (
@@ -538,6 +668,7 @@ function ProjectsGroup({
   onToggle: () => void;
   onNavigate: () => void;
 }) {
+  const side = useContext(DeskSideContext);
   const [list, setList] = useState<ProjectNavItem[] | null>(null);
   const [memory] = useSubject(projectMemory);
   // Bumped after a script is started / stopped from a project's menu, or a project is created.
@@ -586,9 +717,44 @@ function ProjectsGroup({
     </>
   );
 
+  // In the desktop: the app's own row (its menu has New project… too), and the fold.
+  const deskRow = side && (
+    <>
+      <div className="flex items-center">
+        <DeskNavLink
+          item={item}
+          size={side.size}
+          rail={rail}
+          active={rail ? active || pathname.startsWith("/projects/") : active}
+          onClick={onNavigate}
+          menu={
+            <ContextMenuItem onClick={() => setCreating(true)}>
+              <FolderPlus /> New project…
+            </ContextMenuItem>
+          }
+        >
+          {list && <span className="ml-auto text-xs tabular-nums opacity-60">{list.length}</span>}
+        </DeskNavLink>
+        {!rail && (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
+            title={open ? "Fold" : "Unfold"}
+            className="mr-1 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100"
+          >
+            <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
+          </button>
+        )}
+      </div>
+      {creating && <NewProjectDialog onClose={() => setCreating(false)} onCreated={() => setReload((n) => n + 1)} />}
+    </>
+  );
+
   // The icon rail has no room for a dozen names: just the Projects page.
   if (rail)
-    return withMenu(
+    return deskRow || withMenu(
       <Link
         href={item.href}
         onClick={onNavigate}
@@ -602,7 +768,7 @@ function ProjectsGroup({
 
   return (
     <div>
-      {withMenu(
+      {deskRow || withMenu(
         <div className={`flex items-center rounded-md transition-colors ${rowClass(active)}`}>
           <Link
             href={item.href}
@@ -649,7 +815,9 @@ function ProjectsGroup({
                 <Link
                   href={href}
                   onClick={onNavigate}
+                  onNavigate={side ? (e) => side.openPage(href, e) : undefined}
                   aria-current={on ? "page" : undefined}
+                  style={side?.sub}
                   title={`${p.slug}${p.running ? ` · running${(p.ports ?? []).length ? ` on :${(p.ports ?? []).join(", :")}` : ""}` : ""}${mem ? ` · ${memoryTitle(mem)}${limit ? ` (limit ${shortBytes(limit * 1024 * 1024)})` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
                   className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
                     on ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"

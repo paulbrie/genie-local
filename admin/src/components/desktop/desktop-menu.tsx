@@ -9,20 +9,49 @@ import { useSubject } from "subjecto/react";
 import { Wisp } from "@/components/brand/wisp";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { WIDGET_ICON } from "@/components/desktop/widget-registry";
-import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
+import { DESK_APPS, NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type CellRect, deskWidgets, dockSpace, iconGridSize, sortedIcons, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
+import { appOf, type CellRect, deskWidgets, iconGridSize, sortedIcons, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
-import { desk, deskView, launchpad, minimizeWindow, openAppWindow, restoreIcons, setIcons, setWidgetMode, showWindow } from "@/store/desktop";
+import {
+  desk,
+  deskView,
+  frames,
+  frontWin,
+  launchpad,
+  MAIN_WIN,
+  openAppWindow,
+  restoreIcons,
+  setIcons,
+  setWidgetMode,
+  showDesktop,
+  showWindow,
+  stack,
+} from "@/store/desktop";
 
-/** The icons in alphabetical order, flowing around the widgets (the desktop: the window under the 40px top bar, the dock at its size). */
+/** The icons in alphabetical order, flowing around the widgets (on the desktop as it's laid out: IconGrid's box). */
 export function sortIconsByName() {
-  const { widgets, removedIcons, dockSize } = desk.getValue();
-  const { cols, rows } = iconGridSize(window.innerWidth, window.innerHeight - 40, dockSpace(dockSize));
+  const { widgets, removedIcons } = desk.getValue();
+  const box = document.querySelector<HTMLElement>("[data-desk-grid]");
+  const { cols, rows } = iconGridSize(box?.clientWidth ?? window.innerWidth, box?.clientHeight ?? window.innerHeight - 40);
   const around = Object.values(deskWidgets(widgets, cols, rows)).filter((r): r is CellRect => !!r);
-  const labels = new Map<string, string>([...NAV_FLAT.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
+  const labels = new Map<string, string>([...DESK_APPS.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
   const shown = [...labels.keys()].filter((id) => !removedIcons?.includes(id));
   setIcons(sortedIcons(shown, (id) => labels.get(id) ?? id, rows, around));
+}
+
+/**
+ * Where the window in front is, in the desktop: its path (the page's own window's, or a frame's), or the home, "/",
+ * when none shows (the desktop itself). What the menu bar names, and the sidebar lights up.
+ */
+export function useFrontPath(): string {
+  const pathname = usePathname();
+  const [wins] = useSubject(frames);
+  useSubject(deskView);
+  useSubject(stack);
+  const front = frontWin();
+  if (front === MAIN_WIN) return pathname;
+  return wins.find((f) => f.id === front)?.path.split("?")[0] ?? "/";
 }
 
 /** Settings: its window to the front, or a new one (the page's own window, through `push`, when that's closed). */
@@ -37,7 +66,7 @@ export function openSettings(pathname: string, push: (href: string) => void) {
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
  * menu (Settings, show the desktop, Launchpad, sort, reset or put back the icons, show or hide the widgets, back to classic, theme, log
  * out), then
- * the name of the app in the window.
+ * the name of the app in the window in front ("Desktop" when none is).
  */
 export function DesktopMenu() {
   const pathname = usePathname();
@@ -48,7 +77,8 @@ export function DesktopMenu() {
   const [open, setOpen] = useState(false);
   const [{ widgets, removedIcons }] = useSubject(desk);
   const rootRef = useRef<HTMLDivElement>(null);
-  const app = NAV_FLAT.find((i) => i.href === appOf(pathname, NAV_HREFS));
+  const front = useFrontPath();
+  const app = NAV_FLAT.find((i) => i.href === appOf(front, NAV_HREFS));
 
   // Dismiss on a click outside, or Escape.
   useEffect(() => {
@@ -74,7 +104,8 @@ export function DesktopMenu() {
     "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground";
 
   return (
-    <div ref={rootRef} className="relative flex shrink-0 items-center gap-2">
+    // (on a phone, the top bar's menu button opens the sidebar instead: that's the phone's way round)
+    <div ref={rootRef} className="relative hidden shrink-0 items-center gap-2 md:flex">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -87,7 +118,7 @@ export function DesktopMenu() {
       >
         <Wisp size={20} motion={motion} title="" />
       </button>
-      <span className="hidden max-w-40 truncate text-[13px] font-semibold sm:inline">{app?.label ?? "Desktop"}</span>
+      <span className="hidden max-w-40 truncate text-[13px] font-semibold sm:inline">{app && !app.desktop ? app.label : "Desktop"}</span>
       {open && (
         <div
           role="menu"
@@ -105,7 +136,7 @@ export function DesktopMenu() {
           <button
             type="button"
             role="menuitem"
-            onClick={pick(() => deskView.getValue().hidden || minimizeWindow())}
+            onClick={pick(showDesktop)}
             className={row}
           >
             <Monitor /> Show desktop
