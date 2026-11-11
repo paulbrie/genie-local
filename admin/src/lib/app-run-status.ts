@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { apps, projects } from "@/db/schema";
 import { runSlug } from "@/lib/run-slug";
 import {
+  containerMemBytes,
   listeningPortPids,
   listRunningPids,
   pgidOf,
@@ -44,12 +45,14 @@ export async function getRunningInfo(): Promise<RunInfo[]> {
   ]);
 
   // Apps started detached have pgid = the stored pid, so the group's RSS is
-  // keyed by that pid.
-  const out: RunInfo[] = pidRuns.map(({ slug, pid }) => ({
-    slug,
-    pid,
-    rssBytes: rssByPgid.get(pid) ?? 0,
-  }));
+  // keyed by that pid; a docker run's is its container's (the pid is the client's).
+  const out: RunInfo[] = await Promise.all(
+    pidRuns.map(async ({ slug, pid }) => ({
+      slug,
+      pid,
+      rssBytes: (await containerMemBytes(slug)) ?? rssByPgid.get(pid) ?? 0,
+    })),
+  );
   const have = new Set(out.map((r) => r.slug));
 
   for (const app of appRows) {

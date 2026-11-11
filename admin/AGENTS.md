@@ -127,13 +127,30 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   runSlug(project, app, script)` (e.g. `shop-server-app-dev`,
   `shop-server-app-lint`); tracked by a `<slug>.pid` file; `stopApp` signals the
   whole process group (SIGTERM→SIGKILL). So starting `build` never touches a
-  running `dev`. Runs as `genie`, no sudo. **Sanitizes the child env**
-  (`childEnv`): strips the admin's own `next dev` injected vars — `TURBOPACK`,
-  `__NEXT*`, `NEXT_RUNTIME` — before spawning, or a spawned app whose script uses
-  `--webpack` dies instantly with "Multiple bundler flags set: TURBOPACK=1,
-  --webpack". Sets `PORT` from the DB. Because these live in `admin.service`'s
-  cgroup, the unit sets **`KillMode=process`** so restarting admin does NOT kill
-  running project servers. UI: `src/components/script-row.tsx` renders one
+  running `dev`. Runs as `genie`, no sudo. **The child env is an allowlist**
+  (`cleanEnv` in `src/lib/clean-env.mjs`, shared with the terminals): PATH, HOME,
+  USER, the locale, `PUBLIC_HOST`, plus `PORT` from the DB — never a copy of the
+  admin's. Its NODE_ENV=production, basePath, `next dev`'s TURBOPACK=1 and its
+  `.env.local` (DATABASE_URL, tokens) used to leak in and win over the app's own
+  `.env` (Next never overrides a variable that's already set). The tmux server
+  behind every terminal gets the same allowlist, and since it keeps the env it
+  started with, `terminals.ts` unsets an admin's variables from its global env
+  once per admin process (`staleTmuxEnvKeys`). **How it runs is
+  per app** (`apps.run_*`, the app card's Runs row, `src/lib/run-isolation.ts`,
+  pure and tested): on the box, in a systemd user scope per run
+  (`systemd-run --user --scope`, `spiridus-<slug>-<id>.scope`, named in
+  `<slug>.unit`; needs `loginctl enable-linger genie`, install.sh does it), so
+  `MemoryMax` / `CPUQuota` hold for everything it starts and Stop kills the
+  whole scope, strays in their own session included; or **in Docker**
+  (`docker run --rm --init --network=host --user genie`, the project mounted at
+  its own path, `node:<major>-trixie-slim` unless the app names an image; the
+  major from `.nvmrc` / `.node-version`, else the host's; trixie's glibc is
+  newer than the host's, so host-built native modules load). The container's id
+  is in `<slug>.cid`: Stop `docker stop`s it, and its memory comes from its
+  cgroup (`containerMemBytes`; the pid is the `docker run` client's). With no
+  user manager it runs as before, caps not applied. `admin.service` still sets
+  **`KillMode=process`** so restarting admin does NOT kill project servers that
+  live in its cgroup (that fallback). UI: `src/components/script-row.tsx` renders one
   Run/Stop/Restart + status dot + `/logs?file=…` deep-link **per script** in the
   detail page's Scripts list (`actions.ts` validates the script exists in the
   app's package.json). The **dashboard cards** show live running state: they poll

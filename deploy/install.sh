@@ -290,6 +290,10 @@ else
   usermod -aG sudo "$GENIE_USER"
   ok "created user '$GENIE_USER' (sudo group)"
 fi
+# A systemd user manager for genie from boot, with no login: the admin runs each project's script in a scope of its
+# own under it (src/lib/runner.ts), for the memory / CPU caps and a Stop that takes everything the script started.
+loginctl enable-linger "$GENIE_USER"
+ok "'$GENIE_USER' lingers (its own systemd user manager)"
 
 # ---------------------------------------------------------------------------
 # 4. Global npm tooling

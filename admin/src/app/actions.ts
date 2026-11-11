@@ -64,6 +64,7 @@ import {
   moveTask,
   setTaskStatus,
   updateAppPort,
+  updateAppRunSettings,
   updateNote,
   updateTask,
 } from "@/lib/data";
@@ -79,6 +80,7 @@ import {
   type NginxApplyResult,
   type PortChangePreview,
 } from "@/lib/nginx";
+import { IMAGE_RE, RUN_ISOLATIONS } from "@/lib/run-isolation";
 import {
   listeningPortPids,
   restartApp,
@@ -617,6 +619,7 @@ export async function startAppAction(
     appSlug: t.appSlug,
     port: t.port,
     script: parsedScript,
+    run: t.run,
   });
   revalidateProject();
   return status;
@@ -650,9 +653,26 @@ export async function restartAppAction(
     appSlug: t.appSlug,
     port: t.port,
     script: parsedScript,
+    run: t.run,
   });
   revalidateProject();
   return status;
+}
+
+const runSettingsSchema = z.object({
+  isolation: z.enum(RUN_ISOLATIONS),
+  image: z.string().trim().regex(IMAGE_RE, "not an image reference").nullable(),
+  memMaxMb: z.number().int().min(64).max(1_048_576).nullable(),
+  cpus: z.number().min(0.1).max(512).nullable(),
+});
+
+/** How an app's scripts run (on the box or in Docker, with caps): taken at each script's next start. */
+export async function setAppRunSettingsAction(slug: string, appId: number, settings: unknown): Promise<void> {
+  await requireAdmin();
+  const projectId = await requireProjectId(slug);
+  const run = runSettingsSchema.parse(settings);
+  await updateAppRunSettings(projectId, appIdSchema.parse(appId), run);
+  revalidateProject();
 }
 
 /**

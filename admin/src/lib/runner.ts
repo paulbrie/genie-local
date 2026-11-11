@@ -1,13 +1,26 @@
 import "server-only";
 
 import { execFile, spawn } from "node:child_process";
-import { closeSync, openSync, promises as fs } from "node:fs";
+import { closeSync, constants as fsConstants, openSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
 
+import { cleanEnv } from "@/lib/clean-env.mjs";
 import { runSlug } from "@/lib/run-slug";
+import {
+  cgroupMemBytes,
+  containerEnvKeys,
+  containerName,
+  DEFAULT_RUN,
+  defaultImage,
+  dockerRunArgs,
+  pinnedNodeMajor,
+  type RunSettings,
+  scopeArgs,
+  scopeUnit,
+} from "@/lib/run-isolation";
 
 export { runSlug };
 
@@ -33,6 +46,9 @@ export type RunInfo = {
 
 const logPathFor = (slug: string) => path.join(RUN_LOG_ROOT, `${slug}.log`);
 const pidPathFor = (slug: string) => path.join(RUN_LOG_ROOT, `${slug}.pid`);
+// a run's systemd scope, and its container's id (docker run --cidfile)
+const unitPathFor = (slug: string) => path.join(RUN_LOG_ROOT, `${slug}.unit`);
+const cidPathFor = (slug: string) => path.join(RUN_LOG_ROOT, `${slug}.cid`);
 const logFileRel = (slug: string) =>
   path.relative("/tmp", logPathFor(slug)); // "projects/<slug>.log"
 
@@ -307,75 +323,108 @@ export async function listRunning(): Promise<RunInfo[]> {
   const pids = await listRunningPids();
   if (pids.length === 0) return [];
   const rssByPgid = await rssBytesByProcessGroup();
-  return pids.map(({ slug, pid }) => ({
-    slug,
-    pid,
-    rssBytes: rssByPgid.get(pid) ?? 0,
-  }));
+  return Promise.all(
+    pids.map(async ({ slug, pid }) => ({
+      slug,
+      pid,
+      rssBytes: (await containerMemBytes(slug)) ?? rssByPgid.get(pid) ?? 0,
+    })),
+  );
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// genie's systemd user manager (there when genie lingers: `loginctl enable-linger genie`, deploy/install.sh).
+const USER_RUNTIME_DIR = `/run/user/${process.getuid?.() ?? 0}`;
+const DOCKER_SOCK = "/var/run/docker.sock";
+
+/** What this box can run an app in: its own systemd scope, and Docker. */
+export async function runCapabilities(): Promise<{ scopes: boolean; docker: boolean }> {
+  const can = (file: string) =>
+    fs.access(file, fsConstants.R_OK | fsConstants.W_OK).then(
+      () => true,
+      () => false,
+    );
+  const [scopes, docker] = await Promise.all([can(`${USER_RUNTIME_DIR}/bus`), can(DOCKER_SOCK)]);
+  return { scopes, docker };
+}
+
 /**
- * Build the child's environment. The admin runs under `next dev`, which injects
- * its own bundler/runtime vars (e.g. TURBOPACK=1) into `process.env`. Those must
- * NOT leak into a spawned app or they collide with the app's own bundler choice
- * — e.g. an app whose script passes `--webpack` errors out with "Multiple
- * bundler flags set: TURBOPACK=1, --webpack" and exits immediately.
+ * The child's environment: only what clean-env.mjs keeps (the user's basics, the locale, PUBLIC_HOST), plus its PORT.
+ * Never the admin's own: its NODE_ENV=production broke `next dev` (emotion's `jsxDEV is not a function`), `next dev`'s
+ * TURBOPACK=1 killed apps whose script passes --webpack, its DATABASE_URL and basePath won over the app's .env.local
+ * (Next doesn't override a variable that's already set), and its secrets have no business in an app.
  */
 function childEnv(port: number | null): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (
-      key === "TURBOPACK" ||
-      key === "NEXT_RUNTIME" ||
-      key.startsWith("__NEXT") ||
-      key.startsWith("__TURBOPACK") ||
-      key.startsWith("TURBOPACK_")
-    ) {
-      delete env[key];
-    }
-  }
-  // Don't leak the admin's own NODE_ENV into the child. admin.service runs with
-  // NODE_ENV=production; inherited by a spawned `next dev` it triggers the
-  // "non-standard NODE_ENV" path and breaks Babel-based apps (e.g. emotion:
-  // `jsxDEV is not a function`). Next sets NODE_ENV per command (dev→development,
-  // build/start→production), so drop the inherited value and let it decide.
-  // Cast to a plain record: `delete env.NODE_ENV` fails typecheck because
-  // NODE_ENV is a typed (non-optional) property on NodeJS.ProcessEnv.
-  delete (env as Record<string, string | undefined>).NODE_ENV;
+  return cleanEnv(process.env, {
+    FORCE_COLOR: "0",
+    ...(port ? { PORT: String(port) } : {}),
+    // systemd-run / systemctl --user find genie's user manager by it (admin.service doesn't have it)
+    XDG_RUNTIME_DIR: USER_RUNTIME_DIR,
+  });
+}
 
-  // Don't leak the admin's OWN config/secrets into supervised apps. Critically,
-  // Next.js does NOT override an already-set process.env var with a value from
-  // the app's .env.local — so an inherited DATABASE_URL would silently point the
-  // app at the admin's database (admin_dashboard) instead of its own. Strip the
-  // admin-owned vars so each app loads its own from .env.local; also keeps the
-  // admin's credentials (ADMIN_USER/PASSWORD, APP_ENC_KEY) out of child apps.
-  // PUBLIC_HOST is intentionally kept — apps use it (basePath, allowedDevOrigins).
-  //
-  // Also strip the admin's own Next config knobs (set on admin.service:
-  // APP_BASE_PATH/NEXT_PUBLIC_BASE_PATH=/admin, APP_DIST_DIR=.next-prod,
-  // APP_PUBLIC_HOSTS). Project apps follow the same convention of deriving their
-  // basePath from `process.env.NEXT_PUBLIC_BASE_PATH ?? '/projects/<mount>'`, so
-  // an inherited `/admin` would make them build/serve under /admin (assets under
-  // /admin/_next) and 404 at their real mount path. Dropping these lets each app
-  // fall back to its own default.
-  for (const key of [
-    "DATABASE_URL",
-    "PROJECTS_ROOT",
-    "APP_ENC_KEY",
-    "ADMIN_USER",
-    "ADMIN_PASSWORD",
-    "APP_BASE_PATH",
-    "NEXT_PUBLIC_BASE_PATH",
-    "APP_DIST_DIR",
-    "APP_PUBLIC_HOSTS",
-  ]) {
-    delete env[key];
+const userEnv = () => cleanEnv(process.env, { XDG_RUNTIME_DIR: USER_RUNTIME_DIR });
+
+/**
+ * The image a docker run uses: the app's own, else Node at the major the app (or its project) pins in .nvmrc /
+ * .node-version, else the host's major (node_modules were installed by the host's npm).
+ */
+export async function resolveImage(appDir: string, image: string | null): Promise<string> {
+  if (image) return image;
+  for (const dir of new Set([appDir, projectDirOf(appDir)]))
+    for (const file of [".nvmrc", ".node-version"]) {
+      const text = await fs.readFile(path.join(dir, file), "utf8").catch(() => null);
+      const major = text == null ? null : pinnedNodeMajor(text);
+      if (major) return defaultImage(major);
+    }
+  return defaultImage(Number(process.versions.node.split(".")[0]));
+}
+
+/** The project's top folder an app dir sits in (what a container mounts). */
+function projectDirOf(appDir: string): string {
+  const root = path.resolve(PROJECTS_ROOT);
+  return path.join(root, path.relative(root, appDir).split(path.sep)[0]);
+}
+
+const readText = (file: string) =>
+  fs.readFile(file, "utf8").then(
+    (t) => t.trim() || null,
+    () => null,
+  );
+
+/**
+ * Clear what a run left behind: whatever is still in its systemd scope (a worker that outlived npm), its container,
+ * and their files. Before a start (the run is over by then: its pid is gone) and at the end of a stop.
+ */
+async function sweep(slug: string, docker = false): Promise<void> {
+  const unit = await readText(unitPathFor(slug));
+  if (unit) {
+    await execFileP("systemctl", ["--user", "kill", "--signal=SIGKILL", unit], { env: userEnv(), timeout: 5000 }).catch(
+      () => {}, // gone with its last process: the usual case
+    );
   }
-  env.FORCE_COLOR = "0";
-  if (port) env.PORT = String(port);
-  return env;
+  // (a docker start clears its name whether or not the last run got as far as writing the id; docker refuses both an
+  // existing cidfile and a name in use)
+  if (docker || (await readText(cidPathFor(slug)))) {
+    await execFileP("docker", ["rm", "--force", containerName(slug)], { timeout: 20_000 }).catch(() => {});
+  }
+  await Promise.all([fs.rm(unitPathFor(slug), { force: true }), fs.rm(cidPathFor(slug), { force: true })]);
+}
+
+/**
+ * What a docker run's container has in memory, from its cgroup; null when the run isn't one (or its container is
+ * gone). The runner's pid there is the `docker run` client's, whose own process group is only the client.
+ */
+export async function containerMemBytes(slug: string): Promise<number | null> {
+  const id = await readText(cidPathFor(slug));
+  if (!id || !/^[0-9a-f]{12,64}$/.test(id)) return null;
+  // the systemd cgroup driver's path, then cgroupfs'
+  for (const dir of [`/sys/fs/cgroup/system.slice/docker-${id}.scope`, `/sys/fs/cgroup/docker/${id}`]) {
+    const current = await fs.readFile(`${dir}/memory.current`, "utf8").catch(() => null);
+    if (current != null) return cgroupMemBytes(current, await fs.readFile(`${dir}/memory.stat`, "utf8").catch(() => ""));
+  }
+  return null;
 }
 
 export type StartOpts = {
@@ -384,6 +433,8 @@ export type StartOpts = {
   appSlug: string;
   port: number | null;
   script: string;
+  /** How to run it (the app's settings); the default runs it on the box. */
+  run?: RunSettings;
 };
 
 /**
@@ -400,21 +451,65 @@ export async function startApp(opts: StartOpts): Promise<RunStatus> {
   if (current.running) return current; // idempotent — don't double-start
 
   const appDir = assertUnderProjects(opts.dir);
+  const run = opts.run ?? DEFAULT_RUN;
+  const can = await runCapabilities();
+  if (run.isolation === "docker" && !can.docker) {
+    throw new Error(`Docker isn't available here (no access to ${DOCKER_SOCK}): run it on the box, or install Docker`);
+  }
   await fs.mkdir(RUN_LOG_ROOT, { recursive: true });
+  await sweep(slug, run.isolation === "docker");
+
+  const npm = ["npm", "run", script];
+  const env = childEnv(port);
+  let cmd: string, args: string[], how: string;
+  if (run.isolation === "docker") {
+    const image = await resolveImage(appDir, run.image);
+    cmd = "docker";
+    args = dockerRunArgs({
+      name: containerName(slug),
+      image,
+      projectDir: projectDirOf(appDir),
+      appDir,
+      uid: process.getuid?.() ?? 0,
+      gid: process.getgid?.() ?? 0,
+      envKeys: containerEnvKeys(env),
+      memMaxMb: run.memMaxMb,
+      cpus: run.cpus,
+      cidFile: cidPathFor(slug),
+      slug,
+      argv: npm,
+    });
+    how = `in docker (${image})`;
+  } else if (can.scopes) {
+    const unit = scopeUnit(slug);
+    cmd = "systemd-run";
+    args = scopeArgs(unit, run, npm);
+    await fs.writeFile(unitPathFor(slug), unit);
+    how = `in ${unit}`;
+  } else {
+    [cmd, ...args] = npm;
+    how = "on the box";
+    if (run.memMaxMb || run.cpus) how += " (caps not applied: no systemd user manager, `sudo loginctl enable-linger genie`)";
+  }
+  const caps = [run.memMaxMb && `${run.memMaxMb} MB`, run.cpus && `${run.cpus} CPU`].filter(Boolean).join(", ");
+
   const logPath = logPathFor(slug);
   await fs.appendFile(
     logPath,
     `\n[admin ${new Date().toISOString()}] starting "${slug}" — npm run ${script}` +
-      ` (PORT=${port ?? "unset"}) in ${appDir}\n`,
+      ` (PORT=${port ?? "unset"}${caps ? `, max ${caps}` : ""}) in ${appDir}, ${how}\n`,
   );
 
   const fd = openSync(logPath, "a");
   try {
-    const child = spawn("npm", ["run", script], {
+    const child = spawn(cmd, args, {
       cwd: appDir,
-      detached: true, // new session + process group (pgid = child.pid)
+      detached: true, // new session + process group (pgid = child.pid; systemd-run execs npm in place)
       stdio: ["ignore", fd, fd],
-      env: childEnv(port),
+      env,
+    });
+    child.on("error", (e) => {
+      void fs.appendFile(logPath, `[admin ${new Date().toISOString()}] couldn't start ${cmd}: ${e.message}\n`).catch(() => {});
     });
     child.unref();
     if (child.pid) await fs.writeFile(pidPathFor(slug), String(child.pid));
@@ -433,6 +528,12 @@ export async function stopApp(
 ): Promise<RunStatus> {
   const slug = runSlug(projectSlug, appSlug, script);
   const pid = await readPid(slug);
+  // A container first: `docker stop` gives its npm the SIGTERM (through tini) and the client exits with it; signalling
+  // only the client could leave the container running.
+  const cid = await readText(cidPathFor(slug));
+  if (cid && pid != null && pidAlive(pid)) {
+    await execFileP("docker", ["stop", "-t", "5", cid], { timeout: 20_000 }).catch(() => {});
+  }
   if (pid != null && pidAlive(pid)) {
     // Negative pid → signal the entire process group (npm + node + children).
     try {
@@ -457,6 +558,8 @@ export async function stopApp(
       `[admin ${new Date().toISOString()}] stopped "${slug}"\n`,
     ).catch(() => {});
   }
+  // what's left in its scope or container, even when the pid was already gone (a worker that outlived npm)
+  await sweep(slug);
   await fs.rm(pidPathFor(slug), { force: true });
   return statusForSlug(slug, null);
 }

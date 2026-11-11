@@ -73,24 +73,40 @@ export function commandLabel(argv, comm) {
   return [base(a0), ...rest.filter((x) => !x.startsWith("-")).slice(0, 1).map(base)].join(" ");
 }
 
-/** The runner's pid files: pgid (= the pid it started, detached) → run slug ("acccess-dev"). */
+/**
+ * The runner's pid files: pgid (= the pid it started, detached) → run slug ("acccess-dev"). And for a docker run
+ * (its `<slug>.cid`), each of the container's processes → that pid: they're containerd's children, not the runner's,
+ * so they'd otherwise make a group of their own, apart from the `docker run` client the pid file names.
+ */
 async function runnerGroups(runDir) {
   const out = new Map();
+  const inContainer = new Map();
   let names = [];
   try {
     names = await fs.readdir(runDir);
   } catch {
-    return out;
+    return { runs: out, inContainer };
   }
+  const read = (n) => fs.readFile(path.join(runDir, n), "utf8").catch(() => "");
   await Promise.all(
     names
       .filter((n) => n.endsWith(".pid"))
       .map(async (n) => {
-        const pid = parseInt(await fs.readFile(path.join(runDir, n), "utf8").catch(() => ""), 10);
-        if (pid > 0) out.set(pid, n.slice(0, -4));
+        const pid = parseInt(await read(n), 10);
+        if (!(pid > 0)) return;
+        out.set(pid, n.slice(0, -4));
+        const id = (await read(`${n.slice(0, -4)}.cid`)).trim();
+        if (!/^[0-9a-f]{12,64}$/.test(id)) return;
+        // the systemd cgroup driver's path, then cgroupfs'
+        for (const dir of [`/sys/fs/cgroup/system.slice/docker-${id}.scope`, `/sys/fs/cgroup/docker/${id}`]) {
+          const procs = await fs.readFile(`${dir}/cgroup.procs`, "utf8").catch(() => null);
+          if (procs == null) continue;
+          for (const p of procs.split("\n")) if (Number(p) > 0) inContainer.set(Number(p), pid);
+          break;
+        }
       }),
   );
-  return out;
+  return { runs: out, inContainer };
 }
 
 const run = (cmd, args, timeout = 8000) =>
@@ -139,7 +155,7 @@ async function bootTime() {
 }
 
 export async function measureProjects({ root, runDir, containers = [] }) {
-  const [runs, boot] = await Promise.all([runnerGroups(runDir), bootTime()]);
+  const [{ runs, inContainer }, boot] = await Promise.all([runnerGroups(runDir), bootTime()]);
   let names = [];
   try {
     names = await fs.readdir("/proc");
@@ -196,8 +212,10 @@ export async function measureProjects({ root, runDir, containers = [] }) {
     // a Claude session, and what runs in its own group (its MCP servers…); what it runs through a shell of its own is
     // the project's (a dev server, tests) and counts as such
     const isAgent = isClaude(p) || isClaude(leader);
-    const slug = runs.get(p.pgid);
-    const key = isAgent ? `agent:${agentRoot(leader ?? p)}` : `pg:${p.pgid}`;
+    // (a container's process goes with the run that started it)
+    const pg = inContainer.get(p.pid) ?? p.pgid;
+    const slug = runs.get(pg);
+    const key = isAgent ? `agent:${agentRoot(leader ?? p)}` : `pg:${pg}`;
     const proj = project(p.project);
     let g = proj.groups.get(key);
     if (!g) {

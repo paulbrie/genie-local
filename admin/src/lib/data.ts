@@ -13,6 +13,7 @@ import {
   tasks,
   type TaskStatus,
 } from "@/db/schema";
+import type { RunSettings } from "@/lib/run-isolation";
 
 export async function getProjectIdBySlug(slug: string): Promise<number | null> {
   const [row] = await db
@@ -385,7 +386,7 @@ export async function deleteTaskComment(projectId: number, commentId: number): P
   return rows.length > 0;
 }
 
-/** Resolve the info needed to start/stop an app: its dir, port, and slugs. */
+/** Resolve the info needed to start/stop an app: its dir, port, slugs, and how it runs. */
 export async function getAppRunTarget(projectId: number, appId: number) {
   const [row] = await db
     .select({
@@ -393,12 +394,33 @@ export async function getAppRunTarget(projectId: number, appId: number) {
       path: apps.path,
       port: apps.port,
       projectSlug: projects.slug,
+      isolation: apps.runIsolation,
+      image: apps.runImage,
+      memMaxMb: apps.runMemMaxMb,
+      cpus: apps.runCpus,
     })
     .from(apps)
     .innerJoin(projects, eq(apps.projectId, projects.id))
     .where(and(eq(apps.id, appId), eq(apps.projectId, projectId)))
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  const { isolation, image, memMaxMb, cpus, ...target } = row;
+  const run: RunSettings = { isolation: isolation === "docker" ? "docker" : "process", image, memMaxMb, cpus };
+  return { ...target, run };
+}
+
+/** Set how an app's scripts run (taken at their next start). Scoped to the owning project. */
+export async function updateAppRunSettings(projectId: number, appId: number, run: RunSettings) {
+  await db
+    .update(apps)
+    .set({
+      runIsolation: run.isolation,
+      runImage: run.image,
+      runMemMaxMb: run.memMaxMb,
+      runCpus: run.cpus,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(apps.id, appId), eq(apps.projectId, projectId)));
 }
 
 /** Set (or clear, with null) an app's port. Scoped to the owning project. */

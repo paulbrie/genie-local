@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  real,
   serial,
   text,
   timestamp,
@@ -57,6 +58,13 @@ export const apps = pgTable(
     // Local port this app's live server listens on; drives Nginx routing for
     // /projects/<project>/<app>/. Null = not routed yet.
     port: integer("port"),
+    // How the runner starts its scripts (src/lib/run-isolation.ts): 'process' (on
+    // the box, in a systemd scope of its own) or 'docker'; the image (null = Node
+    // at the app's pinned / the host's major); caps in MB and cores (null = none).
+    runIsolation: text("run_isolation").notNull().default("process"),
+    runImage: text("run_image"),
+    runMemMaxMb: integer("run_mem_max_mb"),
+    runCpus: real("run_cpus"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

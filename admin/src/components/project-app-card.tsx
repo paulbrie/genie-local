@@ -1,4 +1,5 @@
 import { AppPortForm } from "@/components/app-port-form";
+import { AppRunForm } from "@/components/app-run-form";
 import { appLabel } from "@/components/project-card";
 import { ScriptList } from "@/components/script-row";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +21,7 @@ import {
 import type { AppRow, SnapshotRow } from "@/lib/scan";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { mountPath } from "@/lib/nginx";
-import { listeningPortPids, statusForWithPort } from "@/lib/runner";
+import { listeningPortPids, resolveImage, runCapabilities, statusForWithPort } from "@/lib/runner";
 import type { AppSignals } from "@/lib/types";
 
 /** One app (sub-project) of a project: its git state, scripts and port. */
@@ -45,13 +46,23 @@ export async function AppCard({
   const scriptEntries = Object.entries(scripts);
   // One `ss` snapshot shared across every script's port fallback (see
   // statusForWithPort) so the dots match the dashboard even on the first paint.
-  const portPids = await listeningPortPids();
+  const [portPids, can, autoImage] = await Promise.all([
+    listeningPortPids(),
+    runCapabilities(),
+    resolveImage(app.path, null),
+  ]);
   const scriptStatuses = await Promise.all(
     scriptEntries.map(([name]) =>
       statusForWithPort(projectSlug, app.slug, name, app.port, portPids),
     ),
   );
   const anyRunning = scriptStatuses.some((s) => s.running);
+  const run = {
+    isolation: app.runIsolation === "docker" ? ("docker" as const) : ("process" as const),
+    image: app.runImage,
+    memMaxMb: app.runMemMaxMb,
+    cpus: app.runCpus,
+  };
 
   return (
     <Card>
@@ -67,6 +78,7 @@ export async function AppCard({
             <CardTitle className="truncate text-base">{label}</CardTitle>
           </div>
           <div className="flex items-center gap-1.5">
+            {run.isolation === "docker" && <Badge variant="outline">docker</Badge>}
             {app.isGit ? (
               <Badge variant="secondary">{latest?.gitBranch ?? "git"}</Badge>
             ) : (
@@ -173,6 +185,18 @@ export async function AppCard({
               </TableBody>
             </Table>
           </details>
+        )}
+
+        {scriptEntries.length > 0 && (
+          <div className="border-t pt-3">
+            <AppRunForm
+              projectSlug={projectSlug}
+              appId={app.id}
+              initial={run}
+              can={can}
+              autoImage={autoImage}
+            />
+          </div>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">

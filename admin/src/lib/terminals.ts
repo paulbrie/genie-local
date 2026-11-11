@@ -6,6 +6,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
+import { cleanEnv, staleTmuxEnvKeys } from "@/lib/clean-env.mjs";
 import { memBytesByProcessTree } from "@/lib/runner";
 
 const exec = promisify(execFile);
@@ -322,15 +323,35 @@ function isNoServer(err: unknown): boolean {
 }
 
 // The first tmux call starts the tmux server, whose environment every shell in
-// every admin terminal then inherits — keep the admin's own secrets out of it.
-const SECRET_ENV = ["ADMIN_USER", "ADMIN_PASSWORD", "APP_ENC_KEY", "DATABASE_URL", "DIAGRAMS_API_KEY", "BOARDS_API_KEY", "BROWSERS_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
-function tmuxEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of SECRET_ENV) delete env[key];
-  return env;
+// every admin terminal then inherits: only what clean-env.mjs keeps, none of the
+// admin's own (its NODE_ENV=production, PORT, basePath and secrets, which a
+// project's `npm run dev` typed in a terminal then picked up).
+const tmuxEnv = () => cleanEnv();
+
+// A server started before that (by an older admin) keeps what it was given for
+// as long as it runs. Once per admin process, take the admin's variables out of
+// its global environment: shells already open keep theirs, every new terminal
+// and pane gets the clean one. No server: the next one starts clean.
+let scrubbed: Promise<void> | null = null;
+function scrubTmuxEnv(): Promise<void> {
+  return (scrubbed ??= (async () => {
+    const opts = { env: tmuxEnv(), timeout: 5000, maxBuffer: 4 * 1024 * 1024 };
+    let out: string;
+    try {
+      ({ stdout: out } = await exec("tmux", ["show-environment", "-g"], opts));
+    } catch {
+      return;
+    }
+    // "KEY=value", or "-KEY" for one already unset
+    const keys = out.split("\n").filter((l) => l.includes("=") && !l.startsWith("-")).map((l) => l.slice(0, l.indexOf("=")));
+    for (const key of staleTmuxEnvKeys(keys)) {
+      await exec("tmux", ["set-environment", "-g", "-u", key], opts).catch(() => {});
+    }
+  })());
 }
 
 async function tmux(args: string[]): Promise<string> {
+  await scrubTmuxEnv();
   const { stdout } = await exec("tmux", args, {
     env: tmuxEnv(),
     timeout: 5000,
