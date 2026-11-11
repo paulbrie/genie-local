@@ -11,7 +11,7 @@ import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { type DeskAlign, DOCK_ICON, VSCODE_ICON, WIDGETS } from "@/lib/desktop";
+import { type DeskAlign, DOCK_ICON, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { desk, loadDesk, restoreIcons, setAlign, setDockSize, setIcons, setOnDesktop, setWidgetMode } from "@/store/desktop";
 
@@ -116,10 +116,10 @@ export function SettingsPanel() {
               {WIDGETS.map((id) => (
                 <label key={id} className="flex items-center gap-2 text-sm">
                   <Checkbox
-                    checked={d.widgets?.[id]?.mode !== "hidden"}
+                    checked={widgetMode(d.widgets, id) !== "hidden"}
                     onCheckedChange={(on) => setWidgetMode(id, on ? "open" : "hidden")}
                   />
-                  {id === "terminals" ? "Terminals" : "Projects"}
+                  {WIDGET_LABEL[id]}
                 </label>
               ))}
             </div>

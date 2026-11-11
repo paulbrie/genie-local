@@ -63,7 +63,7 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   against the manager's JWKS (iss/aud/project/nonce cookie/exp/jti replay in
   `admin_sso_jtis`; `src/lib/genie-sso-core.ts`). The server's identity comes from
   `/opt/project/.genie-instance.json` (written by genie). The person must be a member
-  of the server's genie project (genie checks) AND an enabled row on the Users page
+  of the server's genie project (genie checks) AND an enabled row in Settings → Users
   (`admin_users`); the session is then `sub: "user:<email>"`. `verifySessionToken`
   re-checks that row (cached 10 s, `src/lib/session-access.mjs`, shared with
   `server/pty.mjs`), so disabling or removing someone ends their sessions too; open
@@ -166,14 +166,28 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen.
   · The dock resizes as macOS's does: drag the line between its parts up or down (`DockDivider`,
     `desk.dockSize`, 32–80 px). Windows and the icon grid keep clear of it at its size (`dockSpace`).
-  · Settings (`/settings`, `src/components/settings/settings-panel.tsx`, in `NAV`): interface,
-    theme, and the desktop's arrangement, dock size, widgets and icons. It reads `desk` itself
+  · Settings (`/settings`, in `NAV`): panes listed in `SETTINGS_PANES` (also in ⌘K). General
+    (`settings-panel.tsx`): interface, theme, and the desktop's arrangement, dock size, widgets and
+    icons. Users (`/settings/users`; `/users` redirects there): who may Sign in with Genie. It reads `desk` itself
     (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
     made in a window's frame (a separate document) reaches the desktop around it.
-  · Two widgets (`status-widget.tsx`, framed by `WidgetFrame` in desktop.tsx): Terminals, with their
-    state (waiting for you first, from `liveTerminals`), and Projects (running, ports, memory, tickets,
-    from /api/projects every 15 s). A terminal opens floating; a project in the window already on it,
-    else a new one (`openPathWindow`). Each sits on the icon grid, in cells: dragged anywhere by its
+  · Widgets (registry: `widget-registry.tsx`, `WIDGET_BODY` / `WIDGET_ICON`; `WIDGETS` /
+    `WIDGET_LABEL` / `WIDGETS_OFF` in lib/desktop.ts; shared parts, polling and `useOpenPath` in
+    `widget-parts.tsx`; framed by `WidgetFrame` in desktop.tsx). On at first (`status-widget.tsx`):
+    Terminals (waiting for you first, from `liveTerminals`); Projects (running, ports, memory,
+    tickets, /api/projects every 15 s); Disk (the system disk, /opt/project and /tmp with their
+    largest entries: /api/disk, `src/lib/disk-overview.ts`, du at `nice` in the background at most
+    every 5 min, the last figures served meanwhile); Memory (`more-widgets.tsx`: the server's RAM as
+    one segmented bar, a project a segment in its own colour and its Claude agents striped after it,
+    then the system, then what's free; rows a project, or a terminal with the switch; hover links a
+    row and its segments; from `projectMemory` and `liveTerminals`, no API of its own). Off at first (`more-widgets.tsx`, data in
+    `src/lib/widgets.ts` via /api/widgets/<id>, pure parts in `widgets-core.ts`, tested): Health (the
+    curated services and the containers, `healthOf`), Production errors (open Vercel issues this
+    week), Git (`git status` of every repo, 30 s cache), Load (/api/stats and its 1-day history as
+    sparklines), Tickets (in progress, then to do), Sign-ins (connected now, failed today). A row
+    opens the page behind it (`openPathWindow`). A right-click on the wallpaper (`DeskMenu`) lists
+    every widget, ticked when shown: one added goes on the spot under the pointer. Folded, a widget
+    is one icon row tall: its header as a glance (name over status, its count larger). Each sits on the icon grid, in cells: dragged anywhere by its
     header, resized from any edge down to 3×3 icons (`moveCells` / `resizeCells`; inset 8px in its
     cells, so two side by side are 16px apart), never over the other
     (`placeWidgets`), the icons keeping off its cells (`deskWidgets` → `layoutIcons`' `blocked`). Its

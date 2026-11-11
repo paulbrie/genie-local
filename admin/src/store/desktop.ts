@@ -15,6 +15,7 @@ import {
   type WidgetId,
   type WidgetMode,
   type WidgetSaved,
+  WIDGETS_OFF,
   type WinGeom,
 } from "@/lib/desktop";
 
@@ -281,12 +282,13 @@ export function setPinned(app: string, on: boolean) {
 
 /** A widget: open, folded to its header, or off (the Spiridus menu brings it back). */
 export function setWidgetMode(id: WidgetId, mode: WidgetMode) {
-  patchWidget(id, { mode: mode === "open" ? undefined : mode });
+  // (a widget off at first remembers "open"; one on at first remembers nothing for it)
+  patchWidget(id, { mode: mode === "open" && !WIDGETS_OFF.has(id) ? undefined : mode });
 }
 
-/** Where a widget is on the icon grid, and how big. */
-export function setWidgetAt(id: WidgetId, at: CellRect) {
-  patchWidget(id, { at });
+/** Where a widget is on the icon grid, and how big (`show`: and on the desktop, if it was off it). */
+export function setWidgetAt(id: WidgetId, at: CellRect, show = false) {
+  patchWidget(id, show ? { at, mode: WIDGETS_OFF.has(id) ? "open" : undefined } : { at });
 }
 
 function patchWidget(id: WidgetId, patch: WidgetSaved) {
@@ -349,11 +351,15 @@ export function setAlign(align: DeskAlign) {
   save(align === "left" ? rest : { ...rest, align });
 }
 
-/** The icons' and the widgets' new places at once (a drop that moves the whole arrangement over). */
-export function setArrangement(icons: Record<string, Cell>, widgets: Partial<Record<WidgetId, CellRect>>) {
+/**
+ * The icons' and the widgets' new places at once (a drop, or a widget added, that moves the whole arrangement over);
+ * `show`: a widget that goes on the desktop too.
+ */
+export function setArrangement(icons: Record<string, Cell>, widgets: Partial<Record<WidgetId, CellRect>>, show?: WidgetId) {
   const cur = desk.getValue();
   const next = { ...cur.widgets };
-  for (const [id, at] of Object.entries(widgets) as [WidgetId, CellRect][]) next[id] = { ...next[id], at };
+  for (const [id, at] of Object.entries(widgets) as [WidgetId, CellRect][])
+    next[id] = { ...next[id], at, ...(id === show ? { mode: WIDGETS_OFF.has(id) ? ("open" as const) : undefined } : {}) };
   save({ ...cur, icons, widgets: next });
 }
 

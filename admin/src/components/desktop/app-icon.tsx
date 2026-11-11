@@ -42,7 +42,6 @@ const TINTS: Record<string, Tint> = {
   "/recipes": { from: "#d9f99d", to: "#4d7c0f" },
   "/logs": { from: "#d6d3d1", to: "#57534e" },
   "/logins": { from: "#fde68a", to: "#b45309" },
-  "/users": { from: "#93c5fd", to: "#1d4ed8" },
   "/claude": { from: "#e9a184", to: "#c15f3c" },
   "/teams": { from: "#5eead4", to: "#0f766e" },
   "/comms": { from: "#86efac", to: "#16a34a" },

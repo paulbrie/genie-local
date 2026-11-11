@@ -40,6 +40,7 @@ export const PAGE_ROUTES = [
   "/recipes",
   "/services",
   "/settings",
+  "/settings/users",
   "/tasks",
   "/teams",
   "/terminals",
@@ -98,6 +99,7 @@ export const API_ROUTES = [
   "/api/diagrams",
   "/api/diagrams/[id]",
   "/api/diagrams/validate",
+  "/api/disk",
   "/api/disk-usage",
   "/api/docker",
   "/api/docker/action",
@@ -155,6 +157,11 @@ export const API_ROUTES = [
   "/api/terminals/[name]",
   "/api/terminals/[name]/image",
   "/api/tts",
+  "/api/widgets/errors",
+  "/api/widgets/git",
+  "/api/widgets/health",
+  "/api/widgets/signins",
+  "/api/widgets/tickets",
 ] as const;
 
 /**

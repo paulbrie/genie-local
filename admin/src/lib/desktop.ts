@@ -146,13 +146,37 @@ export type DeskSaved = {
 
 export type DeskAlign = "left" | "center" | "right";
 
-/** The desktop's widgets, among the icons: the terminals and the projects. */
-export const WIDGETS = ["terminals", "projects"] as const;
+/**
+ * The desktop's widgets, among the icons: the terminals, the projects, the disk and the memory, and the ones that start off
+ * (WIDGETS_OFF: a right-click on the desktop adds them): the services' health, the production errors, the repos'
+ * state, the load, the tickets and the sign-ins.
+ */
+export const WIDGETS = ["terminals", "projects", "disk", "memory", "health", "errors", "git", "load", "tickets", "signins"] as const;
 export type WidgetId = (typeof WIDGETS)[number];
+export const WIDGET_LABEL: Record<WidgetId, string> = {
+  terminals: "Terminals",
+  projects: "Projects",
+  disk: "Disk",
+  memory: "Memory",
+  health: "Health",
+  errors: "Production errors",
+  git: "Git",
+  load: "Load",
+  tickets: "Tickets",
+  signins: "Sign-ins",
+};
+/** The widgets off the desktop until they're put on it. */
+export const WIDGETS_OFF: ReadonlySet<WidgetId> = new Set(["health", "errors", "git", "load", "tickets", "signins"]);
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
 
-export type WidgetSaved = { at?: CellRect; mode?: "collapsed" | "hidden" };
+/** A widget as remembered: absent `mode` is its default (WIDGETS_OFF: hidden; else open). */
+export type WidgetSaved = { at?: CellRect; mode?: WidgetMode };
+
+/** What a widget is now: open, folded or off the desktop (its default when nothing says). */
+export function widgetMode(saved: DeskSaved["widgets"], id: WidgetId): WidgetMode {
+  return saved?.[id]?.mode ?? (WIDGETS_OFF.has(id) ? "hidden" : "open");
+}
 
 export const DEFAULT_PINNED = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks"];
 
@@ -337,10 +361,17 @@ export function overlaps(a: CellRect, b: CellRect): boolean {
   return a.c < b.c + b.w && b.c < a.c + a.w && a.r < b.r + b.h && b.r < a.r + a.h;
 }
 
-/** A widget's spot until it's moved: the terminals at the top right, the projects under them. */
+/**
+ * A widget's spot until it's moved: the terminals at the top right, the projects under them, the disk to their left;
+ * the others (off at first, put where the menu was opened) at the top right too, placeWidgets finding them room.
+ */
 export function defaultWidgetAt(id: WidgetId, cols: number): CellRect {
   const { w } = WIDGET_MIN;
-  return id === "terminals" ? { c: cols - w, r: 0, w, h: 3 } : { c: cols - w, r: 3, w, h: 4 };
+  if (id === "terminals") return { c: cols - w, r: 0, w, h: 3 };
+  if (id === "projects") return { c: cols - w, r: 3, w, h: 4 };
+  if (id === "disk") return { c: cols - 2 * w, r: 0, w, h: 4 };
+  if (id === "memory") return { c: cols - 3 * w, r: 0, w, h: 4 };
+  return { c: cols - w, r: 0, w, h: id === "tickets" ? 4 : 3 };
 }
 
 /**
@@ -379,9 +410,9 @@ export function placeWidgets(wants: readonly { id: string; at: CellRect }[], col
  * the row its header is on, so the icons can have the rest.
  */
 export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: number): Partial<Record<WidgetId, CellRect>> {
-  const wants = WIDGETS.filter((id) => saved?.[id]?.mode !== "hidden").map((id) => {
+  const wants = WIDGETS.filter((id) => widgetMode(saved, id) !== "hidden").map((id) => {
     const at = saved?.[id]?.at ?? defaultWidgetAt(id, cols);
-    return { id, at: saved?.[id]?.mode === "collapsed" ? { ...at, h: 1 } : at };
+    return { id, at: widgetMode(saved, id) === "collapsed" ? { ...at, h: 1 } : at };
   });
   return placeWidgets(wants, cols, rows);
 }
@@ -452,7 +483,10 @@ export function resizeCells(a: CellRect, edges: Edges, dc: number, dr: number, c
   return { c: l, r: t, w: r - l, h: b - t };
 }
 
-/** The widgets as stored; before there were two, the one status widget's folded or hidden carries over to both. */
+/**
+ * The widgets as stored; before there were several, the one status widget's folded or hidden carries over to the two
+ * it held (terminals, projects).
+ */
 function parseWidgets(s: Record<string, unknown>): DeskSaved["widgets"] {
   const src = s.widgets && typeof s.widgets === "object" && !Array.isArray(s.widgets) ? (s.widgets as Record<string, unknown>) : null;
   const isInt = (v: unknown): v is number => Number.isInteger(v);
@@ -462,13 +496,13 @@ function parseWidgets(s: Record<string, unknown>): DeskSaved["widgets"] {
     const v = src?.[id];
     if (v && typeof v === "object") {
       const { at, mode } = v as Record<string, unknown>;
-      if (mode === "collapsed" || mode === "hidden") one.mode = mode;
+      if (mode === "open" || mode === "collapsed" || mode === "hidden") one.mode = mode;
       if (at && typeof at === "object") {
         const { c, r, w, h } = at as Record<string, unknown>;
         if (isInt(c) && isInt(r) && isInt(w) && isInt(h) && c >= 0 && r >= 0)
           one.at = { c, r, w: Math.max(w, WIDGET_MIN.w), h: Math.max(h, WIDGET_MIN.h) };
       }
-    } else if (!src) {
+    } else if (!src && (id === "terminals" || id === "projects")) {
       if (s.widget === "collapsed" || s.widget === "hidden") one.mode = s.widget;
       else if (Array.isArray(s.widgetFolded) && s.widgetFolded.includes(id)) one.mode = "collapsed";
     }

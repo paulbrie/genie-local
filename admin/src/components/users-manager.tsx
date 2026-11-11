@@ -4,7 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
-import { addUserAction, removeUserAction, setUserEnabledAction } from "@/app/users/actions";
+import { addUserAction, removeUserAction, setUserEnabledAction } from "@/app/settings/users/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

@@ -20,6 +20,7 @@ import { useSubject } from "subjecto/react";
 
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV_FLAT } from "@/components/nav-items";
+import { SETTINGS_PANES } from "@/components/settings/panes";
 import { rankCommands, isPaletteShortcut, type Command } from "@/lib/command-search";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
@@ -132,6 +133,9 @@ function Palette() {
       icon: n.icon,
       run: go(n.href),
     }));
+    // (the Settings app's panes but its first, which is the app itself: Users in Settings)
+    for (const p of SETTINGS_PANES.slice(1))
+      out.push({ id: `page:${p.href}`, kind: "page", label: p.label, detail: "Settings", keywords: `settings ${p.keywords}`, icon: p.icon, run: go(p.href) });
     for (const p of projects) {
       const base = `/projects/${encodeURIComponent(p.slug)}`;
       out.push({

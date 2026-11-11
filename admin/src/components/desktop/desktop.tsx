@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AppWindow,
+  Check,
   ChevronRight,
   ExternalLink,
   Maximize2,
@@ -18,7 +20,8 @@ import { useSubject } from "subjecto/react";
 
 import { WISP_BODY, WISP_EYES } from "@/brand/spiridus";
 import { AppIcon, LaunchpadIcon, ProjectIcon, VsCodeIcon } from "@/components/desktop/app-icon";
-import { ProjectsWidget, TerminalsWidget } from "@/components/desktop/status-widget";
+import { openSettings, sortIconsByName } from "@/components/desktop/desktop-menu";
+import { WIDGET_BODY, WIDGET_ICON } from "@/components/desktop/widget-registry";
 import { NAV_FLAT, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import {
   ContextMenu,
@@ -53,14 +56,17 @@ import {
   moveCells,
   moveIcon,
   overlaps,
+  placeWidgets,
   type Rect,
   resizeCells,
   resizeRect,
   subPath,
   unmaximizeUnder,
   VSCODE_ICON,
+  WIDGET_LABEL,
   WIDGET_MIN,
   type WidgetId,
+  widgetMode,
   WIDGETS,
 } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -83,6 +89,7 @@ import {
   setIcons,
   setOnDesktop,
   setWidgetAt,
+  setWidgetMode,
   closeFrame,
   deskDrag,
   focusWin,
@@ -806,7 +813,8 @@ type DeskItem = { id: string; label: string; node: React.ReactNode };
  * The desktop's icons and widgets on one grid (lib/desktop.ts). Drag an icon anywhere and it snaps to the nearest
  * spot, swapping with an icon already there (layoutIcons, moveIcon; desk.icons); a press that doesn't move is a click,
  * as before. A widget takes a span of spots (WidgetFrame; deskWidgets, desk.widgets), and the icons keep off it. The
- * whole arrangement is drawn against the left, centred or against the right (alignShift; desk.align), as it is.
+ * whole arrangement is drawn against the left, centred or against the right (alignShift; desk.align), as it is. A
+ * right-click on the wallpaper (not on an icon or a widget) opens the desktop's menu (DeskMenu).
  */
 function IconGrid({
   items,
@@ -827,6 +835,9 @@ function IconGrid({
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
   const press = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
   const swallowClick = useRef(false);
+  // the desktop's menu: where it was opened, and the spot under it (a widget added from it goes there)
+  const [menu, setMenu] = useState<{ x: number; y: number; cell: Cell } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
   // Icons glide only to settle a drop (the one swapped with sliding over, or those a widget dropped on makes move);
   // placed any other way (the first measure, the saved arrangement restored, a resize) they're simply there.
   const [glide, setGlide] = useState(false);
@@ -880,7 +891,7 @@ function IconGrid({
 
   /** a folded widget's span as saved: the height it unfolds to */
   const fullAt = (id: WidgetId, at: CellRect): CellRect =>
-    widgets?.[id]?.mode === "collapsed" ? { ...at, h: (widgets?.[id]?.at ?? defaultWidgetAt(id, cols)).h } : at;
+    widgetMode(widgets, id) === "collapsed" ? { ...at, h: (widgets?.[id]?.at ?? defaultWidgetAt(id, cols)).h } : at;
   // A drop keeps the arrangement on the grid: one left of its first column (or right of its last) moves the whole of
   // it over by as much, so nothing moves on screen but what was dropped.
   const commit = (icons: Record<string, Cell>, moved?: { id: WidgetId; at: CellRect }) => {
@@ -899,6 +910,15 @@ function IconGrid({
       Object.fromEntries(WIDGETS.flatMap((id) => (wids[id] ? [[id, over(fullAt(id, wids[id]))]] : []))),
     );
   };
+  // A widget put on the desktop from its menu: at the spot it was opened on, at the size it had (or its default),
+  // the nearest free spot when another widget is there.
+  const addWidget = (id: WidgetId, cell: Cell) => {
+    const size = widgets?.[id]?.at ?? defaultWidgetAt(id, cols);
+    const others = WIDGETS.flatMap((o) => (o !== id && placed[o] ? [{ id: o, at: placed[o] }] : []));
+    const at = placeWidgets([...others, { id, at: { ...cell, w: size.w, h: size.h } }], cols, rows)[id];
+    settle();
+    setWidgetAt(id, at, true);
+  };
 
   return (
     <div
@@ -906,6 +926,20 @@ function IconGrid({
       className="absolute inset-0 overflow-hidden"
       // (measured first: until then nothing is placed, so nothing jumps)
       style={{ visibility: size ? "visible" : "hidden" }}
+      onContextMenu={(e) => {
+        // (an icon's or a widget's own menu is theirs)
+        if ((e.target as HTMLElement).closest("[data-desk-item], aside")) return;
+        e.preventDefault();
+        const b = box.current!.getBoundingClientRect();
+        setMenu({
+          x: e.clientX,
+          y: e.clientY,
+          cell: {
+            c: Math.min(Math.max(Math.floor((e.clientX - b.left - shift - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
+            r: Math.min(Math.max(Math.floor((e.clientY - b.top - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
+          },
+        });
+      }}
     >
       <div className={`absolute inset-y-0 ${glide ? "transition-[left] duration-200 ease-out" : ""}`} style={{ left: shift, width: W }}>
         <nav aria-label="Apps" className="absolute inset-0">
@@ -918,6 +952,7 @@ function IconGrid({
             return (
               <div
                 key={i.id}
+                data-desk-item
                 style={at}
                 className={
                   dragging
@@ -974,13 +1009,13 @@ function IconGrid({
         {WIDGETS.map((id) => {
           const at = placed[id];
           if (!at) return null;
-          const folded = widgets?.[id]?.mode === "collapsed";
+          const folded = widgetMode(widgets, id) === "collapsed";
           const others = spansBut(id);
           const cell = dropRange(others, 1, cols, shift, W);
           return (
             <WidgetFrame
               key={id}
-              label={id === "terminals" ? "Terminals" : "Projects"}
+              label={WIDGET_LABEL[id]}
               at={at}
               folded={folded}
               rows={rows}
@@ -989,12 +1024,104 @@ function IconGrid({
               others={blocked.filter((b) => b !== at)}
               onPlace={(to) => commit(layout, { id, at: to })}
             >
-              {id === "terminals" ? <TerminalsWidget folded={folded} /> : <ProjectsWidget folded={folded} />}
+              {(() => {
+                const Body = WIDGET_BODY[id];
+                return <Body folded={folded} />;
+              })()}
             </WidgetFrame>
           );
         })}
       </div>
+      {menu && (
+        <DeskMenu
+          x={menu.x}
+          y={menu.y}
+          shown={(id) => !!placed[id]}
+          onWidget={(id) => (placed[id] ? setWidgetMode(id, "hidden") : addWidget(id, menu.cell))}
+          onClose={closeMenu}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The desktop's own right-click menu (on the wallpaper, not on an icon or a widget), as macOS's: each widget, ticked
+ * when it's on the desktop (a click puts it where the menu was opened, or takes it off), then the icons' order and
+ * Settings. Closes on a click elsewhere, Escape, or the window losing focus.
+ */
+function DeskMenu({
+  x,
+  y,
+  shown,
+  onWidget,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  shown: (id: WidgetId) => boolean;
+  onWidget: (id: WidgetId) => void;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector("button")?.focus();
+    const onDown = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("blur", onClose);
+    return () => {
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("blur", onClose);
+    };
+  }, [onClose]);
+  const pick = (fn: () => void) => () => {
+    onClose();
+    fn();
+  };
+  // (down and right of the pointer, or up / left of it where the screen ends)
+  const place: React.CSSProperties = {
+    ...(x > window.innerWidth - 240 ? { right: window.innerWidth - x } : { left: x }),
+    ...(y > window.innerHeight - 280 ? { bottom: window.innerHeight - y } : { top: y }),
+  };
+  const row =
+    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent [&_svg]:size-4 [&_svg]:shrink-0";
+  return createPortal(
+    <div
+      ref={ref}
+      role="menu"
+      aria-label="Desktop"
+      style={place}
+      onContextMenu={(e) => e.preventDefault()}
+      className="fixed z-50 w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10"
+    >
+      <p className="px-2 pt-1 pb-0.5 text-xs font-medium text-muted-foreground">Widgets</p>
+      {WIDGETS.map((id) => {
+        const Icon = WIDGET_ICON[id];
+        const on = shown(id);
+        return (
+          <button key={id} type="button" role="menuitemcheckbox" aria-checked={on} onClick={pick(() => onWidget(id))} className={row}>
+            <Icon className="text-muted-foreground" />
+            {WIDGET_LABEL[id]}
+            {on && <Check className="ml-auto" />}
+          </button>
+        );
+      })}
+      <div className="-mx-1 my-1 h-px bg-border" />
+      <button type="button" role="menuitem" onClick={pick(sortIconsByName)} className={row}>
+        Sort icons by name
+      </button>
+      <button type="button" role="menuitem" onClick={pick(() => openSettings(pathname, (href) => router.push(href)))} className={row}>
+        Settings…
+      </button>
+    </div>,
+    document.body,
   );
 }
 
@@ -1002,7 +1129,7 @@ function IconGrid({
  * A widget on the desktop's grid (IconGrid): dragged anywhere by its header ([data-widget-grip]), resized from any
  * edge or corner down to WIDGET_MIN (three icons by three). Either way it follows the pointer with the span it will
  * take outlined (red where it would cover the other widget: let go there, it goes back), and settles on that span when
- * let go. Folded, it's its header alone, and only moves.
+ * let go. Folded, it's one row of icons tall (its header as a glance), and only moves.
  */
 function WidgetFrame({
   label,
@@ -1111,8 +1238,8 @@ function WidgetFrame({
       <aside
         aria-label={label}
         onPointerDown={onGripDown}
-        style={{ left: rect.x, top: rect.y, width: rect.w, height: folded ? undefined : rect.h }}
-        className={`absolute flex flex-col rounded-2xl border border-white/40 bg-white/55 text-foreground shadow-[0_18px_40px_-16px_rgb(0_0_0/0.35)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/55 dark:ring-white/5 ${
+        style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        className={`group/widget absolute flex flex-col rounded-2xl border border-white/40 bg-white/55 text-foreground shadow-[0_18px_40px_-16px_rgb(0_0_0/0.35)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-900/55 dark:ring-white/5 ${
           live ? `z-10 ${outline?.ok ? "" : "ring-2 ring-destructive/60"}` : settling ? "transition-[left,top,width,height] duration-200 ease-out" : ""
         }`}
       >

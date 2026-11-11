@@ -61,7 +61,6 @@ export const NAV: NavItem[] = [
   { href: "/recipes", label: "Recipes", icon: ChefHat },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/logins", label: "Logins", icon: KeyRound },
-  { href: "/users", label: "Users", icon: UsersRound },
   { href: "/claude", label: "Claude", icon: Sparkles },
   {
     href: "/teams",

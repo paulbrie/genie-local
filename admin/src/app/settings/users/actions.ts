@@ -33,18 +33,18 @@ export async function addUserAction(fields: { email: string; name: string }): Pr
     console.error("[users] add failed:", err);
     return { ok: false, error: "Couldn't add the user (see the server log)" };
   }
-  revalidatePath("/users");
+  revalidatePath("/settings/users");
   return { ok: true };
 }
 
 export async function setUserEnabledAction(id: number, enabled: boolean): Promise<void> {
   await requireAdmin();
   await setUserEnabled(Id.parse(id), z.boolean().parse(enabled));
-  revalidatePath("/users");
+  revalidatePath("/settings/users");
 }
 
 export async function removeUserAction(id: number): Promise<void> {
   await requireAdmin();
   await removeUser(Id.parse(id));
-  revalidatePath("/users");
+  revalidatePath("/settings/users");
 }

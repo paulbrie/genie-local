@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronUp, FolderKanban, MemoryStick, SquareTerminal, X } from "lucide-react";
+import { FolderKanban, HardDrive, Loader2, MemoryStick, RotateCw, SquareTerminal } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
@@ -8,13 +8,15 @@ import { useSubject } from "subjecto/react";
 import { NAV_HREFS } from "@/components/nav-items";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
+import { Empty, Meter, ROW, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import type { WidgetId } from "@/lib/desktop";
+import type { DiskOverview } from "@/lib/disk-overview-core";
+import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { openPathWindow, setWidgetMode } from "@/store/desktop";
+import { openPathWindow } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { liveTerminals, openTerminal, type LiveTerminal, type TermStatus } from "@/store/terminals";
 
@@ -175,60 +177,111 @@ export function ProjectsWidget({ folded }: { folded: boolean }) {
 }
 
 /**
- * A widget's header, the grip its frame is dragged by: its icon and name, what matters now (said folded too), its
- * count, then fold and hide.
+ * The disk: how full the system disk is, and what /opt/project and /tmp take, each with its largest entries
+ * (/api/disk: measured in the background, at most every 5 minutes, or now with the refresh button).
  */
-function WidgetHeader({
-  id,
-  icon: Icon,
-  title,
-  count,
-  note,
-  folded,
-}: {
-  id: WidgetId;
-  icon: typeof SquareTerminal;
-  title: string;
-  count: number | null;
-  note: string;
-  folded: boolean;
-}) {
-  const btn = "rounded-md p-0.5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground";
+export function DiskWidget({ folded }: { folded: boolean }) {
+  const [data, setData] = useState<DiskOverview | null>(null);
+  const [failed, setFailed] = useState(false);
+  // bumped by the refresh button: measure again now
+  const [fresh, setFresh] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async (again: boolean) => {
+      let next = 60_000;
+      try {
+        const r = await fetch(`${BASE_PATH}/api/disk${again ? "?fresh=1" : ""}`, { cache: "no-store" });
+        if (!r.ok) throw new Error(String(r.status));
+        const json = (await r.json()) as DiskOverview;
+        if (!live) return;
+        setData(json);
+        setFailed(false);
+        // (while it measures, look again soon: the figures are on their way)
+        if (json.scanning) next = 4000;
+      } catch {
+        if (live) setFailed(true);
+      }
+      if (live) timer = setTimeout(() => load(false), next);
+    };
+    void load(fresh > 0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [fresh]);
+
+  const disk = data?.fs[0];
+  const pct = disk && disk.size ? Math.round((disk.used / disk.size) * 100) : null;
   return (
-    <div data-widget-grip className="flex shrink-0 items-center gap-2 px-3 pt-2.5 pb-2 select-none">
-      <Icon className="size-[15px] shrink-0 text-muted-foreground" />
-      <span className="shrink-0 text-[13px] font-semibold">{title}</span>
-      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{note}</span>
-      {count !== null && <span className="text-xs text-muted-foreground tabular-nums opacity-80">{count}</span>}
-      <button
-        type="button"
-        onClick={() => setWidgetMode(id, folded ? "open" : "collapsed")}
-        aria-label={folded ? "Unfold" : "Fold"}
-        title={folded ? "Unfold" : "Fold"}
-        className={btn}
-      >
-        {folded ? <ChevronDown className="size-3.5" /> : <ChevronUp className="size-3.5" />}
-      </button>
-      <button
-        type="button"
-        onClick={() => setWidgetMode(id, "hidden")}
-        aria-label="Hide (the Spiridus menu brings it back)"
-        title="Hide (the Spiridus menu brings it back)"
-        className={btn}
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
+    <>
+      <WidgetHeader
+        id="disk"
+        icon={HardDrive}
+        title="Disk"
+        count={pct === null ? null : `${pct}%`}
+        note={disk ? `${formatBytes(disk.avail)} free` : failed ? "couldn't read" : ""}
+        folded={folded}
+      />
+      {!folded && (
+        <WidgetList>
+          {!data && <Empty>{failed ? "Couldn't read the disk." : "Loading…"}</Empty>}
+          {data?.fs.map((f) => (
+            <div key={f.mount} className="flex flex-col gap-1 pr-2 pb-1.5 pl-7 text-xs text-muted-foreground">
+              <div className="flex items-baseline gap-2">
+                <span className="truncate">{f.mount === "/" ? "System disk" : f.mount}</span>
+                <span className="ml-auto shrink-0 tabular-nums">
+                  {formatBytes(f.used)} of {formatBytes(f.size)}
+                </span>
+              </div>
+              <Meter value={f.size ? f.used / f.size : 0} />
+            </div>
+          ))}
+          {data && !data.paths && <Empty>Measuring /opt/project and /tmp (half a minute the first time)…</Empty>}
+          {data?.paths?.map((p) => (
+            <div key={p.path} className="flex flex-col pt-1">
+              <div className="flex items-baseline gap-2 pr-2 pl-7 text-xs">
+                <span className="truncate font-mono font-medium">{p.path}</span>
+                <span className="ml-auto shrink-0 tabular-nums">{formatBytes(p.bytes)}</span>
+              </div>
+              <div className="pr-2 pb-0.5 pl-7">
+                <Meter value={disk?.size ? p.bytes / disk.size : 0} thin />
+              </div>
+              {p.top.map((e) => (
+                <div key={e.name} className="flex items-baseline gap-2 pr-2 pl-10 text-[11px] text-muted-foreground" title={`${p.path}/${e.name}: ${formatBytes(e.bytes)}`}>
+                  <span className="min-w-0 truncate">{e.name}</span>
+                  <span className="ml-auto shrink-0 tabular-nums opacity-80">{formatBytes(e.bytes)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+          {data && (
+            <div className="mt-auto flex items-center gap-1.5 pt-1.5 pr-1 pl-7 text-[11px] text-muted-foreground">
+              {data.scanning ? (
+                <>
+                  <Loader2 className="size-3 animate-spin" /> Measuring…
+                </>
+              ) : (
+                <span>{data.scannedAt ? `Measured ${formatRelativeTime(new Date(data.scannedAt))}` : ""}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setFresh((n) => n + 1)}
+                disabled={data.scanning}
+                aria-label="Measure again"
+                title="Measure again"
+                className="ml-auto rounded-md p-0.5 hover:bg-foreground/10 hover:text-foreground disabled:opacity-40"
+              >
+                <RotateCw className="size-3" />
+              </button>
+            </div>
+          )}
+        </WidgetList>
+      )}
+    </>
   );
 }
-
-function WidgetList({ children }: { children: React.ReactNode }) {
-  return <div className="scrollbar-clear @container flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pb-2">{children}</div>;
-}
-
-/** The sidebar's sub-item row (app-sidebar.tsx): its size, padding and indent under the heading's label. */
-const ROW =
-  "flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground";
 
 function TerminalRow({ t, onOpen }: { t: LiveTerminal; onOpen: () => void }) {
   const tokens = t.tokens && t.tokens.total > 0 ? t.tokens.total : 0;
@@ -263,8 +316,4 @@ function TerminalRow({ t, onOpen }: { t: LiveTerminal; onOpen: () => void }) {
       )}
     </button>
   );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="py-0.5 pr-2 pl-7 text-xs text-muted-foreground">{children}</p>;
 }
