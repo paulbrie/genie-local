@@ -47,8 +47,14 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** A window's place: its restored rect, and whether it is maximized instead. */
 export type WinGeom = Rect & { max?: boolean };
 
-/** Room kept at the bottom of the workspace for the dock. */
-export const DOCK_SPACE = 84;
+/** The dock's icons, in px: by default, and how small or big dragging its divider makes them. */
+export const DOCK_ICON = { min: 32, max: 80, default: 48 } as const;
+/** Room kept at the bottom of the workspace for a dock of `icon` px icons (its padding, and the gap under it). */
+export function dockSpace(icon: number = DOCK_ICON.default): number {
+  return icon + 36;
+}
+/** Room kept at the bottom of the workspace for the dock, at its default size. */
+export const DOCK_SPACE = dockSpace();
 /** The smallest a window gets. */
 export const MIN_WIN = { w: 380, h: 240 };
 /** How much of a window's title bar has to stay on screen. */
@@ -58,20 +64,20 @@ const MAX_GAP = 8;
 /** Icon columns left uncovered by a new window on a wide screen. */
 const ICON_COLUMNS_W = 204;
 
-/** A first window: right of two columns of icons on a wide screen, filling the rest above the dock. */
-export function defaultGeom(W: number, H: number): Rect {
+/** A first window: right of two columns of icons on a wide screen, filling the rest above the dock (`dock`: its room). */
+export function defaultGeom(W: number, H: number, dock = DOCK_SPACE): Rect {
   const x = W >= 1280 ? ICON_COLUMNS_W : Math.min(24, Math.round(W * 0.03));
   const y = 12;
-  return clampRect({ x, y, w: W - x - 16, h: H - y - DOCK_SPACE }, W, H);
+  return clampRect({ x, y, w: W - x - 16, h: H - y - dock }, W, H);
 }
 
-/** The maximized rect: the whole workspace above the dock, a small gap around it. */
-export function maxRect(W: number, H: number): Rect {
+/** The maximized rect: the whole workspace above the dock (`dock`: its room), a small gap around it. */
+export function maxRect(W: number, H: number, dock = DOCK_SPACE): Rect {
   return {
     x: MAX_GAP,
     y: MAX_GAP,
     w: Math.max(0, W - 2 * MAX_GAP),
-    h: Math.max(0, H - MAX_GAP - DOCK_SPACE),
+    h: Math.max(0, H - MAX_GAP - dock),
   };
 }
 
@@ -130,7 +136,15 @@ export type DeskSaved = {
   icons?: Record<string, Cell>;
   /** The widgets on the wallpaper, by id: where each is and how big (absent: its default spot), folded or hidden (absent: open). */
   widgets?: Partial<Record<WidgetId, WidgetSaved>>;
+  /** Icons taken off the desktop (by app href, and VSCODE_ICON). */
+  removedIcons?: string[];
+  /** The dock's icon size, in px (absent: DOCK_ICON.default). */
+  dockSize?: number;
+  /** Where the icons and widgets sit across the desktop, as one arrangement: absent is against the left. */
+  align?: "center" | "right";
 };
+
+export type DeskAlign = "left" | "center" | "right";
 
 /** The desktop's widgets, among the icons: the terminals and the projects. */
 export const WIDGETS = ["terminals", "projects"] as const;
@@ -169,6 +183,12 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   }
   const widgets = parseWidgets(s);
   if (widgets) out.widgets = widgets;
+  if (Array.isArray(s.removedIcons)) {
+    const removed = [...new Set(s.removedIcons.filter((id): id is string => typeof id === "string" && (known.has(id) || id === VSCODE_ICON)))];
+    if (removed.length) out.removedIcons = removed;
+  }
+  if (Number.isInteger(s.dockSize) && (s.dockSize as number) >= DOCK_ICON.min && (s.dockSize as number) <= DOCK_ICON.max) out.dockSize = s.dockSize as number;
+  if (s.align === "center" || s.align === "right") out.align = s.align;
   if (s.geoms && typeof s.geoms === "object" && !Array.isArray(s.geoms))
     for (const [app, g] of Object.entries(s.geoms as Record<string, unknown>)) {
       if (!known.has(app) || !g || typeof g !== "object") continue;
@@ -190,11 +210,11 @@ export const VSCODE_ICON = "vscode";
 /** The icon grid: each spot's size (an 88px column and a 4px gap; a 96px row), and its inset from the edges. */
 export const ICON_GRID = { x: 92, y: 96, pad: 12 } as const;
 
-/** How many columns and rows of icons fit in a desktop of W × H (the dock's strip kept clear). */
-export function iconGridSize(W: number, H: number): { cols: number; rows: number } {
+/** How many columns and rows of icons fit in a desktop of W × H (the dock's strip kept clear: `dock`, its room). */
+export function iconGridSize(W: number, H: number, dock = DOCK_SPACE): { cols: number; rows: number } {
   return {
     cols: Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x)),
-    rows: Math.max(1, Math.floor((H - ICON_GRID.pad - DOCK_SPACE) / ICON_GRID.y)),
+    rows: Math.max(1, Math.floor((H - ICON_GRID.pad - dock) / ICON_GRID.y)),
   };
 }
 
@@ -297,18 +317,18 @@ export type CellRect = Cell & { w: number; h: number };
 /** The smallest a widget gets: three icons by three. */
 export const WIDGET_MIN = { w: 3, h: 3 } as const;
 
-/** The gap between two columns of icons, which a widget leaves after its last column and row too. */
-const CELL_GAP = ICON_GRID.x - 88;
+/** The room a widget leaves inside its span on every side: two side by side are twice that apart. */
+const WIDGET_INSET = 8;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
-/** Where a span of cells is on the desktop, in pixels. */
+/** Where a widget on a span of cells is on the desktop, in pixels (inset from the span's edges). */
 export function cellsRect(a: CellRect): Rect {
   return {
-    x: ICON_GRID.pad + a.c * ICON_GRID.x,
-    y: ICON_GRID.pad + a.r * ICON_GRID.y,
-    w: a.w * ICON_GRID.x - CELL_GAP,
-    h: a.h * ICON_GRID.y - CELL_GAP,
+    x: ICON_GRID.pad + a.c * ICON_GRID.x + WIDGET_INSET,
+    y: ICON_GRID.pad + a.r * ICON_GRID.y + WIDGET_INSET,
+    w: a.w * ICON_GRID.x - 2 * WIDGET_INSET,
+    h: a.h * ICON_GRID.y - 2 * WIDGET_INSET,
   };
 }
 
@@ -366,21 +386,67 @@ export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: num
   return placeWidgets(wants, cols, rows);
 }
 
-/** A widget dragged (dc, dr) cells (fractions: where the pointer is), snapped to the nearest spot on the grid. */
-export function moveCells(a: CellRect, dc: number, dr: number, cols: number, rows: number): CellRect {
-  return { ...a, c: clamp(Math.round(a.c + dc), 0, Math.max(0, cols - a.w)), r: clamp(Math.round(a.r + dr), 0, Math.max(0, rows - a.h)) };
+/**
+ * A widget dragged (dc, dr) cells (fractions: where the pointer is), snapped to the nearest spot: its column within
+ * `cols` (colRange: past the grid's edge when the arrangement moves over to make room), its row on the grid.
+ */
+export function moveCells(a: CellRect, dc: number, dr: number, cols: { lo: number; hi: number }, rows: number): CellRect {
+  return { ...a, c: clamp(Math.round(a.c + dc), cols.lo, Math.max(cols.lo, cols.hi)), r: clamp(Math.round(a.r + dr), 0, Math.max(0, rows - a.h)) };
+}
+
+/* -------------------- the arrangement across the desktop -------------------- */
+
+/** The columns the arrangement's spans take, first to last (null: nothing on the desktop). */
+function colsOf(spans: readonly CellRect[]): { min: number; max: number } | null {
+  if (!spans.length) return null;
+  return { min: Math.min(...spans.map((s) => s.c)), max: Math.max(...spans.map((s) => s.c + s.w - 1)) };
 }
 
 /**
- * A widget resized by dragging `edges` (dc, dr) cells, snapped: the other edges stay, it stays on the grid, and it's
- * at least WIDGET_MIN (or the grid, when that's smaller).
+ * How far right (px) to draw the arrangement (the icons and widgets, `spans`) in a desktop W wide: centred, or with
+ * its last column against the right edge (as far as the left one is from the left); left, where it is.
  */
-export function resizeCells(a: CellRect, edges: Edges, dc: number, dr: number, cols: number, rows: number): CellRect {
-  const minW = Math.min(WIDGET_MIN.w, cols);
+export function alignShift(align: DeskAlign, spans: readonly CellRect[], W: number): number {
+  const cols = colsOf(spans);
+  if (align === "left" || !cols) return 0;
+  const left = ICON_GRID.pad + cols.min * ICON_GRID.x;
+  // (an icon is 84 wide in its 92px column, a widget inset as much: what shows ends 8px short of the last column)
+  const right = ICON_GRID.pad + (cols.max + 1) * ICON_GRID.x - (ICON_GRID.x - 84);
+  return Math.round(align === "right" ? W - ICON_GRID.pad - right : (W - (right - left)) / 2 - left);
+}
+
+/**
+ * The columns a span `w` wide can start at when dropped: on screen (the arrangement drawn `shift` px right in a
+ * desktop W wide), and the whole, with `others` where they are, still `cols` wide or less. On a centred or
+ * right-aligned desktop that can be left of the grid's first column: fitShift then moves the lot back onto it.
+ */
+export function dropRange(others: readonly CellRect[], w: number, cols: number, shift: number, W: number): { lo: number; hi: number } {
+  const span = colsOf(others);
+  const lo = Math.ceil(-(ICON_GRID.pad + shift) / ICON_GRID.x) || 0; // (not -0)
+  const hi = Math.floor((W - ICON_GRID.pad - shift + (ICON_GRID.x - 84)) / ICON_GRID.x) - w;
+  return span
+    ? { lo: Math.max(lo, span.max - cols + 1), hi: Math.min(hi, span.min + cols - w) }
+    : { lo: Math.max(lo, 0), hi: Math.min(hi, cols - w) };
+}
+
+/** Columns to move the whole arrangement by so it's all on a grid `cols` wide again (0 when it is). */
+export function fitShift(spans: readonly CellRect[], cols: number): number {
+  const span = colsOf(spans);
+  if (!span) return 0;
+  return span.min < 0 ? -span.min : span.max > cols - 1 ? cols - 1 - span.max : 0;
+}
+
+/**
+ * A widget resized by dragging `edges` (dc, dr) cells, snapped: the other edges stay, its left and right edges within
+ * `cols` (from a column's start to one's end: dropRange's, a cell wide), its rows on the grid, and it's at least
+ * WIDGET_MIN (or the room, when that's smaller).
+ */
+export function resizeCells(a: CellRect, edges: Edges, dc: number, dr: number, cols: { lo: number; hi: number }, rows: number): CellRect {
+  const minW = Math.min(WIDGET_MIN.w, cols.hi - cols.lo);
   const minH = Math.min(WIDGET_MIN.h, rows);
   let [l, t, r, b] = [a.c, a.r, a.c + a.w, a.r + a.h];
-  if (edges.l) l = clamp(Math.round(l + dc), 0, r - minW);
-  if (edges.r) r = clamp(Math.round(r + dc), l + minW, cols);
+  if (edges.l) l = clamp(Math.round(l + dc), Math.min(cols.lo, l), r - minW);
+  if (edges.r) r = clamp(Math.round(r + dc), l + minW, Math.max(cols.hi, r));
   if (edges.t) t = clamp(Math.round(t + dr), 0, b - minH);
   if (edges.b) b = clamp(Math.round(b + dr), t + minH, rows);
   return { c: l, r: t, w: r - l, h: b - t };

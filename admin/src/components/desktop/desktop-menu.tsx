@@ -1,8 +1,8 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownAZ, FolderKanban, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, SquareTerminal, Sun } from "lucide-react";
+import { ArrowDownAZ, FolderKanban, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, Settings, SquareTerminal, Sun, Undo2 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSubject } from "subjecto/react";
 
@@ -10,24 +10,25 @@ import { Wisp } from "@/components/brand/wisp";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type CellRect, deskWidgets, iconGridSize, sortedIcons, VSCODE_ICON, WIDGETS } from "@/lib/desktop";
+import { appOf, type CellRect, deskWidgets, dockSpace, iconGridSize, sortedIcons, VSCODE_ICON, WIDGETS } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
-import { desk, deskView, launchpad, minimizeWindow, setIcons, setWidgetMode } from "@/store/desktop";
+import { desk, deskView, launchpad, minimizeWindow, openAppWindow, restoreIcons, setIcons, setWidgetMode, showWindow } from "@/store/desktop";
 
 /**
  * The top bar's left end in the desktop interface, where a desktop OS keeps its
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
- * menu (show the desktop, Launchpad, sort or reset the icons, show or hide the widgets, back to classic, theme, log
+ * menu (Settings, show the desktop, Launchpad, sort, reset or put back the icons, show or hide the widgets, back to classic, theme, log
  * out), then
  * the name of the app in the window.
  */
 export function DesktopMenu() {
   const pathname = usePathname();
+  const router = useRouter();
   const { setMode } = useShellMode();
   const { motion, title, wink } = useWispState();
   const { resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
-  const [{ widgets }] = useSubject(desk);
+  const [{ widgets, removedIcons, dockSize }] = useSubject(desk);
   const rootRef = useRef<HTMLDivElement>(null);
   const app = NAV_FLAT.find((i) => i.href === appOf(pathname, NAV_HREFS));
 
@@ -77,6 +78,20 @@ export function DesktopMenu() {
           <button
             type="button"
             role="menuitem"
+            onClick={pick(() => {
+              // its window to the front, or a new one (the page's own window when that's closed)
+              if (openAppWindow("/settings", "/settings", appOf(pathname, NAV_HREFS))) return;
+              showWindow();
+              router.push("/settings");
+            })}
+            className={row}
+          >
+            <Settings /> Settings…
+          </button>
+          <div className="-mx-1 my-1 h-px bg-border" />
+          <button
+            type="button"
+            role="menuitem"
             onClick={pick(() => deskView.getValue().hidden || minimizeWindow())}
             className={row}
           >
@@ -89,11 +104,12 @@ export function DesktopMenu() {
             type="button"
             role="menuitem"
             onClick={pick(() => {
-              // (the desktop: the window under the 40px top bar; the icons flow around the widgets)
-              const { cols, rows } = iconGridSize(window.innerWidth, window.innerHeight - 40);
+              // (the desktop: the window under the 40px top bar, the dock at its size; the icons flow around the widgets)
+              const { cols, rows } = iconGridSize(window.innerWidth, window.innerHeight - 40, dockSpace(dockSize));
               const around = Object.values(deskWidgets(widgets, cols, rows)).filter((r): r is CellRect => !!r);
               const labels = new Map<string, string>([...NAV_FLAT.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
-              setIcons(sortedIcons([...labels.keys()], (id) => labels.get(id) ?? id, rows, around));
+              const shown = [...labels.keys()].filter((id) => !removedIcons?.includes(id));
+              setIcons(sortedIcons(shown, (id) => labels.get(id) ?? id, rows, around));
             })}
             className={row}
           >
@@ -102,6 +118,11 @@ export function DesktopMenu() {
           <button type="button" role="menuitem" onClick={pick(() => setIcons(null))} className={row}>
             <RotateCcw /> Reset icon order
           </button>
+          {!!removedIcons?.length && (
+            <button type="button" role="menuitem" onClick={pick(restoreIcons)} className={row}>
+              <Undo2 /> Put back removed icons ({removedIcons.length})
+            </button>
+          )}
           {WIDGETS.map((id) => {
             const hidden = widgets?.[id]?.mode === "hidden";
             return (

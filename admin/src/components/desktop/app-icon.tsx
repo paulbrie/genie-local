@@ -48,6 +48,7 @@ const TINTS: Record<string, Tint> = {
   "/comms": { from: "#86efac", to: "#16a34a" },
   "/agents3d": { from: "#f472b6", to: "#6d28d9" },
   "/tasks": { from: "#fda4af", to: "#e11d48" },
+  "/settings": { from: "#a1a1aa", to: "#3f3f46" },
   "/vscode": { from: "#4fb3ff", to: "#0065a9" },
   launchpad: { from: "#e4e4e7", to: "#a1a1aa", glyph: "#3f3f46", light: true },
 };

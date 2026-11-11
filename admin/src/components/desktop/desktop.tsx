@@ -36,11 +36,16 @@ import {
   cellsRect,
   clampRect,
   defaultGeom,
+  alignShift,
   defaultWidgetAt,
+  type DeskAlign,
   type DeskSaved,
   deskWidgets,
-  DOCK_SPACE,
+  DOCK_ICON,
+  dropRange,
+  dockSpace,
   type Edges,
+  fitShift,
   ICON_GRID,
   iconGridSize,
   layoutIcons,
@@ -55,6 +60,7 @@ import {
   unmaximizeUnder,
   VSCODE_ICON,
   WIDGET_MIN,
+  type WidgetId,
   WIDGETS,
 } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -72,7 +78,10 @@ import {
   minimizeWindow,
   openApps,
   setGeom,
+  setArrangement,
+  setDockSize,
   setIcons,
+  setOnDesktop,
   setWidgetAt,
   closeFrame,
   deskDrag,
@@ -114,7 +123,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
   const areaRef = useRef<HTMLDivElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
   const [ws, setWs] = useState<{ w: number; h: number } | null>(null);
-  const [{ geoms }] = useSubject(desk);
+  const [{ geoms, dockSize }] = useSubject(desk);
+  const dock = dockSpace(dockSize);
   const [{ hidden }] = useSubject(deskView);
   const [others] = useSubject(frames);
   const [order] = useSubject(stack);
@@ -215,7 +225,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
         if (Math.abs(dx) + Math.abs(dy) < 4) return;
         setDragging(true);
         deskDrag.next(true);
-        if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H), r0, x0 - area.getBoundingClientRect().left);
+        if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H, dock), r0, x0 - area.getBoundingClientRect().left);
       }
       last = { ...start, x: start.x + dx, y: Math.max(0, start.y + dy) };
       setLive(last);
@@ -275,8 +285,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
     : (live ??
       (ws
         ? max
-          ? maxRect(ws.w, ws.h)
-          : clampRect(saved ?? defaultGeom(ws.w, ws.h), ws.w, ws.h)
+          ? maxRect(ws.w, ws.h, dock)
+          : clampRect(saved ?? defaultGeom(ws.w, ws.h, dock), ws.w, ws.h)
         : saved && !max
           ? saved
           : null));
@@ -291,8 +301,8 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       : rect
         ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h }
         : max
-          ? { left: 8, top: 8, right: 8, bottom: DOCK_SPACE }
-          : { top: 12, right: 16, bottom: DOCK_SPACE };
+          ? { left: 8, top: 8, right: 8, bottom: dock }
+          : { top: 12, right: 16, bottom: dock };
   const winStyle = place && z !== undefined ? { ...place, zIndex: z } : place;
 
   return (
@@ -301,7 +311,7 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
       className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
     >
       {desktop && <DesktopBackground mobile={mobile} badgeOf={badgeOf} />}
-      {desktop && <FrameWindows area={ws} mobile={mobile} />}
+      {desktop && <FrameWindows area={ws} mobile={mobile} dock={dock} />}
       <div
         ref={winRef}
         onPointerDownCapture={desktop ? () => focusWin(MAIN_WIN) : undefined}
@@ -511,7 +521,7 @@ function winZ(order: string[], id: string): number {
  * app-shell's FramedPage), back to front as `stack` says, each a layer at its place in it (winZ), as the page's own
  * window is while they're open.
  */
-function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null; mobile: boolean }) {
+function FrameWindows({ area, mobile, dock }: { area: { w: number; h: number } | null; mobile: boolean; dock: number }) {
   const [list] = useSubject(frames);
   const [order] = useSubject(stack);
 
@@ -536,13 +546,28 @@ function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null;
   return (
     <>
       {list.map((f, i) => (
-        <FrameWindow key={f.id} win={f} z={winZ(order, f.id)} cascade={i} area={area} mobile={mobile} />
+        <FrameWindow key={f.id} win={f} z={winZ(order, f.id)} cascade={i} area={area} mobile={mobile} dock={dock} />
       ))}
     </>
   );
 }
 
-function FrameWindow({ win, z, cascade, area, mobile }: { win: FrameWin; z: number; cascade: number; area: { w: number; h: number }; mobile: boolean }) {
+function FrameWindow({
+  win,
+  z,
+  cascade,
+  area,
+  mobile,
+  dock,
+}: {
+  win: FrameWin;
+  z: number;
+  cascade: number;
+  area: { w: number; h: number };
+  mobile: boolean;
+  /** the room kept for the dock, at its size */
+  dock: number;
+}) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
   // (the frame's first page: later ones it goes to itself, and its src mustn't follow, or it would reload)
@@ -556,12 +581,12 @@ function FrameWindow({ win, z, cascade, area, mobile }: { win: FrameWin; z: numb
   const max = !!win.geom?.max;
   // a new window: the default place, each one a step down and right from the one before
   const start = (): Rect => {
-    const d = defaultGeom(W, H);
+    const d = defaultGeom(W, H, dock);
     const step = 28 * ((cascade % 6) + 1);
     return clampRect({ ...d, x: d.x + step, y: d.y + step }, W, H);
   };
   const placed = win.geom ? clampRect(win.geom, W, H) : start();
-  const rect = live ?? (max ? maxRect(W, H) : placed);
+  const rect = live ?? (max ? maxRect(W, H, dock) : placed);
 
   const saveGeom = (r: Rect, isMax = max) => updateFrame(win.id, { geom: { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) } });
 
@@ -710,9 +735,9 @@ function Wallpaper() {
  * (IconGrid); on a phone, a home screen grid in the default order.
  */
 function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: BadgeOf }) {
-  const [{ pinned, icons, widgets }] = useSubject(desk);
+  const [{ pinned, icons, widgets, removedIcons, dockSize, align }] = useSubject(desk);
   const [open] = useSubject(openApps);
-  const items = [
+  const all = [
     ...NAV_FLAT.map((it) => ({
       id: it.href,
       label: it.label,
@@ -730,21 +755,32 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
       id: VSCODE_ICON,
       label: "VS Code",
       node: (
-        <a
-          href="/vscode/"
-          target="_blank"
-          rel="noreferrer"
-          draggable={false}
-          className="group flex w-[84px] flex-col items-center gap-1 rounded-lg p-1.5 outline-none focus-visible:bg-white/25 dark:focus-visible:bg-white/10"
-        >
-          <span className="transition-transform duration-150 group-hover:-translate-y-0.5 group-active:scale-95">
-            <VsCodeIcon size={52} />
-          </span>
-          <IconLabel>VS Code</IconLabel>
-        </a>
+        <ContextMenu>
+          <ContextMenuTrigger>
+            <a
+              href="/vscode/"
+              target="_blank"
+              rel="noreferrer"
+              draggable={false}
+              className="group flex w-[84px] flex-col items-center gap-1 rounded-lg p-1.5 outline-none focus-visible:bg-white/25 dark:focus-visible:bg-white/10"
+            >
+              <span className="transition-transform duration-150 group-hover:-translate-y-0.5 group-active:scale-95">
+                <VsCodeIcon size={52} />
+              </span>
+              <IconLabel>VS Code</IconLabel>
+            </a>
+          </ContextMenuTrigger>
+          <ContextMenuContent className="w-52">
+            <ContextMenuItem onClick={() => window.open("/vscode/", "_blank", "noreferrer")}>Open VS Code</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => setOnDesktop(VSCODE_ICON, false)}>Remove from Desktop</ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
       ),
     },
   ];
+  // (an icon taken off the desktop: the dock's, the Launchpad's and Settings' menus put it back)
+  const items = removedIcons ? all.filter((i) => !removedIcons.includes(i.id)) : all;
   return (
     <>
       <Wallpaper />
@@ -758,7 +794,7 @@ function DesktopBackground({ mobile, badgeOf }: { mobile: boolean; badgeOf: Badg
           ))}
         </nav>
       ) : (
-        <IconGrid items={items} saved={icons} widgets={widgets} />
+        <IconGrid items={items} saved={icons} widgets={widgets} dock={dockSpace(dockSize)} align={align ?? "left"} />
       )}
     </>
   );
@@ -769,9 +805,23 @@ type DeskItem = { id: string; label: string; node: React.ReactNode };
 /**
  * The desktop's icons and widgets on one grid (lib/desktop.ts). Drag an icon anywhere and it snaps to the nearest
  * spot, swapping with an icon already there (layoutIcons, moveIcon; desk.icons); a press that doesn't move is a click,
- * as before. A widget takes a span of spots (WidgetFrame; deskWidgets, desk.widgets), and the icons keep off it.
+ * as before. A widget takes a span of spots (WidgetFrame; deskWidgets, desk.widgets), and the icons keep off it. The
+ * whole arrangement is drawn against the left, centred or against the right (alignShift; desk.align), as it is.
  */
-function IconGrid({ items, saved, widgets }: { items: DeskItem[]; saved?: Record<string, Cell>; widgets: DeskSaved["widgets"] }) {
+function IconGrid({
+  items,
+  saved,
+  widgets,
+  dock,
+  align,
+}: {
+  items: DeskItem[];
+  saved?: Record<string, Cell>;
+  widgets: DeskSaved["widgets"];
+  /** the room kept for the dock, at its size */
+  dock: number;
+  align: DeskAlign;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -796,24 +846,59 @@ function IconGrid({ items, saved, widgets }: { items: DeskItem[]; saved?: Record
     return () => ro.disconnect();
   }, []);
 
-  const { cols, rows } = size ? iconGridSize(size.w, size.h) : { cols: 1, rows: 1 };
+  const W = size?.w ?? 0;
+  const { cols, rows } = size ? iconGridSize(size.w, size.h, dock) : { cols: 1, rows: 1 };
   const placed = useMemo(() => deskWidgets(widgets, cols, rows), [widgets, cols, rows]);
   const blocked = useMemo(() => Object.values(placed).filter((r): r is CellRect => !!r), [placed]);
   const idsKey = items.map((i) => i.id).join("\n");
   const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows, blocked), [idsKey, saved, cols, rows, blocked]);
+  /** the icons (a cell each) and the widgets, but `skip` (the one being moved) */
+  const spansBut = (skip?: string) => [
+    ...Object.entries(layout)
+      .filter(([id]) => id !== skip)
+      .map(([, c]) => ({ ...c, w: 1, h: 1 })),
+    ...WIDGETS.flatMap((id) => (id !== skip && placed[id] ? [placed[id]] : [])),
+  ];
+  // (everything below is in the arrangement's own coordinates: the layer it's drawn in is `shift` px right)
+  const shift = size ? alignShift(align, spansBut(), W) : 0;
   const spot = (c: Cell) => ({ left: ICON_GRID.pad + c.c * ICON_GRID.x, top: ICON_GRID.pad + c.r * ICON_GRID.y });
-  const cellAt = (x: number, y: number): Cell => ({
-    c: Math.min(Math.max(Math.round((x - ICON_GRID.pad) / ICON_GRID.x), 0), cols - 1),
-    r: Math.min(Math.max(Math.round((y - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
-  });
+  const cellAt = (id: string, x: number, y: number): Cell => {
+    const { lo, hi } = dropRange(spansBut(id), 1, cols, shift, W);
+    return {
+      c: Math.min(Math.max(Math.round((x - ICON_GRID.pad) / ICON_GRID.x), lo), Math.max(lo, hi)),
+      r: Math.min(Math.max(Math.round((y - ICON_GRID.pad) / ICON_GRID.y), 0), rows - 1),
+    };
+  };
   /** not under a widget */
   const free = (c: Cell) => !blocked.some((b) => overlaps(b, { ...c, w: 1, h: 1 }));
-  /** where the dragged icon's top-left is now, in the grid's own coordinates */
+  /** where the dragged icon's top-left is now */
   const dragPos = (e: React.PointerEvent, p: NonNullable<typeof press.current>) => {
     const b = box.current!.getBoundingClientRect();
-    return { x: e.clientX - b.left - p.ox, y: e.clientY - b.top - p.oy };
+    return { x: e.clientX - b.left - p.ox - shift, y: e.clientY - b.top - p.oy };
   };
-  const target = drag ? cellAt(drag.x, drag.y) : null;
+  const target = drag ? cellAt(drag.id, drag.x, drag.y) : null;
+
+  /** a folded widget's span as saved: the height it unfolds to */
+  const fullAt = (id: WidgetId, at: CellRect): CellRect =>
+    widgets?.[id]?.mode === "collapsed" ? { ...at, h: (widgets?.[id]?.at ?? defaultWidgetAt(id, cols)).h } : at;
+  // A drop keeps the arrangement on the grid: one left of its first column (or right of its last) moves the whole of
+  // it over by as much, so nothing moves on screen but what was dropped.
+  const commit = (icons: Record<string, Cell>, moved?: { id: WidgetId; at: CellRect }) => {
+    const wids: Partial<Record<WidgetId, CellRect>> = { ...placed, ...(moved ? { [moved.id]: moved.at } : {}) };
+    const dc = fitShift([...Object.values(icons).map((c) => ({ ...c, w: 1, h: 1 })), ...Object.values(wids).filter((r): r is CellRect => !!r)], cols);
+    settle();
+    if (!dc) {
+      if (moved) setWidgetAt(moved.id, fullAt(moved.id, moved.at));
+      // (an icon off the desktop keeps its spot, for when it's back)
+      else setIcons({ ...saved, ...icons });
+      return;
+    }
+    const over = <T extends Cell>(c: T): T => ({ ...c, c: c.c + dc });
+    setArrangement(
+      Object.fromEntries(Object.entries({ ...saved, ...icons }).map(([id, c]) => [id, over(c)])),
+      Object.fromEntries(WIDGETS.flatMap((id) => (wids[id] ? [[id, over(fullAt(id, wids[id]))]] : []))),
+    );
+  };
 
   return (
     <div
@@ -822,96 +907,93 @@ function IconGrid({ items, saved, widgets }: { items: DeskItem[]; saved?: Record
       // (measured first: until then nothing is placed, so nothing jumps)
       style={{ visibility: size ? "visible" : "hidden" }}
     >
-      <nav aria-label="Apps" className="absolute inset-0">
-        {target && free(target) && (
-          <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />
-        )}
-        {items.map((i) => {
-          const dragging = drag?.id === i.id;
-          const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+      <div className={`absolute inset-y-0 ${glide ? "transition-[left] duration-200 ease-out" : ""}`} style={{ left: shift, width: W }}>
+        <nav aria-label="Apps" className="absolute inset-0">
+          {target && free(target) && (
+            <div aria-hidden className="pointer-events-none absolute h-[96px] w-[88px] rounded-xl border-2 border-dashed border-foreground/30 bg-foreground/5" style={spot(target)} />
+          )}
+          {items.map((i) => {
+            const dragging = drag?.id === i.id;
+            const at = dragging ? { left: drag.x, top: drag.y } : spot(layout[i.id] ?? { c: 0, r: 0 });
+            return (
+              <div
+                key={i.id}
+                style={at}
+                className={
+                  dragging
+                    ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
+                    : glide
+                      ? "absolute transition-[left,top] duration-200 ease-out"
+                      : "absolute"
+                }
+                onPointerDown={(e) => {
+                  if (e.button !== 0) return;
+                  const r = e.currentTarget.getBoundingClientRect();
+                  press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
+                }}
+                onPointerMove={(e) => {
+                  const p = press.current;
+                  if (!p || p.id !== i.id) return;
+                  if (!p.moved) {
+                    if (Math.hypot(e.clientX - p.px, e.clientY - p.py) < 5) return;
+                    p.moved = true;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }
+                  setDrag({ id: i.id, ...dragPos(e, p) });
+                }}
+                onPointerUp={(e) => {
+                  const p = press.current;
+                  press.current = null;
+                  if (!p?.moved || p.id !== i.id) return;
+                  // (the click that ends a drag doesn't open the app)
+                  swallowClick.current = true;
+                  setTimeout(() => (swallowClick.current = false), 0);
+                  const { x, y } = dragPos(e, p);
+                  setDrag(null);
+                  // (dropped on a widget, it goes back)
+                  const to = cellAt(i.id, x, y);
+                  const next = free(to) ? moveIcon(layout, i.id, to) : layout;
+                  if (next !== layout) commit(next);
+                }}
+                onPointerCancel={() => {
+                  press.current = null;
+                  setDrag(null);
+                }}
+                onClickCapture={(e) => {
+                  if (!swallowClick.current) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onDragStart={(e) => e.preventDefault()}
+              >
+                {i.node}
+              </div>
+            );
+          })}
+        </nav>
+        {WIDGETS.map((id) => {
+          const at = placed[id];
+          if (!at) return null;
+          const folded = widgets?.[id]?.mode === "collapsed";
+          const others = spansBut(id);
+          const cell = dropRange(others, 1, cols, shift, W);
           return (
-            <div
-              key={i.id}
-              style={at}
-              className={
-                dragging
-                  ? "absolute z-10 scale-105 cursor-grabbing opacity-90 drop-shadow-xl"
-                  : glide
-                    ? "absolute transition-[left,top] duration-200 ease-out"
-                    : "absolute"
-              }
-              onPointerDown={(e) => {
-                if (e.button !== 0) return;
-                const r = e.currentTarget.getBoundingClientRect();
-                press.current = { id: i.id, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, moved: false };
-              }}
-              onPointerMove={(e) => {
-                const p = press.current;
-                if (!p || p.id !== i.id) return;
-                if (!p.moved) {
-                  if (Math.hypot(e.clientX - p.px, e.clientY - p.py) < 5) return;
-                  p.moved = true;
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                }
-                setDrag({ id: i.id, ...dragPos(e, p) });
-              }}
-              onPointerUp={(e) => {
-                const p = press.current;
-                press.current = null;
-                if (!p?.moved || p.id !== i.id) return;
-                // (the click that ends a drag doesn't open the app)
-                swallowClick.current = true;
-                setTimeout(() => (swallowClick.current = false), 0);
-                const { x, y } = dragPos(e, p);
-                setDrag(null);
-                // (dropped on a widget, it goes back)
-                const to = cellAt(x, y);
-                const next = free(to) ? moveIcon(layout, i.id, to) : layout;
-                if (next !== layout) {
-                  settle();
-                  setIcons(next);
-                }
-              }}
-              onPointerCancel={() => {
-                press.current = null;
-                setDrag(null);
-              }}
-              onClickCapture={(e) => {
-                if (!swallowClick.current) return;
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onDragStart={(e) => e.preventDefault()}
+            <WidgetFrame
+              key={id}
+              label={id === "terminals" ? "Terminals" : "Projects"}
+              at={at}
+              folded={folded}
+              rows={rows}
+              moveCols={dropRange(others, at.w, cols, shift, W)}
+              sizeCols={{ lo: cell.lo, hi: cell.hi + 1 }}
+              others={blocked.filter((b) => b !== at)}
+              onPlace={(to) => commit(layout, { id, at: to })}
             >
-              {i.node}
-            </div>
+              {id === "terminals" ? <TerminalsWidget folded={folded} /> : <ProjectsWidget folded={folded} />}
+            </WidgetFrame>
           );
         })}
-      </nav>
-      {WIDGETS.map((id) => {
-        const at = placed[id];
-        if (!at) return null;
-        const folded = widgets?.[id]?.mode === "collapsed";
-        // (folded, it's placed as its header's row: moving it keeps the height it unfolds to)
-        const full = widgets?.[id]?.at ?? defaultWidgetAt(id, cols);
-        return (
-          <WidgetFrame
-            key={id}
-            label={id === "terminals" ? "Terminals" : "Projects"}
-            at={at}
-            folded={folded}
-            cols={cols}
-            rows={rows}
-            others={blocked.filter((b) => b !== at)}
-            onPlace={(to) => {
-              settle();
-              setWidgetAt(id, folded ? { ...to, h: full.h } : to);
-            }}
-          >
-            {id === "terminals" ? <TerminalsWidget folded={folded} /> : <ProjectsWidget folded={folded} />}
-          </WidgetFrame>
-        );
-      })}
+      </div>
     </div>
   );
 }
@@ -926,8 +1008,9 @@ function WidgetFrame({
   label,
   at,
   folded,
-  cols,
   rows,
+  moveCols,
+  sizeCols,
   others,
   onPlace,
   children,
@@ -936,8 +1019,11 @@ function WidgetFrame({
   /** its span, as placed (folded: its header's row) */
   at: CellRect;
   folded: boolean;
-  cols: number;
   rows: number;
+  /** the columns it can start at, moved (dropRange) */
+  moveCols: { lo: number; hi: number };
+  /** where its left and right edges can go, resized */
+  sizeCols: { lo: number; hi: number };
   /** the other widgets' spans, which it can't cover */
   others: CellRect[];
   onPlace: (to: CellRect) => void;
@@ -988,7 +1074,7 @@ function WidgetFrame({
     if (e.button !== 0 || !el.closest("[data-widget-grip]") || el.closest("button, a, input")) return;
     track(e, (dx, dy) => ({
       rect: { ...px, x: px.x + dx, y: px.y + dy },
-      to: moveCells(at, dx / ICON_GRID.x, dy / ICON_GRID.y, cols, rows),
+      to: moveCells(at, dx / ICON_GRID.x, dy / ICON_GRID.y, moveCols, rows),
     }));
   }
 
@@ -996,12 +1082,16 @@ function WidgetFrame({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const grid = cellsRect({ c: 0, r: 0, w: cols, h: rows });
+    // (the live rect stays within the room it can take, measured from that room's corner)
+    const room = cellsRect({ c: sizeCols.lo, r: 0, w: sizeCols.hi - sizeCols.lo, h: rows });
     const min = cellsRect({ c: 0, r: 0, ...WIDGET_MIN });
-    track(e, (dx, dy) => ({
-      rect: resizeRect(px, edges, dx, dy, grid.x + grid.w, grid.y + grid.h, min),
-      to: resizeCells(at, edges, dx / ICON_GRID.x, dy / ICON_GRID.y, cols, rows),
-    }));
+    track(e, (dx, dy) => {
+      const r = resizeRect({ ...px, x: px.x - room.x, y: px.y - room.y }, edges, dx, dy, room.w, room.h, min);
+      return {
+        rect: { ...r, x: r.x + room.x, y: r.y + room.y },
+        to: resizeCells(at, edges, dx / ICON_GRID.x, dy / ICON_GRID.y, sizeCols, rows),
+      };
+    });
   }
 
   const rect = live?.rect ?? px;
@@ -1078,6 +1168,7 @@ function DeskIcon({
         </Link>
       </ContextMenuTrigger>
       <AppMenu
+        href={item.href}
         label={item.label}
         pinned={pinned}
         onOpen={() => {
@@ -1095,6 +1186,7 @@ function DeskIcon({
 
 /** An app's right-click menu, on the desktop and in the dock. */
 function AppMenu({
+  href,
   label,
   pinned,
   onOpen,
@@ -1103,6 +1195,7 @@ function AppMenu({
   onPin,
   onClose,
 }: {
+  href: string;
   label: string;
   pinned: boolean;
   onOpen: () => void;
@@ -1111,6 +1204,8 @@ function AppMenu({
   onPin: () => void;
   onClose?: () => void;
 }) {
+  const [{ removedIcons }] = useSubject(desk);
+  const onDesktop = !removedIcons?.includes(href);
   return (
     <ContextMenuContent className="w-52">
       <ContextMenuItem onClick={onOpen}>Open {label}</ContextMenuItem>
@@ -1118,6 +1213,7 @@ function AppMenu({
       <ContextMenuItem onClick={onNewTab}>Open in a new browser tab</ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem onClick={onPin}>{pinned ? "Remove from Dock" : "Keep in Dock"}</ContextMenuItem>
+      <ContextMenuItem onClick={() => setOnDesktop(href, !onDesktop)}>{onDesktop ? "Remove from Desktop" : "Add to Desktop"}</ContextMenuItem>
       {onClose && (
         <>
           <ContextMenuSeparator />
@@ -1130,7 +1226,6 @@ function AppMenu({
 
 /* -------------------------------- the dock -------------------------------- */
 
-const DOCK_ICON = 48;
 const DOCK_ICON_MOBILE = 44;
 /** How much the icon under the pointer grows, and how far the swell reaches (px). */
 const MAGNIFY = 0.55;
@@ -1155,7 +1250,7 @@ function Dock({
   onMinimize: () => void;
 }) {
   const router = useRouter();
-  const [{ pinned }] = useSubject(desk);
+  const [{ pinned, dockSize }] = useSubject(desk);
   const [open] = useSubject(openApps);
   const [pad] = useSubject(launchpad);
   const [wins] = useSubject(frames);
@@ -1167,7 +1262,9 @@ function Dock({
 
   const frameApps = wins.map((f) => f.app).filter((a): a is string => !!a);
   const extra = [...new Set([...open.map((o) => o.app), ...frameApps])].filter((a) => !pinned.includes(a));
-  const size = mobile ? DOCK_ICON_MOBILE : DOCK_ICON;
+  const size = mobile ? DOCK_ICON_MOBILE : (dockSize ?? DOCK_ICON.default);
+  // (resizing from a divider: no swell meanwhile, and the icons' places measured afresh after)
+  const resizing = useRef(false);
 
   // On a phone the open window has the whole screen; the dock is for the home screen.
   if (mobile && windowShown) return null;
@@ -1179,7 +1276,7 @@ function Dock({
     });
   };
   const onMove = (e: React.PointerEvent) => {
-    if (mobile || e.pointerType === "touch") return;
+    if (mobile || e.pointerType === "touch" || resizing.current) return;
     if (!centers.current.length) measure();
     const x = e.clientX;
     cancelAnimationFrame(frame.current);
@@ -1194,6 +1291,13 @@ function Dock({
     cancelAnimationFrame(frame.current);
     for (const { el } of centers.current) el.style.setProperty("--s", "1");
     centers.current = [];
+  };
+  const startResize = () => {
+    resizing.current = true;
+    onLeave();
+  };
+  const endResize = () => {
+    resizing.current = false;
   };
 
   const appItem = (href: string) => {
@@ -1234,6 +1338,7 @@ function Dock({
           </DockSlot>
         </ContextMenuTrigger>
         <AppMenu
+          href={href}
           label={it.label}
           pinned={isPinned}
           onOpen={() => {
@@ -1283,12 +1388,71 @@ function Dock({
             <LaunchpadIcon size={size} />
           </button>
         </DockSlot>
-        <span aria-hidden className="mx-0.5 h-9 w-px self-center bg-foreground/15" />
+        <DockDivider size={size} resizable={!mobile} onStart={startResize} onEnd={endResize} />
         {pinned.map(appItem)}
-        {extra.length > 0 && <span aria-hidden className="mx-0.5 h-9 w-px self-center bg-foreground/15" />}
+        {extra.length > 0 && (
+          <DockDivider size={size} resizable={!mobile} onStart={startResize} onEnd={endResize} />
+        )}
         {extra.map(appItem)}
       </div>
     </div>
+  );
+}
+
+/**
+ * The line between the dock's parts, which resizes it as macOS's does: drag it up for bigger icons, down for smaller
+ * (DOCK_ICON's range, desk.dockSize), or use the arrow keys on it. The windows and the icon grid keep clear of the dock
+ * at its size (dockSpace).
+ */
+function DockDivider({ size, resizable, onStart, onEnd }: { size: number; resizable: boolean; onStart: () => void; onEnd: () => void }) {
+  const line = <span className="w-px bg-foreground/15 transition-colors group-hover/divider:bg-foreground/45" style={{ height: Math.round(size * 0.75) }} />;
+  if (!resizable)
+    return (
+      <span aria-hidden className="mx-0.5 flex self-center">
+        {line}
+      </span>
+    );
+  function onPointerDown(e: React.PointerEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const y0 = e.clientY;
+    const from = size;
+    onStart();
+    deskDrag.next(true);
+    const move = (ev: PointerEvent) => setDockSize(from + (y0 - ev.clientY));
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      deskDrag.next(false);
+      onEnd();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+  return (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Dock size"
+      aria-valuenow={size}
+      aria-valuemin={DOCK_ICON.min}
+      aria-valuemax={DOCK_ICON.max}
+      tabIndex={0}
+      title="Drag up or down to resize the dock"
+      onPointerDown={onPointerDown}
+      onKeyDown={(e) => {
+        const by = e.key === "ArrowUp" || e.key === "ArrowRight" ? 4 : e.key === "ArrowDown" || e.key === "ArrowLeft" ? -4 : 0;
+        if (!by) return;
+        e.preventDefault();
+        setDockSize(size + by);
+      }}
+      className="group/divider -mx-1 flex cursor-ns-resize touch-none items-center self-stretch rounded px-1.5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {line}
+    </span>
   );
 }
 
@@ -1339,6 +1503,7 @@ function Launchpad({ badgeOf }: { badgeOf: BadgeOf }) {
 
 function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
   const router = useRouter();
+  const [{ pinned, removedIcons }] = useSubject(desk);
   const [q, setQ] = useState("");
   const [projects, setProjects] = useState<ProjectNavItem[] | null>(null);
   const close = () => launchpad.next(false);
@@ -1411,20 +1576,24 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
         {apps.length > 0 && (
           <div onClick={onBackdrop} className={grid}>
             {apps.map((a) => (
-              <Link key={a.href} href={a.href} onClick={go} className={tile}>
-                <span className={pop}>
-                  <AppIcon item={a} size={64} badge={badgeOf(a.href)} />
-                </span>
-                <span className={name}>{a.label}</span>
-              </Link>
+              <LaunchpadMenu key={a.href} id={a.href} removed={!!removedIcons?.includes(a.href)} pinned={pinned.includes(a.href)}>
+                <Link href={a.href} onClick={go} className={tile}>
+                  <span className={pop}>
+                    <AppIcon item={a} size={64} badge={badgeOf(a.href)} />
+                  </span>
+                  <span className={name}>{a.label}</span>
+                </Link>
+              </LaunchpadMenu>
             ))}
             {(!ql || "vs code".includes(ql)) && (
-              <a href="/vscode/" target="_blank" rel="noreferrer" onClick={close} className={tile}>
-                <span className={pop}>
-                  <VsCodeIcon size={64} />
-                </span>
-                <span className={name}>VS Code</span>
-              </a>
+              <LaunchpadMenu id={VSCODE_ICON} removed={!!removedIcons?.includes(VSCODE_ICON)}>
+                <a href="/vscode/" target="_blank" rel="noreferrer" onClick={close} className={tile}>
+                  <span className={pop}>
+                    <VsCodeIcon size={64} />
+                  </span>
+                  <span className={name}>VS Code</span>
+                </a>
+              </LaunchpadMenu>
             )}
           </div>
         )}
@@ -1456,5 +1625,18 @@ function LaunchpadOverlay({ badgeOf }: { badgeOf: BadgeOf }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** An app's right-click menu in the Launchpad: on the desktop or off it (the way back for one removed), in the dock or not. */
+function LaunchpadMenu({ id, removed, pinned, children }: { id: string; removed: boolean; pinned?: boolean; children: React.ReactNode }) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-48" positionerStyle={{ zIndex: Z_LAUNCHPAD + 1 }}>
+        <ContextMenuItem onClick={() => setOnDesktop(id, removed)}>{removed ? "Add to Desktop" : "Remove from Desktop"}</ContextMenuItem>
+        {pinned !== undefined && <ContextMenuItem onClick={() => setPinned(id, !pinned)}>{pinned ? "Remove from Dock" : "Keep in Dock"}</ContextMenuItem>}
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

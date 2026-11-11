@@ -159,11 +159,23 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   z-index (its title bar's buttons, a page's sticky parts) would show through the windows in front.
   · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
     a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
+    Right-click → Remove from Desktop (`desk.removedIcons`); the dock's and the Launchpad's menus,
+    Settings, and the Spiridus menu's "Put back" bring one back (at its old spot when that's free).
+    The icons and widgets are drawn as one arrangement against the left, centred or against the right
+    (`desk.align`, `alignShift`); there a drop can land left of column 0, and the whole moves over to
+    stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen.
+  · The dock resizes as macOS's does: drag the line between its parts up or down (`DockDivider`,
+    `desk.dockSize`, 32–80 px). Windows and the icon grid keep clear of it at its size (`dockSpace`).
+  · Settings (`/settings`, `src/components/settings/settings-panel.tsx`, in `NAV`): interface,
+    theme, and the desktop's arrangement, dock size, widgets and icons. It reads `desk` itself
+    (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
+    made in a window's frame (a separate document) reaches the desktop around it.
   · Two widgets (`status-widget.tsx`, framed by `WidgetFrame` in desktop.tsx): Terminals, with their
     state (waiting for you first, from `liveTerminals`), and Projects (running, ports, memory, tickets,
     from /api/projects every 15 s). A terminal opens floating; a project in the window already on it,
     else a new one (`openPathWindow`). Each sits on the icon grid, in cells: dragged anywhere by its
-    header, resized from any edge down to 3×3 icons (`moveCells` / `resizeCells`), never over the other
+    header, resized from any edge down to 3×3 icons (`moveCells` / `resizeCells`; inset 8px in its
+    cells, so two side by side are 16px apart), never over the other
     (`placeWidgets`), the icons keeping off its cells (`deskWidgets` → `layoutIcons`' `blocked`). Its
     spot, folded (its header's row only) or hidden is `desk.widgets`; the Spiridus menu shows or hides each.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,

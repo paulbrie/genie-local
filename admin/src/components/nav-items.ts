@@ -18,6 +18,7 @@ import {
   FolderKanban,
   ScrollText,
   Server,
+  Settings,
   Share2,
   StickyNote,
   Sparkles,
@@ -73,6 +74,7 @@ export const NAV: NavItem[] = [
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
     ],
   },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export const isActive = (item: NavItem, pathname: string) =>

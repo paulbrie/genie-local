@@ -3,7 +3,20 @@
 import { Subject } from "subjecto";
 
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type Cell, type CellRect, DEFAULT_PINNED, type DeskSaved, parseDesk, type WidgetId, type WidgetMode, type WidgetSaved, type WinGeom } from "@/lib/desktop";
+import {
+  appOf,
+  type Cell,
+  type CellRect,
+  DEFAULT_PINNED,
+  type DeskAlign,
+  DOCK_ICON,
+  type DeskSaved,
+  parseDesk,
+  type WidgetId,
+  type WidgetMode,
+  type WidgetSaved,
+  type WinGeom,
+} from "@/lib/desktop";
 
 /**
  * The desktop shell's state (components/desktop). The page you're on is the
@@ -113,6 +126,28 @@ export function openAppWindow(app: string, path: string, mainApp: string | null)
   return true;
 }
 
+let loaded = false;
+
+/**
+ * What this browser remembers of the desktop (localStorage), read once: the desktop's own hydrateDesk does it, and so
+ * does the Settings page (in the classic interface too, where nothing else does). It follows the changes another
+ * document makes (another tab, or Settings in a window's frame), so the desktop around a frame changes with it.
+ */
+export function loadDesk(apps: readonly string[]) {
+  if (loaded) return;
+  loaded = true;
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(KEY);
+  } catch {
+    /* ignore */
+  }
+  desk.next(parseDesk(raw, apps));
+  window.addEventListener("storage", (e) => {
+    if (e.key === KEY) desk.next(parseDesk(e.newValue, apps));
+  });
+}
+
 function save(next: DeskSaved) {
   desk.next(next);
   try {
@@ -159,13 +194,7 @@ export function hydrateDesk(apps: readonly string[]): "min" | "closed" | null {
   } catch {
     /* unreadable: no frames */
   }
-  let raw: string | null = null;
-  try {
-    raw = localStorage.getItem(KEY);
-  } catch {
-    /* ignore */
-  }
-  desk.next(parseDesk(raw, apps));
+  loadDesk(apps);
   const known = new Set(apps);
   try {
     const v = JSON.parse(sessionStorage.getItem(OPEN_KEY) ?? "[]");
@@ -289,6 +318,43 @@ export function openPathWindow(path: string, mainPath: string, apps: readonly st
   }
   openFrame(path, appOf(path, apps));
   return true;
+}
+
+/** Take an icon (an app's href, or VSCODE_ICON) off the desktop, or put it back (at its old spot, when that's free). */
+export function setOnDesktop(id: string, on: boolean) {
+  const { removedIcons, ...rest } = desk.getValue();
+  const next = on ? (removedIcons ?? []).filter((x) => x !== id) : [...new Set([...(removedIcons ?? []), id])];
+  save(next.length ? { ...rest, removedIcons: next } : rest);
+}
+
+/** Every icon taken off the desktop back on it. */
+export function restoreIcons() {
+  const { removedIcons: _old, ...rest } = desk.getValue();
+  void _old;
+  save(rest);
+}
+
+/** The dock's icon size, in px (kept within DOCK_ICON's range). */
+export function setDockSize(px: number) {
+  const size = Math.round(Math.min(Math.max(px, DOCK_ICON.min), DOCK_ICON.max));
+  const { dockSize, ...rest } = desk.getValue();
+  if (size === (dockSize ?? DOCK_ICON.default)) return;
+  save(size === DOCK_ICON.default ? rest : { ...rest, dockSize: size });
+}
+
+/** The icons and widgets, as one arrangement, against the left, centred or against the right. */
+export function setAlign(align: DeskAlign) {
+  const { align: _old, ...rest } = desk.getValue();
+  void _old;
+  save(align === "left" ? rest : { ...rest, align });
+}
+
+/** The icons' and the widgets' new places at once (a drop that moves the whole arrangement over). */
+export function setArrangement(icons: Record<string, Cell>, widgets: Partial<Record<WidgetId, CellRect>>) {
+  const cur = desk.getValue();
+  const next = { ...cur.widgets };
+  for (const [id, at] of Object.entries(widgets) as [WidgetId, CellRect][]) next[id] = { ...next[id], at };
+  save({ ...cur, icons, widgets: next });
 }
 
 /** The desktop icons' arrangement, placed by hand (null: back to the default order). */

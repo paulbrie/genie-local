@@ -39,6 +39,7 @@ export const PAGE_ROUTES = [
   "/railway",
   "/recipes",
   "/services",
+  "/settings",
   "/tasks",
   "/teams",
   "/terminals",

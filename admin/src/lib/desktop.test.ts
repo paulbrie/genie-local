@@ -26,6 +26,11 @@ import {
   placeWidgets,
   resizeCells,
   WIDGET_MIN,
+  alignShift,
+  dockSpace,
+  DOCK_ICON,
+  dropRange,
+  fitShift,
 } from "./desktop";
 
 const APPS = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks", "/teams", "/agents", "/agents3d"];
@@ -209,12 +214,21 @@ describe("desktop icons", () => {
   it("fits as many columns and rows as the desktop has room for", () => {
     assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 7 });
   });
+  it("lose a row to a bigger dock, and gain one from a smaller", () => {
+    assert.equal(dockSpace(), DOCK_SPACE);
+    assert.equal(iconGridSize(1440, 780).rows, 7);
+    assert.equal(iconGridSize(1440, 780, dockSpace(DOCK_ICON.max)).rows, 6);
+    assert.equal(iconGridSize(1440, 760).rows, 6);
+    assert.equal(iconGridSize(1440, 760, dockSpace(DOCK_ICON.min)).rows, 7);
+  });
 });
 
 describe("desktop widgets", () => {
-  it("are three icons by three at the least, on the icons' own grid", () => {
+  it("are three icons by three at the least, on the icons' own grid, inset so two side by side are 16px apart", () => {
     const r = cellsRect({ c: 1, r: 2, ...WIDGET_MIN });
-    assert.deepEqual(r, { x: 12 + 92, y: 12 + 2 * 96, w: 3 * 92 - 4, h: 3 * 96 - 4 });
+    assert.deepEqual(r, { x: 12 + 92 + 8, y: 12 + 2 * 96 + 8, w: 3 * 92 - 16, h: 3 * 96 - 16 });
+    const next = cellsRect({ c: 4, r: 2, ...WIDGET_MIN });
+    assert.equal(next.x - (r.x + r.w), 16);
   });
   it("start at the top right, the projects under the terminals", () => {
     assert.deepEqual(deskWidgets(undefined, 15, 7), { terminals: { c: 12, r: 0, w: 3, h: 3 }, projects: { c: 12, r: 3, w: 3, h: 4 } });
@@ -239,18 +253,21 @@ describe("desktop widgets", () => {
     assert.deepEqual(p.b, { c: 4, r: 1, w: 3, h: 3 }, "the nearest spot clear of the first");
     assert.deepEqual(placeWidgets([{ id: "a", at: { c: 0, r: 0, w: 30, h: 9 } }], 10, 5).a, { c: 0, r: 0, w: 10, h: 5 });
   });
-  it("move by whole cells, the nearest to the pointer, and stay on the grid", () => {
+  it("move by whole cells, the nearest to the pointer, and stay within the room", () => {
     const a = { c: 2, r: 1, w: 3, h: 3 };
-    assert.deepEqual(moveCells(a, 1.4, 0.6, 15, 7), { c: 3, r: 2, w: 3, h: 3 });
-    assert.deepEqual(moveCells(a, -9, 9, 15, 7), { c: 0, r: 4, w: 3, h: 3 });
+    assert.deepEqual(moveCells(a, 1.4, 0.6, { lo: 0, hi: 12 }, 7), { c: 3, r: 2, w: 3, h: 3 });
+    assert.deepEqual(moveCells(a, -9, 9, { lo: 0, hi: 12 }, 7), { c: 0, r: 4, w: 3, h: 3 });
+    assert.deepEqual(moveCells(a, -9, 0, { lo: -4, hi: 12 }, 7).c, -4, "left of the grid, where there's room for the lot to move over");
   });
   it("resize from any edge, never under three by three, the other edges staying", () => {
     const a = { c: 4, r: 1, w: 4, h: 4 };
-    assert.deepEqual(resizeCells(a, { r: true, b: true }, 1.6, 0.4, 15, 7), { c: 4, r: 1, w: 6, h: 4 });
-    assert.deepEqual(resizeCells(a, { r: true, b: true }, -5, -5, 15, 7), { c: 4, r: 1, ...WIDGET_MIN });
-    assert.deepEqual(resizeCells(a, { l: true, t: true }, 5, 5, 15, 7), { c: 5, r: 2, ...WIDGET_MIN });
-    assert.deepEqual(resizeCells(a, { l: true }, -9, 0, 15, 7), { c: 0, r: 1, w: 8, h: 4 });
-    assert.deepEqual(resizeCells(a, { b: true }, 0, 9, 15, 7), { c: 4, r: 1, w: 4, h: 6 });
+    const room = { lo: 0, hi: 15 };
+    assert.deepEqual(resizeCells(a, { r: true, b: true }, 1.6, 0.4, room, 7), { c: 4, r: 1, w: 6, h: 4 });
+    assert.deepEqual(resizeCells(a, { r: true, b: true }, -5, -5, room, 7), { c: 4, r: 1, ...WIDGET_MIN });
+    assert.deepEqual(resizeCells(a, { l: true, t: true }, 5, 5, room, 7), { c: 5, r: 2, ...WIDGET_MIN });
+    assert.deepEqual(resizeCells(a, { l: true }, -9, 0, room, 7), { c: 0, r: 1, w: 8, h: 4 });
+    assert.deepEqual(resizeCells(a, { r: true }, 30, 0, room, 7), { c: 4, r: 1, w: 11, h: 4 });
+    assert.deepEqual(resizeCells(a, { b: true }, 0, 9, room, 7), { c: 4, r: 1, w: 4, h: 6 });
   });
   it("remember their spot, folded or hidden, and carry over the one status widget's", () => {
     const d = parseDesk(
@@ -261,5 +278,54 @@ describe("desktop widgets", () => {
     assert.deepEqual(parseDesk(JSON.stringify({ widget: "hidden" }), ["/"]).widgets, { terminals: { mode: "hidden" }, projects: { mode: "hidden" } });
     assert.deepEqual(parseDesk(JSON.stringify({ widgetFolded: ["projects"] }), ["/"]).widgets, { projects: { mode: "collapsed" } });
     assert.equal(parseDesk(JSON.stringify({ widgetSide: "left" }), ["/"]).widgets, undefined);
+  });
+});
+
+describe("the arrangement across the desktop", () => {
+  // two columns of icons and a widget beside them: columns 0 to 4, on a 1440px desktop (15 columns)
+  const spans = [
+    { c: 0, r: 0, w: 1, h: 1 },
+    { c: 1, r: 2, w: 1, h: 1 },
+    { c: 2, r: 0, w: 3, h: 3 },
+  ];
+  it("stays where it is against the left", () => {
+    assert.equal(alignShift("left", spans, 1440), 0);
+  });
+  it("goes against the right edge, as far from it as the left edge's padding", () => {
+    const shift = alignShift("right", spans, 1440);
+    assert.equal(12 + 5 * 92 - 8 + shift, 1440 - 12);
+  });
+  it("centres what it takes, keeping the gaps in it", () => {
+    const shift = alignShift("center", spans, 1440);
+    const left = 12 + shift;
+    const right = 12 + 5 * 92 - 8 + shift;
+    assert.ok(Math.abs(left - (1440 - right)) <= 1);
+    assert.equal(alignShift("center", [], 1440), 0);
+  });
+  it("lets a drop land past the arrangement's first column when it's drawn away from the left, never off screen", () => {
+    assert.deepEqual(dropRange(spans, 1, 15, 0, 1440), { lo: 0, hi: 14 });
+    const right = dropRange(spans, 1, 15, alignShift("right", spans, 1440), 1440);
+    assert.equal(right.hi, 4, "the screen's last column is the arrangement's");
+    assert.equal(right.lo, -10, "as far left as keeps the whole 15 columns wide");
+    assert.deepEqual(dropRange([], 3, 15, 0, 1440), { lo: 0, hi: 12 });
+  });
+  it("moves over as a whole to come back on the grid", () => {
+    assert.equal(fitShift(spans, 15), 0);
+    assert.equal(fitShift([...spans, { c: -2, r: 0, w: 1, h: 1 }], 15), 2);
+    assert.equal(fitShift([{ c: 13, r: 0, w: 3, h: 3 }], 15), -1);
+    assert.equal(fitShift([], 15), 0);
+  });
+  it("remembers icons taken off the desktop, the dock's size and the arrangement's side", () => {
+    const d = parseDesk(
+      JSON.stringify({ removedIcons: ["/files", "/files", "vscode", "/gone", 3], dockSize: 64, align: "right" }),
+      ["/", "/files"],
+    );
+    assert.deepEqual(d.removedIcons, ["/files", "vscode"]);
+    assert.equal(d.dockSize, 64);
+    assert.equal(d.align, "right");
+    const bad = parseDesk(JSON.stringify({ removedIcons: [], dockSize: 500, align: "up" }), ["/"]);
+    assert.equal(bad.removedIcons, undefined);
+    assert.equal(bad.dockSize, undefined);
+    assert.equal(bad.align, undefined);
   });
 });
