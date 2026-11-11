@@ -400,7 +400,8 @@ export function defaultWidgetAt(id: WidgetId, cols: number): CellRect {
 /**
  * Where the widgets go on a grid of `cols` × `rows`, in order: each where it wants to be, moved onto the grid when
  * it's off it (and no bigger than the grid); one that would then cover a widget placed before it, the nearest spot
- * that doesn't (where it wanted, when there's none).
+ * on the grid that doesn't, and with none there, the nearest under it (the desktop grows, and scrolls): never one on
+ * another.
  */
 export function placeWidgets(wants: readonly { id: string; at: CellRect }[], cols: number, rows: number): Record<string, CellRect> {
   const out: Record<string, CellRect> = {};
@@ -411,16 +412,22 @@ export function placeWidgets(wants: readonly { id: string; at: CellRect }[], col
     const want = { c: clamp(at.c, 0, cols - w), r: clamp(at.r, 0, rows - h), w, h };
     let best = want;
     if (placed.some((p) => overlaps(p, want))) {
-      let bestD = Infinity;
-      for (let c = 0; c + w <= cols; c++)
-        for (let r = 0; r + h <= rows; r++) {
-          const spot = { c, r, w, h };
-          const d = (c - want.c) ** 2 + (r - want.r) ** 2;
-          if (d < bestD && !placed.some((p) => overlaps(p, spot))) {
-            bestD = d;
-            best = spot;
+      const nearest = (rowLimit: number) => {
+        let found: CellRect | null = null;
+        let bestD = Infinity;
+        for (let c = 0; c + w <= cols; c++)
+          for (let r = 0; r + h <= rowLimit; r++) {
+            const spot = { c, r, w, h };
+            const d = (c - want.c) ** 2 + (r - want.r) ** 2;
+            if (d < bestD && !placed.some((p) => overlaps(p, spot))) {
+              bestD = d;
+              found = spot;
+            }
           }
-        }
+        return found;
+      };
+      // (on the grid first; else below everything, where there's always room)
+      best = nearest(rows) ?? nearest(Math.max(rows, ...placed.map((p) => p.r + p.h)) + h) ?? want;
     }
     out[id] = best;
     placed.push(best);
@@ -428,11 +435,14 @@ export function placeWidgets(wants: readonly { id: string; at: CellRect }[], col
   return out;
 }
 
-/** Where the widgets that show (not hidden) want to be: their spot (or their default); a folded one, its header's row. */
-export function widgetWants(saved: DeskSaved["widgets"], cols: number): { id: WidgetId; at: CellRect }[] {
+/**
+ * Where the widgets that show (not hidden) want to be: their spot (`custom`: put there by hand), or their default; a
+ * folded one, its header's row.
+ */
+export function widgetWants(saved: DeskSaved["widgets"], cols: number): { id: WidgetId; at: CellRect; custom: boolean }[] {
   return WIDGETS.filter((id) => widgetMode(saved, id) !== "hidden").map((id) => {
     const at = saved?.[id]?.at ?? defaultWidgetAt(id, cols);
-    return { id, at: widgetMode(saved, id) === "collapsed" ? { ...at, h: 1 } : at };
+    return { id, at: widgetMode(saved, id) === "collapsed" ? { ...at, h: 1 } : at, custom: !!saved?.[id]?.at };
   });
 }
 
@@ -445,12 +455,18 @@ export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: num
 }
 
 /**
- * Whether the arrangement fits the desktop: every widget where it wants to be (not pushed onto the grid, nor off
- * another), and every icon within the grid's columns. When it doesn't (a narrower window), the desktop is stacked.
+ * Whether the widgets put by hand fit the desktop's width: from the first one's left edge to the last one's right
+ * edge, no more columns than it has; and the ones still at their default (counted from the right edge) have room
+ * there. When not (a narrower window), the desktop is stacked. Only the width counts: a widget on another's spot (a
+ * new one, at its default) just finds the nearest free one, and a shorter window scrolls; the icons always find room.
  */
-export function arrangementFits(wants: readonly { id: string; at: CellRect }[], placed: Readonly<Record<string, CellRect | undefined>>, icons: Readonly<Record<string, Cell>>, cols: number): boolean {
-  const same = (a: CellRect | undefined, b: CellRect) => !!a && a.c === b.c && a.r === b.r && a.w === b.w && a.h === b.h;
-  return wants.every((w) => same(placed[w.id], w.at)) && Object.values(icons).every((c) => c.c < cols);
+export function arrangementFits(wants: readonly { at: CellRect; custom?: boolean }[], cols: number): boolean {
+  if (wants.some((w) => !w.custom && w.at.c < 0)) return false;
+  const mine = wants.filter((w) => w.custom !== false);
+  if (!mine.length) return true;
+  const left = Math.min(...mine.map((w) => w.at.c));
+  const right = Math.max(...mine.map((w) => w.at.c + w.at.w));
+  return right - left <= cols;
 }
 
 /**

@@ -362,13 +362,25 @@ describe("widgets off at first", () => {
 });
 
 describe("the stacked desktop", () => {
-  it("is for when the arrangement doesn't fit: a widget pushed onto the grid, or an icon past its columns", () => {
-    const saved = { terminals: { at: { c: 10, r: 0, w: 3, h: 3 } }, projects: { mode: "hidden" as const }, disk: { mode: "hidden" as const }, memory: { mode: "hidden" as const }, processes: { mode: "hidden" as const }, docker: { mode: "hidden" as const } };
-    const wide = widgetWants(saved, 15);
-    assert.equal(arrangementFits(wide, deskWidgets(saved, 15, 7), { a: { c: 0, r: 0 } }, 15), true);
-    const narrow = widgetWants(saved, 8);
-    assert.equal(arrangementFits(narrow, deskWidgets(saved, 8, 7), { a: { c: 0, r: 0 } }, 8), false, "the widget's spot is past the grid");
-    assert.equal(arrangementFits(wide, deskWidgets(saved, 15, 7), { a: { c: 15, r: 0 } }, 15), false, "an icon past the columns");
+  it("is only for when the widgets, as put, are wider than the desktop", () => {
+    const at = (c: number, w = 3) => ({ at: { c, r: 0, w, h: 3 } });
+    assert.equal(arrangementFits([at(10), at(4)], 15), true);
+    assert.equal(arrangementFits([at(10), at(4)], 12), true, "columns 4 to 12, 9 wide: past 12 columns, but the lot moves over");
+    assert.equal(arrangementFits([at(10), at(4)], 9), true, "9 wide fits 9 columns");
+    assert.equal(arrangementFits([at(10), at(4)], 8), false);
+    assert.equal(arrangementFits([], 3), true);
+  });
+  it("counts only the widgets put by hand, but a default spot with no room at all", () => {
+    const mine = (c: number) => ({ at: { c, r: 0, w: 3, h: 3 }, custom: true });
+    const dflt = (c: number) => ({ at: { c, r: 4, w: 3, h: 3 }, custom: false });
+    assert.equal(arrangementFits([mine(5), mine(11), dflt(1)], 10), true, "columns 5 to 13 are mine: 9 wide; the default one finds room");
+    assert.equal(arrangementFits([mine(5), dflt(-2)], 10), false, "no room for a default one");
+  });
+  it("isn't for two widgets on one spot (a new one at its default): that one finds a free spot", () => {
+    assert.equal(arrangementFits([at2(6, 0), at2(6, 0)], 15), true);
+    function at2(c: number, r: number) {
+      return { at: { c, r, w: 3, h: 3 } };
+    }
   });
   it("puts the widgets one a row, the whole width, in reading order, then the icons a row after another", () => {
     const s = stackDesktop(
@@ -409,5 +421,21 @@ describe("a shorter window", () => {
   });
   it("keeps the icons placed by hand where they are, below what shows too", () => {
     assert.deepEqual(layoutIcons(["a"], { a: { c: 1, r: 6 } }, 3, 7, [], 3).a, { c: 1, r: 6 });
+  });
+});
+
+describe("a widget with no room on the grid", () => {
+  it("goes under the others rather than on one, the desktop growing", () => {
+    const p = placeWidgets(
+      [
+        { id: "a", at: { c: 0, r: 0, w: 3, h: 3 } },
+        { id: "b", at: { c: 3, r: 0, w: 3, h: 3 } },
+        { id: "c", at: { c: 0, r: 0, w: 3, h: 3 } },
+      ],
+      6,
+      3,
+    );
+    assert.deepEqual(p.c, { c: 0, r: 3, w: 3, h: 3 });
+    assert.ok(!overlaps(p.c, p.a) && !overlaps(p.c, p.b));
   });
 });

@@ -195,9 +195,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     right-click on the wallpaper (`DeskMenu`) lists every widget: one added goes under the pointer.
     Folded, a widget is one icon row tall, a glance. A window shorter than the arrangement doesn't
     squeeze it: the grid keeps the rows it needs and the desktop scrolls (icons never placed by hand
-    fill the rows that show first, `layoutIcons`' `flowRows`). One too narrow for it
-    (`arrangementFits`) stacks the desktop (`stackDesktop`): the widgets one a row the whole width,
-    the icons under them, scrolling, nothing dragged until there's room again.
+    fill the rows that show first, `layoutIcons`' `flowRows`; a widget with no free spot on
+    the grid goes under the others, `placeWidgets`, never on one). Only the width stacks the desktop:
+    when the widgets put by hand, from the first's left edge to the last's right edge, are wider than
+    it (`arrangementFits`; a default spot only counts when it has no room at all), the widgets go one
+    a row the whole width, the icons under them (`stackDesktop`), nothing dragged until there's room
+    again. Narrower but still wide enough, they move over together (`fitShift`) to stay as they are.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
     sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
     `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal

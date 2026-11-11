@@ -875,7 +875,13 @@ function IconGrid({
 
   const W = size?.w ?? 0;
   const { cols, rows: fitRows } = size ? iconGridSize(size.w, size.h, dock) : { cols: 1, rows: 1 };
-  const wants = useMemo(() => widgetWants(widgets, cols), [widgets, cols]);
+  // (widgets put further right than a narrower window has room for, but no wider than it: moved over together, as a
+  // drop past the edge moves them, so they keep where they are to each other rather than one being pushed in alone)
+  const wants = useMemo(() => {
+    const ws = widgetWants(widgets, cols);
+    const dc = fitShift(ws.filter((w) => w.custom).map((w) => w.at), cols);
+    return dc ? ws.map((w) => (w.custom ? { ...w, at: { ...w.at, c: w.at.c + dc } } : w)) : ws;
+  }, [widgets, cols]);
   // A window shorter than the arrangement doesn't squeeze it (widgets pushed up onto each other): the grid has the
   // rows it needs, the desktop grows below the window, and scrolls. (Narrower, it stacks instead: below.)
   const rows = Math.max(fitRows, ...wants.map((w) => w.at.r + w.at.h), ...items.map((i) => (saved?.[i.id]?.r ?? -1) + 1));
@@ -883,15 +889,12 @@ function IconGrid({
   const blocked = useMemo(() => Object.values(placed).filter((r): r is CellRect => !!r), [placed]);
   const idsKey = items.map((i) => i.id).join("\n");
   const layout = useMemo(() => layoutIcons(idsKey.split("\n"), saved, cols, rows, blocked, fitRows), [idsKey, saved, cols, rows, blocked, fitRows]);
-  // (the rows it all takes: the desktop's height, to scroll)
-  const usedRows = Math.max(rows, ...Object.values(layout).map((c) => c.r + 1));
-  // A window too narrow for the arrangement (a widget pushed onto the grid or off another, an icon past the columns):
-  // the desktop stacks, the widgets one a row the whole width, the icons under them, and it scrolls; nothing moves by
-  // hand until there's room again, when the arrangement is back as it was.
-  const stack = useMemo(
-    () => (size && !arrangementFits(wants, placed, layout, cols) ? stackDesktop(wants, idsKey.split("\n"), W) : null),
-    [size, wants, placed, layout, cols, idsKey, W],
-  );
+  // (the rows it all takes: the desktop's height, to scroll; a widget with no room on the grid goes under it)
+  const usedRows = Math.max(rows, ...Object.values(layout).map((c) => c.r + 1), ...blocked.map((b) => b.r + b.h));
+  // A window too narrow for the widgets as they were put (wider, from the first's left edge to the last's right edge,
+  // than it is): the desktop stacks, the widgets one a row the whole width, the icons under them, and it scrolls;
+  // nothing moves by hand until there's room again, when the arrangement is back as it was.
+  const stack = useMemo(() => (size && !arrangementFits(wants, cols) ? stackDesktop(wants, idsKey.split("\n"), W) : null), [size, wants, cols, idsKey, W]);
   /** the icons (a cell each) and the widgets, but `skip` (the one being moved) */
   const spansBut = (skip?: string) => [
     ...Object.entries(layout)
@@ -1059,7 +1062,7 @@ function IconGrid({
               at={at}
               locked={stack?.widgets[id]}
               folded={folded}
-              rows={rows}
+              rows={usedRows}
               moveCols={dropRange(others, at.w, cols, shift, W)}
               sizeCols={{ lo: cell.lo, hi: cell.hi + 1 }}
               others={blocked.filter((b) => b !== at)}

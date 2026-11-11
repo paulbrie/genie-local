@@ -114,6 +114,7 @@ export const API_ROUTES = [
   "/api/firewall/allowlist",
   "/api/firewall/toggle",
   "/api/git",
+  "/api/git/branch",
   "/api/git/checkout",
   "/api/git/commit",
   "/api/git/diff",
