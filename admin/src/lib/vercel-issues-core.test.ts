@@ -15,6 +15,12 @@ describe("production problems", () => {
     assert.equal(failed?.level, "error");
     assert.equal(failed?.title, "HTTP 502 on GET /api/users/:id");
   });
+  it("ignores the marker Vercel ends each 5-minute log stream with", () => {
+    const marker = { level: "error", source: "delimiter", text: "Exceeded query duration limit of 5 minutes", method: null, path: null, status: null };
+    assert.equal(problemOf(line(marker)), null);
+    // the same text printed by the app itself is still a problem
+    assert.equal(problemOf(line({ ...marker, source: "lambda" }))?.level, "error");
+  });
   it("counts the same problem once, whatever its ids", () => {
     const a = problemOf(line({ level: "error", text: "\x1b[31mUser 123 not found (id 9f8e7d6c5b4a3210)\x1b[0m\n    at x" }));
     const b = problemOf(line({ level: "error", text: "User 456 not found (id 0123456789abcdef)" }));

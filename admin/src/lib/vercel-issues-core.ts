@@ -59,6 +59,9 @@ const sha = (s: string) => createHash("sha1").update(s).digest("hex").slice(0, 2
 
 /** The problem a log line is, or null when it's none (an info line, a 2xx/3xx/4xx request). */
 export function problemOf(l: RuntimeLine): Problem | null {
+  // Vercel ends each live log stream after 5 minutes with an "error"-level marker ("Exceeded query duration limit
+  // of 5 minutes", source "delimiter"): the collector reconnecting, not the app failing
+  if (l.source === "delimiter") return null;
   const lvl = l.level.toLowerCase();
   const failed = l.status != null && l.status >= 500;
   const level = lvl === "error" || lvl === "fatal" || failed ? "error" : lvl === "warning" || lvl === "warn" ? "warning" : null;
