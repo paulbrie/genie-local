@@ -34,20 +34,25 @@ type View = (typeof VIEWS)[number]["value"];
  * The disk: how much of it is used, and by what: /opt/project, /tmp, the home folder, /usr, /var, Docker, and the
  * rest (Other) (/api/disk: measured in the background, at most every 10 minutes, or now with the refresh button).
  * Shown as a list with each part's largest entries, one segmented bar, a donut, or a treemap of the parts and what's
- * in them (the switch, remembered). In the bar and the donut, a part and its row light each other up. In the treemap,
- * a click on a folder drills into it (its own entries and theirs, /api/disk/dir), a breadcrumb leading back up.
+ * in them (the switch, remembered). In the bar and the donut, a part and its row light each other up. In every view, a
+ * click on a folder drills into it (its own entries and theirs, /api/disk/dir), a breadcrumb leading back up; switching
+ * views stays in the folder.
  */
 export function DiskWidget({ folded }: { folded: boolean }) {
   const { data, failed, reload } = usePolled<DiskOverview>("/api/disk", 60_000, (d) => (d.scanning ? 4000 : null));
   const [view, setView] = useWidgetView<View>("disk", "chart", VIEWS.map((v) => v.value), "list");
   const [hot, setHot] = useState<string | null>(null);
-  // (the folder the treemap is drilled into; null: the whole disk)
+  // (the folder drilled into; null: the whole disk)
   const [trail, setTrail] = useState<string | null>(null);
   const { data: dirData, failed: dirFailed } = usePolled<DiskDir & { asked: string }>(
-    view === "treemap" && trail ? `/api/disk/dir?path=${encodeURIComponent(trail)}` : null,
+    trail ? `/api/disk/dir?path=${encodeURIComponent(trail)}` : null,
     5 * 60_000,
   );
   const drilled = dirData && dirData.asked === trail ? dirData : null;
+  const drill = (path: string | null) => {
+    setHot(null);
+    setTrail(path);
+  };
 
   const disk = data?.fs[0];
   const pct = disk && disk.size ? Math.round((disk.used / disk.size) * 100) : null;
@@ -56,6 +61,14 @@ export function DiskWidget({ folded }: { folded: boolean }) {
     await fetch(`${BASE_PATH}/api/disk?fresh=1`, { cache: "no-store" }).catch(() => {});
     reload();
   };
+
+  // What's drawn: the parts of the disk, or the folder drilled into (while the next one's measured, the one before
+  // stays, dimmed); and what their shares are of: the disk (what's free its track), or the folder.
+  const shown = drilled ?? (trail ? (dirData ?? null) : null);
+  const loading = !!trail && !drilled && !dirFailed;
+  const blocks = shown ? dirBlocks(shown) : parts ? partBlocks(parts) : [];
+  const of: Scale | null = shown ? { total: shown.bytes, free: null, label: shown.path.split("/").pop() || shown.path } : disk ? { total: disk.size, free: disk.avail, label: "the disk" } : null;
+  const onDrill = loading ? undefined : drill;
 
   return (
     <>
@@ -79,16 +92,30 @@ export function DiskWidget({ folded }: { folded: boolean }) {
             </div>
           )}
           {data && !parts && <Empty>Measuring the folders (a minute the first time)…</Empty>}
-          {disk && parts && (
+          {disk && parts && of && (
             // (the treemap's column fills the widget, taking all the room left; the others are as tall as they are)
             <div className={cn("flex flex-col pr-2 pl-7", view === "treemap" && "min-h-44 flex-1")}>
-              {view === "list" && <ListView parts={parts} size={disk.size} />}
-              {view === "bar" && <BarView parts={parts} size={disk.size} free={disk.avail} hot={hot} setHot={setHot} />}
-              {view === "donut" && <DonutView parts={parts} size={disk.size} free={disk.avail} hot={hot} setHot={setHot} />}
-              {view === "treemap" && (
-                <DrillTreemap parts={parts} trail={trail} drilled={drilled} stale={dirData ?? null} failed={dirFailed} onDrill={setTrail} />
+              {trail && <Crumbs parts={parts} trail={trail} bytes={drilled?.bytes ?? null} onDrill={drill} />}
+              {dirFailed && trail && !drilled ? (
+                <p className="py-2 text-xs text-muted-foreground">Couldn&apos;t measure that folder.</p>
+              ) : drilled && !drilled.entries.length ? (
+                <p className="py-2 text-xs text-muted-foreground">Nothing in it takes room.</p>
+              ) : (
+                <div className={cn("relative flex flex-col", view === "treemap" && "min-h-0 flex-1")}>
+                  <div className={cn("flex flex-col transition-opacity", view === "treemap" && "min-h-0 flex-1", loading && "opacity-35")}>
+                    {view === "list" && <ListView blocks={blocks} of={of} onDrill={onDrill} />}
+                    {view === "bar" && <BarView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                    {view === "donut" && <DonutView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                    {view === "treemap" && <TreemapView blocks={blocks} onDrill={onDrill} />}
+                    {(view === "bar" || view === "donut") && <PartRows blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                  </div>
+                  {loading && (
+                    <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="size-3.5 animate-spin" /> Measuring {trail?.split("/").pop()}…
+                    </span>
+                  )}
+                </div>
               )}
-              {view !== "list" && view !== "treemap" && <PartRows parts={parts} used={disk.used} hot={hot} setHot={setHot} />}
             </div>
           )}
           {data && (
@@ -98,7 +125,7 @@ export function DiskWidget({ folded }: { folded: boolean }) {
                   <Loader2 className="size-3 animate-spin" /> Measuring…
                 </>
               ) : (
-                <span>{view === "treemap" && drilled ? `Measured ${ago(drilled.measuredAt)}` : data.scannedAt ? `Measured ${ago(data.scannedAt)}` : ""}</span>
+                <span>{drilled ? `Measured ${ago(drilled.measuredAt)}` : data.scannedAt ? `Measured ${ago(data.scannedAt)}` : ""}</span>
               )}
               <button
                 type="button"
@@ -118,101 +145,224 @@ export function DiskWidget({ folded }: { folded: boolean }) {
   );
 }
 
-/** The list: each part, its share of the disk, and its largest entries (/opt/project and /tmp their five, the rest three). */
-function ListView({ parts, size }: { parts: DiskPart[]; size: number }) {
+/**
+ * What a view draws: a part of the disk, or an entry of a folder drilled into, its colour, and `path` when it's a folder
+ * (a click drills into it). `top`: its own largest entries.
+ */
+type Block = { key: string; label: string; bytes: number; top: DiskEntry[]; color: string; path: string | null; mono: boolean };
+
+/** What the shares are of: the disk (what's free shown as the track), or the folder drilled into. */
+type Scale = { total: number; free: number | null; label: string };
+
+/** Colours for a drilled folder's entries, one each, in order of size. */
+const DRILL_COLORS = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#14b8a6", "#6366f1", "#d946ef", "#84cc16", "#f97316"];
+
+const partBlocks = (parts: DiskPart[]): Block[] =>
+  parts.map((p) => ({
+    key: p.key,
+    label: p.label,
+    bytes: p.bytes,
+    top: p.top,
+    color: colorOf(p.key),
+    path: p.key.startsWith("/") ? p.key : null,
+    // (a part named by its path)
+    mono: p.key.startsWith("/") || p.label.startsWith("~"),
+  }));
+
+const dirBlocks = (d: DiskDir): Block[] =>
+  d.entries.map((e, i) => {
+    const full = d.path === "/" ? `/${e.name}` : `${d.path}/${e.name}`;
+    return { key: full, label: e.name, bytes: e.bytes, top: e.top, color: DRILL_COLORS[i % DRILL_COLORS.length], path: e.dir ? full : null, mono: false };
+  });
+
+/** What makes something drill into `path` on a click (or Enter): nothing when it isn't a folder, or while one's measured. */
+function drillable(path: string | null, onDrill: ((path: string) => void) | undefined) {
+  if (!path || !onDrill) return {};
+  return {
+    role: "button",
+    tabIndex: 0,
+    onClick: () => onDrill(path),
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onDrill(path);
+      }
+    },
+  } as const;
+}
+
+const pctOf = (bytes: number, of: Scale) => `${((bytes / Math.max(1, of.total)) * 100).toFixed(1)}% of ${of.label}`;
+
+/**
+ * Where the views are: Disk, then the part the folder is in, then each folder down to it, each a way back up; the
+ * folder's size at the end.
+ */
+function Crumbs({ parts, trail, bytes, onDrill }: { parts: DiskPart[]; trail: string; bytes: number | null; onDrill: (path: string | null) => void }) {
+  // (the part it's in, the start of the trail; then each folder down from there)
+  const base = parts.filter((p) => p.key.startsWith("/") && (trail === p.key || trail.startsWith(`${p.key}/`))).sort((a, b) => b.key.length - a.key.length)[0];
+  const crumbs = base ? [{ label: base.label, path: base.key }, ...trail.slice(base.key.length + 1).split("/").filter(Boolean).map((seg, i, all) => ({ label: seg, path: `${base.key}/${all.slice(0, i + 1).join("/")}` }))] : [];
+  return (
+    <nav aria-label="Which folder the disk is shown in" className="mb-1.5 flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+      <button type="button" onClick={() => onDrill(null)} className="shrink-0 rounded px-1 hover:bg-foreground/10 hover:text-foreground">
+        Disk
+      </button>
+      {crumbs.map((c, i) => (
+        <span key={c.path} className="flex min-w-0 items-center gap-0.5">
+          <ChevronRight className="size-3 shrink-0 opacity-50" />
+          <button
+            type="button"
+            onClick={() => onDrill(c.path)}
+            aria-current={i === crumbs.length - 1 ? "page" : undefined}
+            className={cn("min-w-0 truncate rounded px-1 hover:bg-foreground/10 hover:text-foreground", i === crumbs.length - 1 && "font-medium text-foreground")}
+          >
+            {c.label}
+          </button>
+        </span>
+      ))}
+      {bytes != null && <span className="ml-auto shrink-0 pl-2 tabular-nums">{formatBytes(bytes)}</span>}
+    </nav>
+  );
+}
+
+/**
+ * The list: each part (or entry of the folder drilled into), its share, and its largest entries (on the whole disk,
+ * /opt/project and /tmp their five, the rest three). A folder's row drills into it, as does an entry that's a folder.
+ */
+function ListView({ blocks, of, onDrill }: { blocks: Block[]; of: Scale; onDrill?: (path: string) => void }) {
   return (
     <div className="flex flex-col gap-1.5">
-      {parts.map((p) => (
-        <div key={p.key} className="flex flex-col gap-0.5">
-          <div className="flex items-baseline gap-2 text-xs">
-            <span className="size-2 shrink-0 self-center rounded-full" style={{ background: colorOf(p.key) }} />
-            <span className={cn("truncate font-medium", p.key.startsWith("/") || p.key.startsWith("~") ? "font-mono" : "")}>{p.label}</span>
-            <span className="ml-auto shrink-0 tabular-nums">{formatBytes(p.bytes)}</span>
-          </div>
-          <Meter value={size ? p.bytes / size : 0} thin />
-          {p.top.slice(0, p.key === "/opt/project" || p.key === "/tmp" ? 5 : 3).map((e) => (
-            <div key={e.name} className="flex items-baseline gap-2 pl-4 text-[11px] text-muted-foreground" title={`${p.label}/${e.name}: ${formatBytes(e.bytes)}`}>
-              <span className="min-w-0 truncate">{e.name}</span>
-              <span className="ml-auto shrink-0 tabular-nums opacity-80">{formatBytes(e.bytes)}</span>
+      {blocks.map((b) => (
+        <div key={b.key} className="flex flex-col gap-0.5">
+          <div
+            {...drillable(b.path, onDrill)}
+            title={`${b.label}: ${formatBytes(b.bytes)} · ${pctOf(b.bytes, of)}${b.path && onDrill ? " · click to open" : ""}`}
+            className={cn("-mx-1 flex flex-col gap-0.5 rounded-md px-1 py-0.5", b.path && onDrill && "cursor-pointer outline-none hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring")}
+          >
+            <div className="flex items-baseline gap-2 text-xs">
+              <span className="size-2 shrink-0 self-center rounded-full" style={{ background: b.color }} />
+              <span className={cn("truncate font-medium", b.mono && "font-mono")}>{b.label}</span>
+              {b.path && onDrill && <ChevronRight className="size-3 shrink-0 self-center opacity-40" />}
+              <span className="ml-auto shrink-0 tabular-nums">{formatBytes(b.bytes)}</span>
             </div>
-          ))}
+            <Meter value={of.total ? b.bytes / of.total : 0} thin />
+          </div>
+          {b.top.slice(0, b.key === "/opt/project" || b.key === "/tmp" ? 5 : 3).map((e) => {
+            const path = e.dir && b.path ? `${b.path}/${e.name}` : null;
+            return (
+              <div
+                key={e.name}
+                {...drillable(path, onDrill)}
+                className={cn(
+                  "-mx-1 flex items-baseline gap-2 rounded px-1 pl-5 text-[11px] text-muted-foreground",
+                  path && onDrill && "cursor-pointer outline-none hover:bg-foreground/[0.06] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                title={`${b.label}/${e.name}: ${formatBytes(e.bytes)}${path && onDrill ? " · click to open" : ""}`}
+              >
+                <span className="min-w-0 truncate">{e.name}</span>
+                <span className="ml-auto shrink-0 tabular-nums opacity-80">{formatBytes(e.bytes)}</span>
+              </div>
+            );
+          })}
         </div>
       ))}
     </div>
   );
 }
 
-type Hover = { hot: string | null; setHot: (k: string | null) => void };
+type Hover = { hot: string | null; setHot: (k: string | null) => void; onDrill?: (path: string) => void };
 
-/** One segmented bar: every part in its colour, then (the track) what's free; a segment's tooltip says what it is. */
-function BarView({ parts, size, free, hot, setHot }: { parts: DiskPart[]; size: number; free: number } & Hover) {
+/**
+ * One segmented bar: every part (or entry) in its colour, then (the track) what's free on the disk, or the rest of the
+ * folder; a segment's tooltip says what it is, and a folder's drills into it.
+ */
+function BarView({ blocks, of, hot, setHot, onDrill }: { blocks: Block[]; of: Scale } & Hover) {
   return (
     <TooltipProvider delay={80} closeDelay={40}>
       <div className="mb-2 flex h-4 w-full gap-[2px] overflow-hidden rounded-full bg-foreground/[0.07] shadow-inner" onPointerLeave={() => setHot(null)}>
-        {parts.map((p) => (
-          <Tooltip key={p.key}>
+        {blocks.map((b) => (
+          <Tooltip key={b.key}>
             <TooltipTrigger
               render={<div />}
-              onPointerEnter={() => setHot(p.key)}
-              className="h-full shrink-0 transition-opacity duration-150"
-              style={{ width: `${(p.bytes / size) * 100}%`, minWidth: 3, background: colorOf(p.key), opacity: hot && hot !== p.key ? 0.3 : 1 }}
+              {...drillable(b.path, onDrill)}
+              onPointerEnter={() => setHot(b.key)}
+              className={cn("h-full shrink-0 transition-opacity duration-150", b.path && onDrill && "cursor-pointer")}
+              style={{ width: `${(b.bytes / Math.max(1, of.total)) * 100}%`, minWidth: 3, background: b.color, opacity: hot && hot !== b.key ? 0.3 : 1 }}
             />
             <TooltipContent side="top">
-              {p.label}: {formatBytes(p.bytes)} · {((p.bytes / size) * 100).toFixed(1)}% of the disk
+              {b.label}: {formatBytes(b.bytes)} · {pctOf(b.bytes, of)}
+              {b.path && onDrill ? " · click to open" : ""}
             </TooltipContent>
           </Tooltip>
         ))}
       </div>
-      <p className="sr-only">{formatBytes(free)} free</p>
+      {of.free != null && <p className="sr-only">{formatBytes(of.free)} free</p>}
     </TooltipProvider>
   );
 }
 
-/** A donut: every part an arc in its colour round the disk, what's free the bare track; used % in the middle. */
-function DonutView({ parts, size, free, hot, setHot }: { parts: DiskPart[]; size: number; free: number } & Hover) {
+/**
+ * A donut: every part (or entry) an arc in its colour round the disk (or the folder), what's free (or the rest) the
+ * bare track; in the middle, the disk's used % or the folder's size. A folder's arc drills into it.
+ */
+function DonutView({ blocks, of, hot, setHot, onDrill }: { blocks: Block[]; of: Scale } & Hover) {
   const R = 40;
   const C = 2 * Math.PI * R;
   const GAP = 1.2;
+  const total = Math.max(1, of.total);
   // (each arc starts where the ones before it end)
-  const lens = parts.map((p) => (p.bytes / size) * C);
-  const arcs = parts.map((p, i) => ({ p, len: Math.max(0.5, lens[i] - GAP), from: lens.slice(0, i).reduce((n, l) => n + l, 0) }));
-  const usedPct = Math.round(((size - free) / size) * 100);
+  const lens = blocks.map((b) => (b.bytes / total) * C);
+  const arcs = blocks.map((b, i) => ({ b, len: Math.max(0.5, lens[i] - GAP), from: lens.slice(0, i).reduce((n, l) => n + l, 0) }));
   return (
     <TooltipProvider delay={80} closeDelay={40}>
       <div className="mb-2 flex justify-center">
         <svg viewBox="0 0 100 100" className="size-32 -rotate-90" onPointerLeave={() => setHot(null)} aria-hidden>
           <circle cx="50" cy="50" r={R} fill="none" strokeWidth="11" className="stroke-foreground/[0.07]" />
-          {arcs.map(({ p, len, from }) => (
-            <Tooltip key={p.key}>
+          {arcs.map(({ b, len, from }) => (
+            <Tooltip key={b.key}>
               <TooltipTrigger
-                onPointerEnter={() => setHot(p.key)}
+                {...drillable(b.path, onDrill)}
+                onPointerEnter={() => setHot(b.key)}
                 render={
                   <circle
                     cx="50"
                     cy="50"
                     r={R}
                     fill="none"
-                    strokeWidth={hot === p.key ? 13 : 11}
-                    stroke={colorOf(p.key)}
+                    strokeWidth={hot === b.key ? 13 : 11}
+                    stroke={b.color}
                     strokeDasharray={`${len} ${C - len}`}
                     strokeDashoffset={-from}
-                    className="cursor-default transition-[stroke-width,opacity] duration-150"
-                    style={{ opacity: hot && hot !== p.key ? 0.3 : 1 }}
+                    className={cn("transition-[stroke-width,opacity] duration-150 outline-none", b.path && onDrill ? "cursor-pointer" : "cursor-default")}
+                    style={{ opacity: hot && hot !== b.key ? 0.3 : 1 }}
                   />
                 }
               />
               <TooltipContent side="top">
-                {p.label}: {formatBytes(p.bytes)} · {((p.bytes / size) * 100).toFixed(1)}%
+                {b.label}: {formatBytes(b.bytes)} · {pctOf(b.bytes, of)}
+                {b.path && onDrill ? " · click to open" : ""}
               </TooltipContent>
             </Tooltip>
           ))}
           <g className="rotate-90" style={{ transformOrigin: "50px 50px" }}>
-            <text x="50" y="49" textAnchor="middle" className="fill-foreground text-[15px] font-semibold tabular-nums">
-              {usedPct}%
-            </text>
-            <text x="50" y="61" textAnchor="middle" className="fill-muted-foreground text-[7px]">
-              {formatBytes(free)} free
-            </text>
+            {of.free != null ? (
+              <>
+                <text x="50" y="49" textAnchor="middle" className="fill-foreground text-[15px] font-semibold tabular-nums">
+                  {Math.round(((of.total - of.free) / total) * 100)}%
+                </text>
+                <text x="50" y="61" textAnchor="middle" className="fill-muted-foreground text-[7px]">
+                  {formatBytes(of.free)} free
+                </text>
+              </>
+            ) : (
+              <>
+                <text x="50" y="49" textAnchor="middle" className="fill-foreground text-[12px] font-semibold tabular-nums">
+                  {formatBytes(of.total)}
+                </text>
+                <text x="50" y="60" textAnchor="middle" className="fill-muted-foreground text-[7px]">
+                  in {of.label.length > 16 ? `${of.label.slice(0, 15)}…` : of.label}
+                </text>
+              </>
+            )}
           </g>
         </svg>
       </div>
@@ -220,111 +370,39 @@ function DonutView({ parts, size, free, hot, setHot }: { parts: DiskPart[]; size
   );
 }
 
-/** Under the bar and the donut: each part with its share drawn behind it, lighting its segment up (and the other way round). */
-function PartRows({ parts, used, hot, setHot }: { parts: DiskPart[]; used: number } & Hover) {
-  const top = Math.max(1, ...parts.map((p) => p.bytes));
+/**
+ * Under the bar and the donut: each part (or entry) with its share drawn behind it, lighting its segment up (and the
+ * other way round); a folder's row drills into it.
+ */
+function PartRows({ blocks, of, hot, setHot, onDrill }: { blocks: Block[]; of: Scale } & Hover) {
+  const top = Math.max(1, ...blocks.map((b) => b.bytes));
   return (
     <div className="flex flex-col gap-px">
-      {parts.map((p) => (
+      {blocks.map((b) => (
         <div
-          key={p.key}
-          onPointerEnter={() => setHot(p.key)}
+          key={b.key}
+          {...drillable(b.path, onDrill)}
+          onPointerEnter={() => setHot(b.key)}
           onPointerLeave={() => setHot(null)}
-          title={`${p.label}: ${formatBytes(p.bytes)} · ${((p.bytes / Math.max(1, used)) * 100).toFixed(1)}% of what's used${p.top.length ? ` · ${p.top.slice(0, 3).map((t) => `${t.name} ${formatBytes(t.bytes)}`).join(", ")}` : ""}`}
-          className={cn("relative isolate flex items-center gap-2 overflow-hidden rounded-md px-1.5 py-0.5 text-xs text-muted-foreground", hot === p.key && "text-foreground")}
+          title={`${b.label}: ${formatBytes(b.bytes)} · ${pctOf(b.bytes, of)}${b.top.length ? ` · ${b.top.slice(0, 3).map((t) => `${t.name} ${formatBytes(t.bytes)}`).join(", ")}` : ""}${b.path && onDrill ? " · click to open" : ""}`}
+          className={cn(
+            "relative isolate flex items-center gap-2 overflow-hidden rounded-md px-1.5 py-0.5 text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            hot === b.key && "text-foreground",
+            b.path && onDrill && "cursor-pointer",
+          )}
         >
           <span
             aria-hidden
             className="absolute inset-y-0 left-0 -z-10 rounded-md transition-[width,opacity] duration-300"
-            style={{ width: `${(p.bytes / top) * 100}%`, background: colorOf(p.key), opacity: hot === p.key ? 0.22 : 0.1 }}
+            style={{ width: `${(b.bytes / top) * 100}%`, background: b.color, opacity: hot === b.key ? 0.22 : 0.1 }}
           />
-          <span className="size-2 shrink-0 rounded-full" style={{ background: colorOf(p.key) }} />
-          <span className={cn("min-w-0 truncate", (p.key.startsWith("/") || p.label.startsWith("~")) && "font-mono")}>{p.label}</span>
-          <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{formatBytes(p.bytes)}</span>
+          <span className="size-2 shrink-0 rounded-full" style={{ background: b.color }} />
+          <span className={cn("min-w-0 truncate", b.mono && "font-mono")}>{b.label}</span>
+          {b.path && onDrill && <ChevronRight className="size-3 shrink-0 opacity-40" />}
+          <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{formatBytes(b.bytes)}</span>
         </div>
       ))}
     </div>
-  );
-}
-
-/** A block of the treemap: a part of the disk, or an entry of a folder drilled into; `path`, when it's a folder. */
-type Block = { key: string; label: string; bytes: number; top: DiskEntry[]; color: string; path: string | null };
-
-/** Colours for a drilled folder's entries, one each, in order of size. */
-const DRILL_COLORS = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#f43f5e", "#14b8a6", "#6366f1", "#d946ef", "#84cc16", "#f97316"];
-
-/**
- * The treemap and where it is: the whole disk (the parts), or a folder drilled into (its entries), a breadcrumb back
- * up from there (Disk, then the part it's in, then each folder down). While a folder's being measured, what was
- * shown stays, dimmed.
- */
-function DrillTreemap({
-  parts,
-  trail,
-  drilled,
-  stale,
-  failed,
-  onDrill,
-}: {
-  parts: DiskPart[];
-  trail: string | null;
-  drilled: DiskDir | null;
-  stale: DiskDir | null;
-  failed: boolean;
-  onDrill: (path: string | null) => void;
-}) {
-  const overview: Block[] = parts.map((p) => ({ key: p.key, label: p.label, bytes: p.bytes, top: p.top, color: colorOf(p.key), path: p.key.startsWith("/") ? p.key : null }));
-  const ofDir = (d: DiskDir): Block[] =>
-    d.entries.map((e, i) => {
-      const full = d.path === "/" ? `/${e.name}` : `${d.path}/${e.name}`;
-      return { key: full, label: e.name, bytes: e.bytes, top: e.top, color: DRILL_COLORS[i % DRILL_COLORS.length], path: e.dir ? full : null };
-    });
-  const shown = drilled ?? (trail ? stale : null);
-  const blocks = trail ? (shown ? ofDir(shown) : overview) : overview;
-  const loading = !!trail && !drilled && !failed;
-  // (the part it's in, the start of the trail; then each folder down from there)
-  const base = trail ? parts.filter((p) => p.key.startsWith("/") && (trail === p.key || trail.startsWith(`${p.key}/`))).sort((a, b) => b.key.length - a.key.length)[0] : undefined;
-  const crumbs = trail && base ? [{ label: base.label, path: base.key }, ...trail.slice(base.key.length + 1).split("/").filter(Boolean).map((seg, i, all) => ({ label: seg, path: `${base.key}/${all.slice(0, i + 1).join("/")}` }))] : [];
-  return (
-    <>
-      {trail && (
-        <nav aria-label="Where the treemap is" className="mb-1.5 flex min-w-0 items-center gap-0.5 text-[11px] text-muted-foreground">
-          <button type="button" onClick={() => onDrill(null)} className="shrink-0 rounded px-1 hover:bg-foreground/10 hover:text-foreground">
-            Disk
-          </button>
-          {crumbs.map((c, i) => (
-            <span key={c.path} className="flex min-w-0 items-center gap-0.5">
-              <ChevronRight className="size-3 shrink-0 opacity-50" />
-              <button
-                type="button"
-                onClick={() => onDrill(c.path)}
-                aria-current={i === crumbs.length - 1 ? "page" : undefined}
-                className={cn("min-w-0 truncate rounded px-1 hover:bg-foreground/10 hover:text-foreground", i === crumbs.length - 1 && "font-medium text-foreground")}
-              >
-                {c.label}
-              </button>
-            </span>
-          ))}
-          {drilled && <span className="ml-auto shrink-0 pl-2 tabular-nums">{formatBytes(drilled.bytes)}</span>}
-        </nav>
-      )}
-      {failed && trail && !drilled ? (
-        <p className="py-2 text-xs text-muted-foreground">Couldn&apos;t measure that folder.</p>
-      ) : drilled && !drilled.entries.length ? (
-        <p className="py-2 text-xs text-muted-foreground">Nothing in it takes room.</p>
-      ) : (
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity", loading && "opacity-35")}>
-            <TreemapView blocks={blocks} onDrill={loading ? undefined : onDrill} />
-          </div>
-          {loading && (
-            <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" /> Measuring {trail?.split("/").pop()}…
-            </span>
-          )}
-        </div>
-      )}
-    </>
   );
 }
 

@@ -177,11 +177,28 @@ export function GitWidget({ folded }: { folded: boolean }) {
 
 type HistoryPoint = { t: number; cpu: number; mem: number };
 
-/** Load: CPU and memory over the last day, and the network now and over the last minutes, each a sparkline. */
+/** The Load widget's periods, as the Memory widget's: "Now" is the last hour, the sampler's every minute. */
+const LOAD_PERIODS = [
+  { value: "1h", label: "Now" },
+  { value: "1d", label: "24h" },
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
+] as const;
+type LoadPeriod = (typeof LOAD_PERIODS)[number]["value"];
+const LOAD_SPAN: Record<LoadPeriod, string> = { "1h": "1 h", "1d": "24 h", "7d": "7 days", "30d": "30 days" };
+
+/**
+ * Load: CPU and memory over the period picked (the last hour, day, 7 or 30 days: 30 at first, remembered), and the
+ * network now and over the last minutes, each a sparkline.
+ */
 export function LoadWidget({ folded }: { folded: boolean }) {
-  const { data: hist } = usePolled<{ points: HistoryPoint[] }>("/api/stats/history?range=1d", 120_000);
+  const [period, setPeriod] = useWidgetView<LoadPeriod>("load", "period", LOAD_PERIODS.map((p) => p.value), "30d");
+  // (the history's points are a minute apart at best: the last hour's are worth looking at again sooner)
+  const { data: hist } = usePolled<{ range: string; points: HistoryPoint[] }>(`/api/stats/history?range=${period}`, period === "1h" ? 60_000 : 120_000);
   const { data: now, failed } = usePolled<SystemStats>("/api/stats", 5000);
-  const points = hist?.points ?? [];
+  // (the period's own, not the one before it while the new one loads)
+  const points = hist?.range === period ? hist.points : [];
+  const span = LOAD_SPAN[period];
   const net = now?.net;
   // (compact: the widget's line is narrow)
   const rate = (bps: number) => `${formatBytes(bps).replace(" ", "")}/s`;
@@ -200,8 +217,11 @@ export function LoadWidget({ folded }: { folded: boolean }) {
           {!now && <Empty>{failed ? "Couldn't read the stats." : "Loading…"}</Empty>}
           {now && (
             <>
-              <Spark label="CPU" value={`${Math.round(now.cpuPercent)}%`} series={[...points.map((p) => p.cpu), now.cpuPercent]} max={100} color="text-sky-500" span="24 h" />
-              <Spark label="Memory" value={`${Math.round(now.memPercent)}%`} series={[...points.map((p) => p.mem), now.memPercent]} max={100} color="text-violet-500" span="24 h" />
+              <div className="flex justify-end pr-2 pb-0.5 pl-7">
+                <ViewSwitch label="Load over" value={period} onChange={setPeriod} options={LOAD_PERIODS} />
+              </div>
+              <Spark label="CPU" value={`${Math.round(now.cpuPercent)}%`} series={[...points.map((p) => p.cpu), now.cpuPercent]} max={100} color="text-sky-500" span={span} />
+              <Spark label="Memory" value={`${Math.round(now.memPercent)}%`} series={[...points.map((p) => p.mem), now.memPercent]} max={100} color="text-violet-500" span={span} />
               {net && (
                 <Spark
                   label="Network"

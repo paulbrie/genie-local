@@ -13,17 +13,19 @@ import { type MemoryDistribution, memoryDistribution } from "@/lib/memory-histor
 const HISTORY_FILE =
   process.env.STATS_HISTORY_FILE ?? "/opt/project/.stats-history/history.jsonl";
 
-export type HistoryRange = "1d" | "7d" | "30d";
+export type HistoryRange = "1h" | "1d" | "7d" | "30d";
 
 /** Milliseconds covered by each selectable range. */
 export const RANGE_MS: Record<HistoryRange, number> = {
+  // (the Load widget's "Now": the sampler's every minute, as it was)
+  "1h": 60 * 60 * 1000,
   "1d": 24 * 60 * 60 * 1000,
   "7d": 7 * 24 * 60 * 60 * 1000,
   "30d": 30 * 24 * 60 * 60 * 1000,
 };
 
 export function isHistoryRange(v: string): v is HistoryRange {
-  return v === "1d" || v === "7d" || v === "30d";
+  return v === "1h" || v === "1d" || v === "7d" || v === "30d";
 }
 
 /**

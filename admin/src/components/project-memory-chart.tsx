@@ -25,7 +25,7 @@ const config = {
 } satisfies ChartConfig;
 
 const tick = (range: HistoryRange) => (t: number) =>
-  range === "1d"
+  range === "1h" || range === "1d"
     ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : new Date(t).toLocaleDateString([], { day: "numeric", month: "short" });
 
