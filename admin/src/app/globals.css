@@ -218,8 +218,7 @@
 /*
  * The desktop interface (components/desktop). Its wallpaper: the brand's
  * grounds (Paper / a deeper Night) lit by soft Catppuccin glows, static, so
- * nothing repaints while it shows. Its window: opening, and going down when
- * minimized (forwards: it stays out of sight until it's hidden).
+ * nothing repaints while it shows. A pop-up window: opening.
  */
 .desk-wallpaper {
   background:
@@ -243,15 +242,6 @@
     transform: translateY(10px) scale(0.97);
   }
 }
-@keyframes desk-out {
-  to {
-    opacity: 0;
-    transform: translateY(30%) scale(0.35);
-  }
-}
 @utility animate-desk-in {
   animation: desk-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-@utility animate-desk-out {
-  animation: desk-out 0.17s cubic-bezier(0.4, 0, 1, 1) forwards;
 }

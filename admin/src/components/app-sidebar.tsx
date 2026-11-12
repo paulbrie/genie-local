@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -19,8 +19,7 @@ import {
 import { useSubject } from "subjecto/react";
 
 import { Lockup, Wisp } from "@/components/brand/wisp";
-import { DeskNavLink, DeskVsCodeLink, useMagnify } from "@/components/desktop/desktop";
-import { useFrontPath } from "@/components/desktop/desktop-menu";
+import { DeskNavLink, DeskVsCodeLink } from "@/components/desktop/desktop";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
 import { isActive, NAV, NAV_HREFS, type NavItem } from "@/components/nav-items";
@@ -32,10 +31,10 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import { NAV_ALWAYS, navShown, SIDEBAR_ICON, sidebarWidth, tileSlot, VSCODE_NAV } from "@/lib/desktop";
+import { NAV_ALWAYS, navShown, SIDEBAR_ICON, sidebarWidth, sideGlyph, VSCODE_NAV } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useNavBadges, useWispState } from "@/lib/use-nav-badges";
-import { desk, loadDesk, openPathWindow, setNavShown, showDesktop } from "@/store/desktop";
+import { desk, loadDesk, raisePath, setNavShown } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { openRun } from "@/store/runs";
@@ -48,8 +47,8 @@ const GROUPS_KEY = "admin.sidebar.closedGroups";
 
 /**
  * The sidebar in the desktop interface (null in classic): its icons' size (Settings: desk.sidebarSize), the indent that
- * puts a sub-item under its heading's name, and how a page (a project's, a board) opens there: in the window already on
- * it, else a new one (openPathWindow; false: the page's own window goes there, the link navigates).
+ * puts a sub-item under its heading's name, and how a page (a project's, a board) opens there: inline, as in classic,
+ * unless it's popped out, when its window comes to the front instead (raisePath).
  */
 type DeskSide = { size: number; sub: React.CSSProperties; openPage: (href: string, e: { preventDefault: () => void }) => void };
 const DeskSideContext = createContext<DeskSide | null>(null);
@@ -61,16 +60,12 @@ const DeskSideContext = createContext<DeskSide | null>(null);
  * the home and Settings always), and an item's right-click hides it too.
  *
  * The desktop interface has it too, under its top bar: the same icons, at the
- * size Settings picks, swelling as the pointer passes, a dot by the ones open,
- * and lit what's in the window in front, or the Desktop (the home) when none is
- * (desktop.tsx's DeskNavLink, useMagnify).
+ * size Settings picks, lit the page inline (Home at "/"), a dot by the ones
+ * popped out as windows (desktop.tsx's DeskNavLink).
  */
 export function AppSidebar() {
   const pathname = usePathname();
   const desktop = useShellMode().mode === "desktop";
-  const front = useFrontPath();
-  // what's lit: the page (classic), the window in front (desktop)
-  const current = desktop ? front : pathname;
   const [{ sidebarSize, hiddenNav }] = useSubject(desk);
   // (what this browser chose: read here too, so classic has it)
   useEffect(() => loadDesk(NAV_HREFS), []);
@@ -91,21 +86,19 @@ export function AppSidebar() {
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
   const { dockerStats, liveRuns, workingTerms, badgeOf } = useNavBadges(pathname);
-  const navRef = useRef<HTMLElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const swell = useMagnify(desktop && !isMobile, size, navRef, listRef);
   const side = useMemo<DeskSide | null>(
     () =>
       desktop
         ? {
             size,
-            sub: { paddingLeft: tileSlot(size) + 8 },
+            // (classic's 28 px in at the default size)
+            sub: { paddingLeft: sideGlyph(size) + 13 },
             openPage: (href, e) => {
-              if (openPathWindow(href, pathname, NAV_HREFS)) e.preventDefault();
+              if (raisePath(href)) e.preventDefault();
             },
           }
         : null,
-    [desktop, size, pathname],
+    [desktop, size],
   );
   const [boards] = useSubject(recentBoards);
   // The boards last opened on this browser, as sub-items under Boards: their
@@ -199,16 +192,8 @@ export function AppSidebar() {
             <Link
               href="/"
               onClick={closeMobile}
-              onNavigate={
-                desktop
-                  ? (e) => {
-                      e.preventDefault();
-                      showDesktop();
-                    }
-                  : undefined
-              }
               onMouseEnter={wink}
-              aria-label={desktop ? "Spiridus · Desktop" : "Spiridus · Dashboard"}
+              aria-label={desktop ? "Spiridus · Home" : "Spiridus · Dashboard"}
               title={wispTitle}
               className="flex min-w-0 flex-1 items-center"
             >
@@ -238,25 +223,17 @@ export function AppSidebar() {
           </button>
         </div>
 
-      {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). In the desktop the
-          items swell as the pointer passes, the list drawn up to keep the one under it there (useMagnify). */}
-      <nav
-        ref={navRef}
-        onPointerMove={swell.onPointerMove}
-        onPointerLeave={swell.onPointerLeave}
-        onScroll={swell.onScroll}
-        className={`scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5 ${desktop ? "overflow-x-hidden" : ""}`}
-      >
-        <div ref={listRef} className={desktop ? "flex flex-col gap-px transition-transform duration-100 ease-out" : "contents"}>
+      {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). */}
+      <nav className={`scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5 ${desktop ? "overflow-x-hidden" : ""}`}>
         {nav.map((item) => {
           if (item.href === "/projects")
             return (
               <ProjectsGroup
                 key={item.href}
                 item={item}
-                pathname={current}
+                pathname={pathname}
                 rail={rail}
-                open={!closedGroups.includes(item.href) || current.startsWith("/projects/")}
+                open={!closedGroups.includes(item.href) || pathname.startsWith("/projects/")}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
@@ -266,15 +243,15 @@ export function AppSidebar() {
               <NavGroup
                 key={item.href}
                 item={item}
-                pathname={current}
+                pathname={pathname}
                 rail={rail}
                 // a group with the page you're on stays open
-                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, current))}
+                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, pathname))}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
             );
-          const active = isActive(item, current);
+          const active = isActive(item, pathname);
           const Icon = item.icon;
           // Numeric count drives the collapsed-rail pill; Docker also gets a
           // wider text badge (count · memory) in the expanded sidebar.
@@ -390,7 +367,7 @@ export function AppSidebar() {
               {item.href === "/boards" && !rail && !folded && boards.length > 0 && (
                 <div className="mt-px flex flex-col gap-px">
                   {boards.map((b) => {
-                    const here = current === `/boards/${b.id}`;
+                    const here = pathname === `/boards/${b.id}`;
                     return (
                       <Link
                         key={b.id}
@@ -496,7 +473,6 @@ export function AppSidebar() {
         </a>
         </NavMenu>
         )}
-        </div>
       </nav>
 
         <div
@@ -585,7 +561,7 @@ function NavGroup({
   const row = (it: NavItem, sub: boolean) => {
     const on = isActive(it, pathname);
     const ItIcon = it.icon;
-    // (in the desktop, its apps are the sidebar's like any: swelling, a group's items set in a little)
+    // (in the desktop, its apps are the sidebar's like any, a group's items set in as classic's)
     if (side)
       return (
         <div key={it.href} className="flex">
@@ -594,7 +570,7 @@ function NavGroup({
             size={side.size}
             rail={rail}
             active={on}
-            indent={sub && !rail ? Math.round(tileSlot(side.size) / 2) : 0}
+            indent={sub && !rail ? sideGlyph(side.size) + 3 : 0}
             onClick={onNavigate}
           />
         </div>

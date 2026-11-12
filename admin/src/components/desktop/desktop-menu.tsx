@@ -2,7 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Monitor, Moon, PanelLeft, Settings, Sun } from "lucide-react";
+import { House, LogOut, Moon, PanelLeft, PictureInPicture2, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSubject } from "subjecto/react";
 
@@ -13,46 +13,19 @@ import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
 import { appOf, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
-import {
-  desk,
-  deskView,
-  frames,
-  frontWin,
-  MAIN_WIN,
-  openAppWindow,
-  setWidgetMode,
-  showDesktop,
-  showWindow,
-  stack,
-} from "@/store/desktop";
+import { desk, minimizeAll, openFrame, raiseApp, setWidgetMode } from "@/store/desktop";
 
-/**
- * Where the window in front is, in the desktop: its path (the page's own window's, or a frame's), or the home, "/",
- * when none shows (the desktop itself). What the menu bar names, and the sidebar lights up.
- */
-export function useFrontPath(): string {
-  const pathname = usePathname();
-  const [wins] = useSubject(frames);
-  useSubject(deskView);
-  useSubject(stack);
-  const front = frontWin();
-  if (front === MAIN_WIN) return pathname;
-  return wins.find((f) => f.id === front)?.path.split("?")[0] ?? "/";
-}
-
-/** Settings: its window to the front, or a new one (the page's own window, through `push`, when that's closed). */
-export function openSettings(pathname: string, push: (href: string) => void) {
-  if (openAppWindow("/settings", "/settings", appOf(pathname, NAV_HREFS))) return;
-  showWindow();
-  push("/settings");
+/** Settings: its window to the front if it's popped out, else inline (`push`). */
+export function openSettings(push: (href: string) => void) {
+  if (!raiseApp("/settings")) push("/settings");
 }
 
 /**
  * The top bar's left end in the desktop interface, where a desktop OS keeps its
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
- * menu (Settings, show the desktop, show or hide the widgets, back to classic,
- * theme, log out), then the name of the app in the window in front ("Desktop"
- * when none is).
+ * menu (Settings, Home, show or hide the widgets, back to classic, theme, log
+ * out), then the name of the page inline (Home at "/"), and beside it the icon
+ * that pops that page out as a window (its pop-up's title bar puts it back).
  */
 export function DesktopMenu() {
   const pathname = usePathname();
@@ -63,8 +36,14 @@ export function DesktopMenu() {
   const [open, setOpen] = useState(false);
   const [{ widgets }] = useSubject(desk);
   const rootRef = useRef<HTMLDivElement>(null);
-  const front = useFrontPath();
-  const app = NAV_FLAT.find((i) => i.href === appOf(front, NAV_HREFS));
+  const app = NAV_FLAT.find((i) => i.href === appOf(pathname, NAV_HREFS));
+  const home = pathname === "/";
+  // The page inline, popped out: a window of its own over the content area (where its app's last was), the area
+  // going back to Home. (The page loads afresh in the window: it's a frame.)
+  const detach = () => {
+    openFrame(pathname + window.location.search, app?.href ?? null);
+    router.push("/");
+  };
 
   // Dismiss on a click outside, or Escape.
   useEffect(() => {
@@ -104,7 +83,19 @@ export function DesktopMenu() {
       >
         <Wisp size={20} motion={motion} title="" />
       </button>
-      <span className="hidden max-w-40 truncate text-[13px] font-semibold sm:inline">{app && !app.desktop ? app.label : "Desktop"}</span>
+      <span className="hidden max-w-40 truncate text-[13px] font-semibold sm:inline">{home ? "Home" : (app?.label ?? "Page")}</span>
+      {/* (beside the page's name: never over a page's own controls, which sit at its top right) */}
+      {!home && (
+        <button
+          type="button"
+          onClick={detach}
+          aria-label="Pop out as a window"
+          title="Pop out as a window (its title bar puts it back)"
+          className="-ml-1 rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+        >
+          <PictureInPicture2 className="size-3.5" />
+        </button>
+      )}
       {open && (
         <div
           role="menu"
@@ -113,7 +104,7 @@ export function DesktopMenu() {
           <button
             type="button"
             role="menuitem"
-            onClick={pick(() => openSettings(pathname, (href) => router.push(href)))}
+            onClick={pick(() => openSettings((href) => router.push(href)))}
             className={row}
           >
             <Settings /> Settings…
@@ -122,10 +113,13 @@ export function DesktopMenu() {
           <button
             type="button"
             role="menuitem"
-            onClick={pick(showDesktop)}
+            onClick={pick(() => {
+              minimizeAll();
+              router.push("/");
+            })}
             className={row}
           >
-            <Monitor /> Show desktop
+            <House /> Show Home
           </button>
           {WIDGETS.map((id) => {
             const hidden = widgetMode(widgets, id) === "hidden";

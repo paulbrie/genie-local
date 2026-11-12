@@ -165,26 +165,30 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   layout, so the server already renders the right one. `src/components/desktop/app-shell.tsx` puts the
   page at the same place in the tree in both (`Workspace`, whose wrappers are `display: contents` in
   classic), so switching never remounts it; in desktop the shell is a grid (the top bar the whole
-  width, the sidebar under it at the left, the workspace beside it), its inner column `contents` too.
-  Desktop (`desktop.tsx`): a wallpaper with its widgets (no icons, no Launchpad: the sidebar and ⌘K
-  reach every app and project), the page as a window (drag, resize from any edge, maximize,
-  minimize, close; placed per app; its title bar has the app's tile, `app-icon.tsx`), the classic
-  sidebar (`AppSidebar`, always there, see below), and the Spiridus menu at the bar's left. The
+  width, the sidebar under it at the left, the content area beside it), its inner column `contents`
+  too. Desktop (`desktop.tsx`): the page inline, as in classic (the content area scrolls it, no frame
+  around it), the classic sidebar (`AppSidebar`, always there, see below), the Spiridus menu at the
+  bar's left, and Home ("/", the sidebar's House item): a wallpaper with its widgets in the page's
+  place (no icons, no Launchpad: the sidebar and ⌘K reach every app and project). Beside the page's
+  name in the top bar, a detach icon (`PictureInPicture2`, desktop-menu.tsx; there so it never
+  covers a page's own controls) pops the page out: a pop-up window over the content area (drag,
+  resize from any edge, maximize, minimize, close; its title bar has the app's tile, `app-icon.tsx`,
+  and an icon that puts it back inline, in place of the page there), and the page area goes back to
+  Home. A pop-up is a frame (see "More windows"), so the page loads afresh in it, and again when put
+  back: the URL is always the page inline. "Open in a new window" makes more. The
   sidebar is one in both interfaces: Settings → General → Sidebar → Items picks what it shows
   (`desk.hiddenNav`, `setNavShown`; `navShown` / `NAV_ALWAYS` in lib/desktop.ts: the home and
   Settings always show, so there's a way back; a group's items go with it), and an item's
   right-click has "Hide from sidebar" (classic: `NavMenu`; desktop: `DeskNavLink`'s menu). Hiding
   one closes no window. The sidebar reads `desk` itself (`loadDesk`), so classic has it too (it
-  shows everything until that's read, a moment after load). The home ("/") is the desktop itself:
-  no window (`atHome`: the page's own window is closed there, so the next app opens in it), the
-  sidebar's first item is Desktop instead of Dashboard (`NavItem.desktop`), and `src/app/page.tsx`
-  skips the Dashboard's metrics when the cookie says desktop (switching to classic there refreshes
-  it). Its state is
-  `src/store/desktop.ts`; the geometry is pure and tested (`src/lib/desktop.ts`). The window has no
-  transform or filter, so a page's own `fixed` panels behave as they do in classic; alone it has no
-  z-index either, but with other windows open every window is a layer at its place in `stack`
-  (`winZ`), or what it holds with a z-index (its title bar's buttons, a page's sticky parts) would
-  show through the windows in front.
+  shows everything until that's read, a moment after load). In the desktop the sidebar's first item
+  is Home instead of Dashboard (`NavItem.desktop`; the top bar's title, ⌘K, Settings and the
+  Spiridus menu's "Show Home" say Home too; the interface itself is still "Desktop"), and
+  `src/app/page.tsx` skips the Dashboard's metrics when the cookie says desktop (switching to
+  classic there refreshes it). Its state is `src/store/desktop.ts`; the pure parts are tested
+  (`src/lib/desktop.ts`: the pop-ups' places, `defaultGeom` / `popupStart` / `maxRect`, what a tab
+  remembers of them, `parsePopups`, `pathUnder`, `frontmost`). The page inline has no z-index, as
+  in classic; each pop-up is a layer at its place in `stack` (`winZ`).
   · The widgets sit on a grid (`GRID`, `gridSize`: 92 × 96 px cells, the icons' that were, so saved
     spans hold), drawn as one arrangement against the left, centred or against the right
     (`desk.align`, `alignShift`); there a drop can land left of column 0, and the whole moves over to
@@ -196,25 +200,23 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   · The sidebar in desktop (no dock): classic's, under the top bar, VS Code where classic has it;
     classic's own black-and-white icons, sized by Settings' Sidebar → Size (`desk.sidebarSize`,
     `SIDEBAR_ICON` 16–40 px rows, 24 = classic's 15 px glyph, `sideGlyph`; an old `dockSize` carries
-    over halved), each in a slot as wide as it grows (`tileSlot`, `sidebarWidth`: classic's widths at
-    the default), the rail collapse in its footer. The pointer swells them as
-    macOS's dock does (`useMagnify` in desktop.tsx, `--s` per `[data-magnify]` item; `magnify` /
-    `atRest` in lib/desktop.ts draw the list up so what's under the pointer stays there); off on
-    touch, on a phone and for reduced motion. Lit is the window in front (`useFrontPath`,
-    desktop-menu.tsx), or Desktop when none is; a dot marks an app open in the tab or with a window.
-    A click (`DeskNavLink`, through Link's `onNavigate`, so a modifier-click is a new tab): the app's
-    window in front goes down, else it comes up, else it opens (`openAppWindow`); Desktop puts every
-    window down (`showDesktop`, also the Spiridus menu's and ⌘K's). Projects and boards under their
-    items open in their window (`openPathWindow`). Right-click: open, in a new window or tab, close,
-    hide from the sidebar. On a phone it's classic's drawer (the top bar's menu button), the Spiridus
-    menu from `md` up, and the widgets go one a row. Windows and the widgets have the whole
-    workspace: nothing is kept clear.
+    over halved; `sidebarWidth`: classic's widths at the default), the rail collapse in its footer.
+    No swell under the pointer (there was one, the dock's; it brought nothing). Lit is the page
+    inline (Home at "/"), as in classic; a dot marks an app popped out. A click (`DeskNavLink`,
+    through Link's `onNavigate`, so a modifier-click is a new tab) shows the page inline, unless the
+    app is popped out: then its window comes to the front, un-minimized (`raiseApp`). Projects and
+    boards under their items, widget rows (`useOpenPath` / `useOpenApp`), Settings and ⌘K do the
+    same (`raisePath`). Right-click: open, in a new window (not on a phone) or tab, close its
+    windows, hide from the sidebar. "Show Home" (Spiridus menu) goes Home and minimizes every
+    pop-up (`minimizeAll`). On a phone it's classic's drawer (the top bar's menu button), the
+    Spiridus menu (and so the detach icon) from `md` up, no new windows, and the widgets go one a
+    row. Pop-ups and the widgets have the whole content area: nothing is kept clear.
   · Settings (`/settings`, in `NAV`): panes listed in `SETTINGS_PANES` (also in ⌘K). General
-    (`settings-panel.tsx`): interface, theme, the sidebar's items and size, and the desktop's
-    arrangement and widgets. Users (`/settings/users`; `/users` redirects there): who may Sign in
-    with Genie. It reads `desk` itself
-    (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
-    made in a window's frame (a separate document) reaches the desktop around it.
+    (`settings-panel.tsx`): interface, theme, the sidebar's items and size, and Home's widgets and
+    their arrangement. Users (`/settings/users`; `/users` redirects there): who may Sign in with
+    Genie. It reads `desk` itself (`loadDesk`), so it works from classic too; `loadDesk` follows
+    `storage` events, so a change made in a pop-up's frame (a separate document) reaches the desktop
+    around it.
   · Widgets (registry: `widget-registry.tsx`, `WIDGET_BODY` / `WIDGET_ICON`; `WIDGETS` /
     `WIDGET_LABEL` / `WIDGETS_OFF` / `WIDGET_APP` in lib/desktop.ts; shared parts in `widget-parts.tsx`:
     `WidgetHeader`, `usePolled`, `useOpenPath` / `useOpenApp`, `useWidgetView` + `ViewSwitch` for a
@@ -222,16 +224,19 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     On at first: Terminals, Projects (`status-widget.tsx`); Disk (`disk-widget.tsx`: /opt/project,
     /tmp, the home folder, /usr, /var with their largest entries, Docker from `docker system df`, and
     the rest as Other; as a list, a bar, a donut or a squarified treemap, `src/lib/treemap.ts`; /api/disk,
-    `disk-overview.ts`, du at `nice` in the background at most every 10 min; a click on a treemap
-    folder drills into it, a breadcrumb back up: /api/disk/dir, du two levels deep, within the Files
+    `disk-overview.ts`, du at `nice` in the background at most every 10 min; in every view a click on
+    a folder (a row, a segment, an arc, a tile) drills into it, a breadcrumb back up, switching views
+    staying there: /api/disk/dir, du two levels deep, within the Files
     explorer's roots, kept 5 min); Memory
     (`memory-widget.tsx`: now, the RAM as one segmented bar by project, agents striped, or by
     terminal; or over 24 h / 7 / 30 days (30 by default), a stacked area from the per-minute history,
     /api/widgets/memory, `memory-history-core.ts`); Processes (the busiest by CPU or memory, named by
     port); Docker (containers with their CPU and memory, `docker stats` cached 15 s, and the images).
     Off at first (`more-widgets.tsx`, data in `src/lib/widgets.ts` via /api/widgets/<id>, pure parts in
-    `widgets-core.ts`): Health, Production errors, Git, Load, Tickets (in progress, to do, recently
-    done), Sign-ins. A row opens the page behind it (`openPathWindow`); a widget with an app has the
+    `widgets-core.ts`): Health, Production errors, Git, Load (CPU and memory over the last hour, 24 h,
+    7 or 30 days, 30 by default, from the stats history's `1h`…`30d`; the network now), Tickets (in progress, to do, recently
+    done), Sign-ins. A row opens the page behind it (inline, or its pop-up to the front:
+    `raisePath`); a widget with an app has the
     app's icon in its header. Fold and hide show on hover (always on a device that can't hover). A
     right-click on the wallpaper (`DeskMenu`) lists every widget: one added goes under the pointer.
     Folded, a widget is one grid row tall, a glance. A window shorter than the arrangement doesn't
@@ -241,12 +246,14 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     it (`arrangementFits`; a default spot only counts when it has no room at all), the widgets go one
     a row the whole width (`stackDesktop`; always on a phone), nothing dragged until there's room
     again. Narrower but still wide enough, they move over together (`fitShift`) to stay as they are.
-  · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
-    sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
-    `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal
-    dock, voice, alerts, activity). The framed page posts its path, clicks, ⌘K and the terminals it
-    opens to the page around it (`openTerminalsIn`). A sidebar click brings its app's window up,
-    else opens a new one (`openAppWindow`); right-click → Open in a new window for a second one.
+  · More windows: every pop-up is a page in a frame (`FrameWindows`, `stack` / `frames` in the store,
+    sessionStorage per tab, so a reload brings them back, minimized or not; read with `parsePopups`).
+    A new one opens where its app's last one was (`desk.geoms`, `popupStart`; the default centred,
+    smaller than the area), a step further for each one open, and keeps its own place after.
+    A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's `embedded`:
+    `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal dock,
+    voice, alerts, activity). The framed page posts its path, clicks, ⌘K and the terminals it opens
+    to the page around it (`openTerminalsIn`).
 - **⌘K / Ctrl+K: the command palette** (`src/components/command-palette.tsx`, search in
   `src/lib/command-search.ts`): pages, projects and their tabs, terminals, a few actions, in both
   interfaces. Code editors keep their own ⌘K / Ctrl+K, and a terminal its Ctrl+K.

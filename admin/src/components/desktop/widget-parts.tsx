@@ -1,16 +1,16 @@
 "use client";
 
 import { ChevronDown, ChevronUp, type LucideIcon, X } from "lucide-react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
 
 import { AppIcon } from "@/components/desktop/app-icon";
-import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
+import { NAV_FLAT } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf, WIDGET_APP, type WidgetId } from "@/lib/desktop";
+import { WIDGET_APP, type WidgetId } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { desk, openAppWindow, openPathWindow, setWidgetMode, setWidgetView, showWindow } from "@/store/desktop";
+import { desk, raiseApp, raisePath, setWidgetMode, setWidgetView } from "@/store/desktop";
 
 // What the desktop's widgets are made of (status-widget.tsx, more-widgets.tsx): a header that's the grip their frame
 // (desktop.tsx's WidgetFrame) is dragged by and, folded, all of the widget; the list under it; its rows; a meter.
@@ -178,12 +178,11 @@ export function usePolled<T>(path: string | null, everyMs: number, soon?: (data:
   return { data, failed, reload };
 }
 
-/** A page (a project's tab, Services…) from a widget: in the window already on it, else a new one (or the page's own window when that's closed). */
+/** A page (a project's tab, Services…) from a widget: inline, or its window to the front if it's popped out. */
 export function useOpenPath() {
   const router = useRouter();
-  const pathname = usePathname();
   return (path: string) => {
-    if (!openPathWindow(path, pathname, NAV_HREFS)) router.push(path);
+    if (!raisePath(path)) router.push(path);
   };
 }
 
@@ -229,14 +228,11 @@ export function ViewSwitch<T extends string>({
   );
 }
 
-/** An app (an href of NAV) from a widget: its window to the front, or a new one (the page's own window when that's closed). */
+/** An app (an href of NAV) from a widget: inline, or its window to the front if it's popped out. */
 export function useOpenApp() {
   const router = useRouter();
-  const pathname = usePathname();
   return (href: string) => {
-    if (openAppWindow(href, href, appOf(pathname, NAV_HREFS))) return;
-    showWindow();
-    router.push(href);
+    if (!raiseApp(href)) router.push(href);
   };
 }
 

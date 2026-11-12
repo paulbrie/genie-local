@@ -15,11 +15,11 @@ import { openTerminalsIn } from "@/store/terminals";
 
 /**
  * The app's frame around every page: the top bar, the sidebar, and the page
- * beside it (classic) or the desktop with the page in a window (the top bar's
- * switch picks; the layout passes what the cookie says). In the desktop the top
- * bar runs the whole width, the sidebar under it: a grid, its inner column
- * `display: contents`, so the page keeps its place in the tree either way. The
- * login page has none of it.
+ * beside it, in either interface; the desktop's has Home and pop-up windows
+ * besides (the top bar's switch picks; the layout passes what the cookie
+ * says). In the desktop the top bar runs the whole width, the sidebar under it:
+ * a grid, its inner column `display: contents`, so the page keeps its place in
+ * the tree either way. The login page has none of it.
  */
 export function AppShell({
   initialMode,
@@ -27,7 +27,7 @@ export function AppShell({
   children,
 }: {
   initialMode: ShellMode;
-  /** in one of the desktop's windows (a frame): the page alone */
+  /** in one of the desktop's pop-ups (a frame): the page alone */
   embedded?: boolean;
   children: React.ReactNode;
 }) {
@@ -83,7 +83,7 @@ export function AppShell({
 }
 
 /**
- * A page in one of the desktop's windows (FrameWindows in desktop.tsx): it fills the frame, and tells the window
+ * A page in one of the desktop's pop-ups (FrameWindows in desktop.tsx): it fills the frame, and tells the window
  * where it is (its title bar), that it was clicked (to come to the front), ⌘K / Ctrl+K (the palette is the
  * page around it's), and the terminals it opens (they float over the whole desktop, from the page around it).
  */

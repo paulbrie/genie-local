@@ -16,8 +16,9 @@ import { desk, loadDesk, setAlign, setNavShown, setSidebarSize, setWidgetMode, s
 
 /**
  * The Settings app (/settings): the interface and the theme, the sidebar's items (in both interfaces) and size, and the
- * desktop's arrangement and widgets (`desk`, this browser's localStorage). It reads them itself (loadDesk), so it works
- * from the classic interface too, and a change made here in a window's frame reaches the desktop around it.
+ * desktop's Home, its widgets and their arrangement (`desk`, this browser's localStorage). It reads them itself
+ * (loadDesk), so it works from the classic interface too, and a change made here in a pop-up's frame reaches the
+ * desktop around it.
  */
 export function SettingsPanel() {
   const [d] = useSubject(desk);
@@ -52,7 +53,7 @@ export function SettingsPanel() {
           <CardTitle>Appearance</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <Setting label="Interface" hint="The classic view with its sidebar, or a desktop with windows and widgets, the same sidebar beside it.">
+          <Setting label="Interface" hint="The classic view with its sidebar, or the desktop: the same sidebar, Home with its widgets, and pages that pop out as windows.">
             <Segmented
               value={mode}
               onChange={setMode}
@@ -117,7 +118,7 @@ export function SettingsPanel() {
             </div>
           </Setting>
 
-          <Setting label="Size" hint="In the desktop interface: how big its icons are; they grow as the pointer passes over them.">
+          <Setting label="Size" hint="In the desktop interface: how big its icons and rows are (the default is classic's).">
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -142,9 +143,9 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Desktop</CardTitle>
+          <CardTitle>Home</CardTitle>
           <CardDescription>
-            {mode === "desktop" ? "The desktop interface: its widgets." : "For the desktop interface (switch to it above)."}
+            {mode === "desktop" ? "The desktop interface's Home: its widgets." : "For the desktop interface's Home (switch to it above)."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
@@ -160,7 +161,7 @@ export function SettingsPanel() {
             />
           </Setting>
 
-          <Setting label="Widgets" hint="Each is moved by its header and resized from its edges, on the desktop itself.">
+          <Setting label="Widgets" hint="Each is moved by its header and resized from its edges, on Home itself.">
             <div className="flex flex-wrap gap-x-6 gap-y-2">
               {WIDGETS.map((id) => (
                 <label key={id} className="flex items-center gap-2 text-sm">

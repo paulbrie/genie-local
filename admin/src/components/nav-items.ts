@@ -10,8 +10,8 @@ import {
   MousePointerClick,
   KanbanSquare,
   KeyRound,
+  House,
   LayoutDashboard,
-  Monitor,
   UsersRound,
   MessagesSquare,
   Network,
@@ -39,12 +39,12 @@ export type NavItem = {
   exact?: boolean;
   /** A collapsible group: the item itself links to its own page, these under it. */
   children?: NavItem[];
-  /** What it is in the desktop interface instead (the home: the desktop itself, not a page in a window). */
+  /** What it is in the desktop interface instead (the home: Home, the wallpaper with its widgets, not the Dashboard). */
   desktop?: { label: string; icon: typeof LayoutDashboard };
 };
 
 export const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true, desktop: { label: "Desktop", icon: Monitor } },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true, desktop: { label: "Home", icon: House } },
   // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
   { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },

@@ -1,9 +1,10 @@
 // Pure, dependency-free: safe for server and client (the layout reads the cookie).
 /**
  * The desktop shell (components/desktop): which interface a browser uses, the
- * app a path belongs to, and the main window's geometry inside the workspace
- * (the area under the top bar). Pure, so it is unit-tested; the components do
- * the storage and the DOM.
+ * app a path belongs to, the pop-up windows' geometry over the content area (the
+ * area beside the sidebar, under the top bar) and what a tab remembers of them,
+ * the sidebar's sizes, the widgets' grid. Pure, so it is unit-tested; the
+ * components do the storage and the DOM.
  */
 
 export type ShellMode = "classic" | "desktop";
@@ -28,6 +29,12 @@ export function appOf(pathname: string, hrefs: readonly string[]): string | null
   return best;
 }
 
+/** Whether page `p` (a path, maybe with a query) is `path` or under it: /projects/shop/git is under /projects/shop. */
+export function pathUnder(p: string, path: string): boolean {
+  const bare = p.split("?")[0];
+  return bare === path || (path !== "/" && bare.startsWith(`${path}/`));
+}
+
 /** The path under an app, as the window's title shows it: /projects/shop/git → ["shop", "git"]. */
 export function subPath(pathname: string, app: string | null): string[] {
   const rest = app && app !== "/" ? pathname.slice(app.length) : app === "/" ? "" : pathname;
@@ -47,6 +54,12 @@ export type Rect = { x: number; y: number; w: number; h: number };
 /** A window's place: its restored rect, and whether it is maximized instead. */
 export type WinGeom = Rect & { max?: boolean };
 
+/**
+ * A pop-up window as its tab remembers it (sessionStorage): the page it shows (of `app`; a page outside every app:
+ * null), its place once moved, minimized or not.
+ */
+export type PopupSaved = { id: string; app: string | null; path: string; geom?: WinGeom; hidden?: boolean };
+
 /** The smallest a window gets. */
 export const MIN_WIN = { w: 380, h: 240 };
 /** How much of a window's title bar has to stay on screen. */
@@ -54,16 +67,26 @@ const GRIP = 96;
 /** The gap around a maximized window. */
 const MAX_GAP = 8;
 
-// (the workspace is the area right of the sidebar and under the top bar: nothing in it is kept clear for either)
+// (the content area is right of the sidebar and under the top bar: the pop-ups float over it, and over nothing else)
 
-/** A first window: the workspace, a small margin around it. */
+/** A pop-up where it first opens: centred over the content area, smaller than it, so it reads as a window. */
 export function defaultGeom(W: number, H: number): Rect {
-  const x = Math.min(24, Math.round(W * 0.03));
-  const y = 12;
-  return clampRect({ x, y, w: W - 2 * x, h: H - 2 * y }, W, H);
+  const w = Math.round(Math.min(W - 48, Math.max(MIN_WIN.w, W * 0.7)));
+  const h = Math.round(Math.min(H - 24, Math.max(MIN_WIN.h, H * 0.8)));
+  return clampRect({ x: Math.round((W - w) / 2), y: Math.round((H - h) / 3), w, h }, W, H);
 }
 
-/** The maximized rect: the whole workspace, a small gap around it. */
+/**
+ * Where a pop-up opens: where its app's last one was (`saved`, kept per app; maximized, it is again), else the
+ * default; `n` steps down and right for the pop-ups open before it, so they don't land on each other; on screen.
+ */
+export function popupStart(saved: WinGeom | undefined, n: number, W: number, H: number): WinGeom {
+  const base = saved ? clampRect(saved, W, H) : defaultGeom(W, H);
+  const step = 28 * (n % 6);
+  return { ...clampRect({ ...base, x: base.x + step, y: base.y + step }, W, H), ...(saved?.max ? { max: true } : {}) };
+}
+
+/** The maximized rect: the whole content area, a small gap around it. */
 export function maxRect(W: number, H: number): Rect {
   return {
     x: MAX_GAP,
@@ -71,6 +94,12 @@ export function maxRect(W: number, H: number): Rect {
     w: Math.max(0, W - 2 * MAX_GAP),
     h: Math.max(0, H - 2 * MAX_GAP),
   };
+}
+
+/** Of the pop-ups `ids`, the one nearest the front (`order`: every pop-up's id, back to front); null for none. */
+export function frontmost(order: readonly string[], ids: readonly string[]): string | null {
+  for (let i = order.length - 1; i >= 0; i--) if (ids.includes(order[i])) return order[i];
+  return ids[ids.length - 1] ?? null;
 }
 
 /**
@@ -137,61 +166,22 @@ export function navShown(hidden: readonly string[] | undefined, id: string): boo
   return NAV_ALWAYS.includes(id) || !hidden?.includes(id);
 }
 
-/** How much the icon under the pointer grows (by half), and how far from its centre the swell reaches (px). */
-export const MAGNIFY = { by: 0.5, reach: 120 } as const;
-
 /** The icon on a row of `size` px: classic's glyph, at classic's 15 px by default. */
 export function sideGlyph(size: number): number {
   return Math.round((size * 15) / SIDEBAR_ICON.default);
 }
 
-/** The room an icon on a row of `size` px has: as wide as its glyph grows, so the names beside it never move. */
-export function tileSlot(size: number): number {
-  return Math.round(sideGlyph(size) * (1 + MAGNIFY.by));
-}
-
 /**
  * The sidebar's width with rows of `size` px, with the names or as an icon rail (classic's 224 and 56 px at the
- * default): each icon's room plus the list's padding, its border and a thin scrollbar's width.
+ * default): each icon plus the rows' and the list's padding, its border and a thin scrollbar's width.
  */
 export function sidebarWidth(size: number, rail: boolean): number {
-  return tileSlot(size) + (rail ? 33 : 201);
-}
-
-/**
- * A macOS dock's swell, down the sidebar: each item's scale (from 1 + MAGNIFY.by under the pointer, smoothly down to 1 as
- * its centre is further from it), and how far up to draw the list so the point under the pointer stays there while
- * the items above it grow (each `size` × (scale − 1) taller; the one under the pointer counts up to the pointer).
- * `items`: their tops and heights at rest, `y`: the pointer, both in the list's own coordinates.
- */
-export function magnify(items: readonly { top: number; h: number }[], y: number, size: number): { scales: number[]; shift: number } {
-  let shift = 0;
-  const scales = items.map(({ top, h }) => {
-    const t = Math.max(0, 1 - Math.abs(y - (top + h / 2)) / MAGNIFY.reach);
-    const s = 1 + MAGNIFY.by * t * t * (3 - 2 * t);
-    const grow = (s - 1) * size;
-    shift += y >= top + h ? grow : y > top ? (grow * (y - top)) / h : 0;
-    return s;
-  });
-  return { scales, shift };
-}
-
-/**
- * Where the items are at rest, from where they're drawn now, mid-swell: each `grow` px taller than at rest, the list
- * drawn `shift` px up. (So the swell can be measured at any moment, a scroll or one still settling included.)
- */
-export function atRest(drawn: readonly { top: number; h: number; grow: number }[], shift: number): { top: number; h: number }[] {
-  let above = 0;
-  return drawn.map(({ top, h, grow }) => {
-    const r = { top: top + shift - above, h: h - grow };
-    above += grow;
-    return r;
-  });
+  return sideGlyph(size) + (rail ? 41 : 209);
 }
 
 /** What the desktop remembers on this browser (localStorage). */
 export type DeskSaved = {
-  /** Each app window's place, by app href. */
+  /** Where each app's pop-up window opens next (its last one's place), by app href. */
   geoms: Record<string, WinGeom>;
   /** The widgets on the wallpaper, by id: where each is and how big (absent: its default spot), folded or hidden (absent: open). */
   widgets?: Partial<Record<WidgetId, WidgetSaved>>;
@@ -290,6 +280,39 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
         out.geoms[app] = { x, y, w, h, ...(max === true ? { max: true } : {}) };
     }
   return out;
+}
+
+/**
+ * The pop-ups a tab had (`{ frames, stack }`, as stored) and their order back to front: each once, showing a page of
+ * a known app (or of none), its place kept only when it reads as one; the order holds each of them once.
+ */
+export function parsePopups(raw: string | null, apps: readonly string[]): { list: PopupSaved[]; order: string[] } {
+  const known = new Set(apps);
+  let v: unknown;
+  try {
+    v = raw ? JSON.parse(raw) : null;
+  } catch {
+    return { list: [], order: [] };
+  }
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { list: [], order: [] };
+  const s = v as Record<string, unknown>;
+  const list: PopupSaved[] = [];
+  for (const f of Array.isArray(s.frames) ? s.frames : []) {
+    if (!f || typeof f !== "object") continue;
+    const { id, app, path, geom, hidden } = f as Record<string, unknown>;
+    if (typeof id !== "string" || list.some((o) => o.id === id) || typeof path !== "string" || !path.startsWith("/")) continue;
+    if (app !== null && (typeof app !== "string" || !known.has(app))) continue;
+    const one: PopupSaved = { id, app, path };
+    if (geom && typeof geom === "object") {
+      const { x, y, w, h, max } = geom as Record<string, unknown>;
+      if (finite(x) && finite(y) && finite(w) && finite(h) && w > 0 && h > 0) one.geom = { x, y, w, h, ...(max === true ? { max: true } : {}) };
+    }
+    if (hidden === true) one.hidden = true;
+    list.push(one);
+  }
+  const ids = list.map((f) => f.id);
+  const order = [...new Set(Array.isArray(s.stack) ? s.stack.filter((x): x is string => typeof x === "string" && ids.includes(x)) : [])];
+  return { list, order: [...order, ...ids.filter((id) => !order.includes(id))] };
 }
 
 /* ------------------------------- the widgets ------------------------------- */

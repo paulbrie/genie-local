@@ -3,15 +3,16 @@ import { describe, it } from "node:test";
 
 import {
   appOf,
-  atRest,
   clampRect,
   defaultGeom,
-  magnify,
-  MAGNIFY,
+  frontmost,
   maxRect,
   MIN_WIN,
   parseDesk,
+  parsePopups,
   parseShellMode,
+  pathUnder,
+  popupStart,
   resizeRect,
   subPath,
   unmaximizeUnder,
@@ -35,7 +36,6 @@ import {
   sidebarWidth,
   sideGlyph,
   stackDesktop,
-  tileSlot,
   widgetWants,
 } from "./desktop";
 
@@ -79,17 +79,44 @@ describe("subPath", () => {
   });
 });
 
-describe("window geometry", () => {
-  // (the workspace is right of the sidebar and under the top bar: nothing in it is kept clear for either)
-  it("a first window fills the workspace, a small margin around it", () => {
-    assert.deepEqual(defaultGeom(1600, 900), { x: 24, y: 12, w: 1600 - 48, h: 900 - 24 });
+describe("pathUnder", () => {
+  it("is the page itself, or one under it, a query aside", () => {
+    assert.ok(pathUnder("/projects/shop/git", "/projects/shop"));
+    assert.ok(pathUnder("/projects/shop", "/projects/shop"));
+    assert.ok(pathUnder("/files?dir=/tmp", "/files"));
+    assert.ok(!pathUnder("/projects/shopping", "/projects/shop"), "not a mere prefix of a name");
   });
-  it("a first window on a narrow screen fills the width", () => {
-    const g = defaultGeom(1000, 700);
-    assert.ok(g.x <= 24);
-    assert.ok(g.x + g.w <= 1000);
+  it("takes the home as itself only", () => {
+    assert.ok(pathUnder("/", "/"));
+    assert.ok(!pathUnder("/files", "/"));
   });
-  it("maximized fills the whole workspace, a small gap around it", () => {
+});
+
+describe("pop-up geometry", () => {
+  // (the content area is right of the sidebar and under the top bar: the pop-ups float over it)
+  it("a first pop-up is centred, smaller than the area, a little above the middle", () => {
+    assert.deepEqual(defaultGeom(1600, 900), { x: 240, y: 60, w: 1120, h: 720 });
+  });
+  it("on a small area it keeps to the minimum, and inside the area", () => {
+    const g = defaultGeom(500, 400);
+    assert.equal(g.w, MIN_WIN.w);
+    assert.ok(g.x >= 0 && g.x + g.w <= 500 && g.y >= 0 && g.y + g.h <= 400);
+  });
+  it("opens where its app's last one was, else the default, a step further for each one open before it", () => {
+    assert.deepEqual(popupStart(undefined, 0, 1600, 900), defaultGeom(1600, 900));
+    const d = defaultGeom(1600, 900);
+    assert.deepEqual(popupStart(undefined, 2, 1600, 900), { ...d, x: d.x + 56, y: d.y + 56 });
+    assert.deepEqual(popupStart({ x: 100, y: 50, w: 600, h: 400 }, 0, 1600, 900), { x: 100, y: 50, w: 600, h: 400 });
+    assert.deepEqual(popupStart({ x: 100, y: 50, w: 600, h: 400, max: true }, 0, 1600, 900), { x: 100, y: 50, w: 600, h: 400, max: true });
+    assert.deepEqual(popupStart({ x: 3000, y: 50, w: 600, h: 400 }, 0, 1200, 800).x, 1200 - 96, "kept on screen (its bar)");
+  });
+  it("finds, of some pop-ups, the one nearest the front", () => {
+    assert.equal(frontmost(["a", "b", "c"], ["a", "c"]), "c");
+    assert.equal(frontmost(["a", "b", "c"], ["a"]), "a");
+    assert.equal(frontmost(["a", "b"], []), null);
+    assert.equal(frontmost([], ["z"]), "z", "one not in the order yet: itself");
+  });
+  it("maximized fills the whole area, a small gap around it", () => {
     assert.deepEqual(maxRect(1200, 800), { x: 8, y: 8, w: 1184, h: 784 });
   });
   it("clamps size to the workspace and the minimum", () => {
@@ -137,6 +164,48 @@ describe("unmaximizeUnder", () => {
     assert.equal(r.w, 500);
     assert.equal(r.x, 758 - 0.75 * 500);
     assert.equal(r.y, 8);
+  });
+});
+
+describe("parsePopups", () => {
+  it("brings back a tab's pop-ups and their order, back to front", () => {
+    const raw = JSON.stringify({
+      frames: [
+        { id: "w1", app: "/files", path: "/files?dir=/tmp", geom: { x: 10, y: 20, w: 600, h: 400, max: true }, hidden: true },
+        { id: "w2", app: null, path: "/somewhere" },
+      ],
+      stack: ["main", "w2", "w1", "w2"],
+    });
+    assert.deepEqual(parsePopups(raw, APPS), {
+      list: [
+        { id: "w1", app: "/files", path: "/files?dir=/tmp", geom: { x: 10, y: 20, w: 600, h: 400, max: true }, hidden: true },
+        { id: "w2", app: null, path: "/somewhere" },
+      ],
+      order: ["w2", "w1"],
+    });
+  });
+  it("drops what doesn't read as one, and orders the ones the stack misses last", () => {
+    const raw = JSON.stringify({
+      frames: [
+        { id: "a", app: "/gone", path: "/gone" },
+        { id: "b", app: "/files", path: "files" },
+        { id: "c", app: "/files", path: "/files", geom: { x: "1", y: 0, w: 10, h: 10 }, hidden: "yes" },
+        { id: "c", app: "/boards", path: "/boards" },
+        { app: "/files", path: "/files" },
+        { id: "d", app: "/boards", path: "/boards/7" },
+      ],
+      stack: ["d"],
+    });
+    assert.deepEqual(parsePopups(raw, APPS), {
+      list: [
+        { id: "c", app: "/files", path: "/files" },
+        { id: "d", app: "/boards", path: "/boards/7" },
+      ],
+      order: ["d", "c"],
+    });
+  });
+  it("is empty for nothing stored or anything unreadable", () => {
+    for (const raw of [null, "", "nope", "[]", "42", JSON.stringify({ frames: 3 })]) assert.deepEqual(parsePopups(raw, APPS), { list: [], order: [] });
   });
 });
 
@@ -375,52 +444,12 @@ describe("the sidebar, in the desktop", () => {
     assert.equal(parseDesk(JSON.stringify({ dockSize: 64, sidebarSize: 20 }), ["/"]).sidebarSize, 20);
     assert.equal(parseDesk(JSON.stringify({ dockSize: 2 }), ["/"]).sidebarSize, undefined);
   });
-  it("gives each icon the room it grows to, and is classic's width at the default size", () => {
+  it("is classic's: its icon and its widths at the default size", () => {
     assert.equal(sideGlyph(SIDEBAR_ICON.default), 15, "classic's icon");
     assert.equal(sideGlyph(SIDEBAR_ICON.max), 25);
-    assert.equal(tileSlot(24), Math.round(15 * (1 + MAGNIFY.by)));
     assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224, "classic's");
     assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 56, "classic's rail");
-    assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= sideGlyph(SIDEBAR_ICON.max) * (1 + MAGNIFY.by) + 12 + 10, "the list's padding, a scrollbar");
-  });
-
-  // ten rows of 32px, 24px icons, at rest
-  const rows = Array.from({ length: 10 }, (_, i) => ({ top: i * 32, h: 32 }));
-  it("swells the item under the pointer most, its neighbours less, the far ones not at all", () => {
-    const { scales } = magnify(rows, 5 * 32 + 16, 24);
-    assert.equal(scales[5], 1 + MAGNIFY.by);
-    assert.ok(scales[4] < scales[5] && scales[4] > 1);
-    assert.equal(scales[4], scales[6], "the same either side");
-    assert.ok(scales[3] < scales[4]);
-    assert.equal(scales[0], 1);
-    assert.equal(scales[9], 1);
-  });
-  it("draws the list up by what grew above the pointer, so the point under it stays there", () => {
-    const size = 24;
-    for (const y of [3, 100, 5 * 32 + 16, 170, 300]) {
-      const { scales, shift } = magnify(rows, y, size);
-      // where the point at y is drawn: its row's top, pushed down by the rows above, plus its way into its own row
-      const k = rows.findIndex((r) => y >= r.top && y < r.top + r.h);
-      const above = scales.slice(0, k).reduce((sum, s) => sum + (s - 1) * size, 0);
-      const into = ((y - rows[k].top) / rows[k].h) * (rows[k].h + (scales[k] - 1) * size);
-      assert.ok(Math.abs(rows[k].top + above + into - shift - y) < 1e-9, `y = ${y}`);
-    }
-    assert.equal(magnify(rows, -50, 24).shift, 0, "nothing grows above the first");
-  });
-  it("finds where the items are at rest from where they're drawn mid-swell", () => {
-    const size = 24;
-    const { scales, shift } = magnify(rows, 140, size);
-    let above = 0;
-    const drawn = rows.map((r, i) => {
-      const grow = (scales[i] - 1) * size;
-      const d = { top: r.top + above - shift, h: r.h + grow, grow };
-      above += grow;
-      return d;
-    });
-    atRest(drawn, shift).forEach((r, i) => {
-      assert.ok(Math.abs(r.top - rows[i].top) < 1e-9);
-      assert.ok(Math.abs(r.h - rows[i].h) < 1e-9);
-    });
+    assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= sideGlyph(SIDEBAR_ICON.max) + 20 + 12 + 6, "the rows' and the list's padding, a scrollbar");
   });
 });
 

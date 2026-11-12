@@ -1,11 +1,10 @@
 "use client";
 
 import { FolderKanban, MemoryStick, SquareTerminal } from "lucide-react";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
 
-import { NAV_HREFS } from "@/components/nav-items";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
 import { Empty, ROW, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
@@ -14,7 +13,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { cn } from "@/lib/utils";
-import { openPathWindow } from "@/store/desktop";
+import { raisePath } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { liveTerminals, openTerminal, type LiveTerminal, type TermStatus } from "@/store/terminals";
 
@@ -74,7 +73,6 @@ export function TerminalsWidget({ folded }: { folded: boolean }) {
 /** Every project with whether it's running, its ports, memory and tickets; one opens in a window (the one already on it, if any). */
 export function ProjectsWidget({ folded }: { folded: boolean }) {
   const router = useRouter();
-  const pathname = usePathname();
   const [memory] = useSubject(projectMemory);
   const [projects, setProjects] = useState<ProjectNavItem[] | null>(null);
   // bumped after a script is started or stopped from a project's menu: its running state, now and once it's bound
@@ -105,9 +103,9 @@ export function ProjectsWidget({ folded }: { folded: boolean }) {
   const projs = [...(projects ?? [])].sort((a, b) => Number(b.running) - Number(a.running) || a.slug.localeCompare(b.slug));
   const running = (projects ?? []).filter((p) => p.running).length;
 
-  // a project's page in the window already on it, else a new one (or the page's own window when that's closed)
+  // a project's page inline, or its window to the front if it's popped out
   const openPath = (path: string) => {
-    if (!openPathWindow(path, pathname, NAV_HREFS)) router.push(path);
+    if (!raisePath(path)) router.push(path);
   };
   const openProject = (slug: string) => openPath(`/projects/${encodeURIComponent(slug)}`);
 

@@ -14,6 +14,7 @@ import {
   Minimize2,
   Minus,
   RotateCw,
+  SquareArrowDownLeft,
   X,
 } from "lucide-react";
 import { useSubject } from "subjecto/react";
@@ -33,12 +34,10 @@ import {
 import { BASE_PATH } from "@/lib/config";
 import {
   appOf,
-  atRest,
   type Cell,
   type CellRect,
   cellsRect,
   clampRect,
-  defaultGeom,
   alignShift,
   defaultWidgetAt,
   type DeskAlign,
@@ -48,8 +47,8 @@ import {
   fitShift,
   GRID,
   gridSize,
-  magnify,
   maxRect,
+  popupStart,
   moveCells,
   NAV_ALWAYS,
   overlaps,
@@ -62,7 +61,6 @@ import {
   resizeRect,
   subPath,
   sideGlyph,
-  tileSlot,
   unmaximizeUnder,
   VSCODE_NAV,
   WIDGET_LABEL,
@@ -75,14 +73,8 @@ import { useIsMobile } from "@/lib/use-is-mobile";
 import { openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 import {
-  atHome,
-  closeApp,
   desk,
-  deskView,
   hydrateDesk,
-  noteApp,
-  minimizeWindow,
-  openApps,
   setGeom,
   setArrangement,
   setNavShown,
@@ -92,93 +84,36 @@ import {
   deskDrag,
   focusWin,
   frames,
-  frontWin,
-  MAIN_WIN,
-  openAppWindow,
   openFrame,
+  raiseApp,
   stack,
   updateFrame,
   type FrameWin,
-  showDesktop,
-  showWindow,
 } from "@/store/desktop";
 
 const BY_HREF = new Map(NAV_FLAT.map((i) => [i.href, i]));
 
 /**
- * Where the page goes, in either interface. Classic: the scrolling column next
- * to the sidebar. Desktop: a wallpaper with its widgets, the page in a
- * window over it (drag it by its title bar, resize it from any edge, maximize,
- * minimize, close), the sidebar beside it (app-sidebar.tsx: the apps open, the
- * one in front). Its home ("/") is the desktop itself, with no window.
+ * Where the page goes, in either interface: the scrolling column beside the sidebar, as classic has it. In the
+ * desktop that column is the content area: Home ("/") there is the wallpaper with its widgets, and over the area float
+ * the pop-ups, pages popped out (the top bar's detach, desktop-menu.tsx) or opened in a new window, each in a frame
+ * (FrameWindows).
  *
- * The page sits at the same place in the tree in both, so switching interfaces
- * doesn't remount it (the extra wrappers are `display: contents` in classic).
- * The window has no transform or filter: a page's own `fixed` panels stay
- * relative to the viewport. Alone, it has no z-index either, so the page's
- * z-indexes work against the rest of the app as they do in classic; with other
- * windows open it's a layer at its place among them (winZ), so nothing in it
- * shows through the windows in front (dialogs and menus are portalled out).
+ * The page sits at the same place in the tree in both, so switching interfaces doesn't remount it (its wrapper is
+ * `display: contents` in classic). It has no z-index, as in classic; the pop-ups are layers over it (winZ).
  */
 export function Workspace({ desktop, children }: { desktop: boolean; children: React.ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const mobile = useIsMobile();
   const areaRef = useRef<HTMLDivElement>(null);
-  const winRef = useRef<HTMLDivElement>(null);
   const [ws, setWs] = useState<{ w: number; h: number } | null>(null);
-  const [{ geoms }] = useSubject(desk);
-  const [view] = useSubject(deskView);
-  const [others] = useSubject(frames);
-  const [order] = useSubject(stack);
-  // the rect while it's being dragged or resized (saved on release)
-  const [live, setLive] = useState<Rect | null>(null);
-  const [dragging, setDragging] = useState(false);
-  // animate left/top/width/height for a moment (maximize / restore)
-  const [glide, setGlide] = useState(false);
-  const [anim, setAnim] = useState<"in" | "out" | null>("in");
+  // Home is the wallpaper and its widgets in the page's place (the home's page renders nothing in the desktop)
+  const home = desktop && pathname === "/";
 
-  const app = appOf(pathname, NAV_HREFS);
-  const item = app ? (BY_HREF.get(app) ?? null) : null;
-  // The home is the desktop itself (the sidebar's Desktop): no page in a window. The window is closed there, so the
-  // next app opens in it (atHome, below); it reads as closed from the first paint, so the home's page never shows.
-  const home = desktop && app === "/";
-  const hidden = home ? "closed" : view.hidden;
-  // a page outside every app has one window for all of them (kept under the home's key, which has none of its own)
-  const key = app ?? "/";
-  const saved = geoms[key];
-  const max = !!saved?.max;
-
-  // Another app in the window, or the window back from minimized: it opens like one.
-  const [shown, setShown] = useState({ app, hidden });
-  if (desktop && (shown.app !== app || shown.hidden !== hidden)) {
-    setShown({ app, hidden });
-    if (!hidden) setAnim("in");
-  }
-
-  // Restore what this browser remembers, once the desktop first shows.
-  const hydrated = useRef(false);
-  // the window minimized or closed on this very page before a reload: it stays so (once)
-  const keptHidden = useRef<"min" | "closed" | null>(null);
+  // Restore what this browser and tab remember, once the desktop first shows.
   useEffect(() => {
-    if (!desktop || hydrated.current) return;
-    hydrated.current = true;
-    keptHidden.current = hydrateDesk(NAV_HREFS);
+    if (desktop) hydrateDesk(NAV_HREFS);
   }, [desktop]);
-
-  // The page you go to is the window in front (and its app open, at that path); the home, the desktop.
-  useEffect(() => {
-    if (!desktop) return;
-    const kept = keptHidden.current;
-    keptHidden.current = null;
-    if (app === "/") {
-      atHome();
-      return;
-    }
-    if (kept === "closed") return;
-    if (app) noteApp(app, pathname + window.location.search);
-    if (kept !== "min") showWindow();
-  }, [desktop, app, pathname]);
 
   useEffect(() => {
     const el = areaRef.current;
@@ -188,190 +123,21 @@ export function Workspace({ desktop, children }: { desktop: boolean; children: R
     return () => ro.disconnect();
   }, [desktop]);
 
-  const rectNow = (): Rect | null => {
-    const el = winRef.current;
-    return el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null;
-  };
-
-  function minimize() {
-    setAnim("out");
-    window.setTimeout(() => {
-      minimizeWindow();
-      setAnim(null);
-    }, 170);
-  }
-
-  function close() {
-    const next = closeApp(app);
-    if (next) router.push(next);
-  }
-
-  function toggleMax() {
-    if (mobile) return;
-    const cur = saved ?? rectNow();
-    if (!cur) return;
-    setGlide(true);
-    window.setTimeout(() => setGlide(false), 260);
-    setGeom(key, { x: cur.x, y: cur.y, w: cur.w, h: cur.h, ...(max ? {} : { max: true }) });
-  }
-
-  // Drag by the title bar; a maximized window comes back to its size under the pointer.
-  function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || mobile || (e.target as HTMLElement).closest("button, a, input")) return;
-    const area = areaRef.current;
-    const r0 = rectNow();
-    if (!area || !r0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const W = area.clientWidth;
-    const H = area.clientHeight;
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    let start = r0;
-    let last: Rect | null = null;
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0;
-      const dy = ev.clientY - y0;
-      if (!last) {
-        if (Math.abs(dx) + Math.abs(dy) < 4) return;
-        setDragging(true);
-        deskDrag.next(true);
-        if (max) start = unmaximizeUnder(saved ? clampRect(saved, W, H) : defaultGeom(W, H), r0, x0 - area.getBoundingClientRect().left);
-      }
-      last = { ...start, x: start.x + dx, y: Math.max(0, start.y + dy) };
-      setLive(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      if (!last) return;
-      setGeom(key, clampRect(last, W, H));
-      setLive(null);
-      setDragging(false);
-      deskDrag.next(false);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  }
-
-  function onResizePointerDown(edges: Edges, e: React.PointerEvent<HTMLElement>) {
-    if (e.button !== 0) return;
-    const area = areaRef.current;
-    const start = rectNow();
-    if (!area || !start) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const W = area.clientWidth;
-    const H = area.clientHeight;
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    let last = start;
-    setDragging(true);
-    deskDrag.next(true);
-    const move = (ev: PointerEvent) => {
-      last = resizeRect(start, edges, ev.clientX - x0, ev.clientY - y0, W, H);
-      setLive(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      setGeom(key, clampRect(last, W, H));
-      setLive(null);
-      setDragging(false);
-      deskDrag.next(false);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  }
-
-  // Before the workspace is measured (the server's paint, the first frame) the
-  // window is placed by CSS, as defaultGeom / maxRect would place it.
-  const rect = mobile
-    ? null
-    : (live ??
-      (ws
-        ? max
-          ? maxRect(ws.w, ws.h)
-          : clampRect(saved ?? defaultGeom(ws.w, ws.h), ws.w, ws.h)
-        : saved && !max
-          ? saved
-          : null));
-  // Alone, the window has no z-index (see above). With other windows, each one is a layer at its place in the stack,
-  // this one too: else what it holds with a z-index of its own (its title bar's buttons, a page's sticky parts) would
-  // show through the windows in front of it.
-  const z = desktop && others.length ? winZ(order, MAIN_WIN) : undefined;
-  const place: React.CSSProperties | undefined = !desktop
-    ? undefined
-    : mobile
-      ? { inset: 0 }
-      : rect
-        ? { left: rect.x, top: rect.y, width: rect.w, height: rect.h }
-        : max
-          ? { inset: 8 }
-          : { top: 12, bottom: 12 };
-  const winStyle = place && z !== undefined ? { ...place, zIndex: z } : place;
-
   return (
     <div
       ref={areaRef}
       className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
     >
-      {desktop && <DesktopBackground mobile={mobile} />}
-      {desktop && <FrameWindows area={ws} mobile={mobile} />}
-      <div
-        ref={winRef}
-        onPointerDownCapture={desktop ? () => focusWin(MAIN_WIN) : undefined}
-        role={desktop ? "region" : undefined}
-        aria-label={desktop ? `${item?.label ?? "Page"} window` : undefined}
-        aria-hidden={desktop && hidden ? true : undefined}
-        onAnimationEnd={(e) => e.target === e.currentTarget && anim === "in" && setAnim(null)}
-        style={winStyle}
-        className={
-          desktop
-            ? `absolute flex origin-bottom flex-col bg-background ${
-                mobile
-                  ? ""
-                  : `rounded-xl border shadow-[0_28px_70px_-18px_rgb(0_0_0/0.5)] ring-1 ring-black/5 dark:ring-white/10 ${
-                      rect ? "" : "inset-x-[min(24px,3vw)]"
-                    }`
-              } ${glide && !dragging ? "transition-[left,top,width,height] duration-200 ease-out" : ""} ${
-                anim === "in" ? "motion-safe:animate-desk-in" : anim === "out" ? "motion-safe:animate-desk-out" : ""
-              } ${hidden === "closed" ? "hidden" : hidden === "min" ? "invisible" : ""}`
-            : "contents"
-        }
-      >
-        {desktop && (
-          <TitleBar
-            item={item}
-            pathname={pathname}
-            mobile={mobile}
-            max={max}
-            onPointerDown={onBarPointerDown}
-            onClose={close}
-            onMinimize={minimize}
-            onToggleMax={toggleMax}
-          />
-        )}
-        <div
-          className={
-            desktop
-              ? `scrollbar-clear min-h-0 flex-1 overflow-y-auto ${mobile ? "" : "rounded-b-[calc(var(--radius)*1.4-1px)]"} ${dragging ? "pointer-events-none select-none" : ""}`
-              : "contents"
-          }
-        >
-          {desktop && hidden === "closed" ? null : children}
-        </div>
-        {desktop && !mobile && !max && <ResizeHandles onPointerDown={onResizePointerDown} />}
+      {home && <DesktopBackground mobile={mobile} />}
+      <div className={desktop ? (home ? "hidden" : "scrollbar-clear absolute inset-0 overflow-y-auto") : "contents"}>
+        {home ? null : children}
       </div>
+      {desktop && <FrameWindows area={ws} mobile={mobile} />}
     </div>
   );
 }
 
-/* ------------------------------- the window ------------------------------- */
+/* ------------------------------- a pop-up ------------------------------- */
 
 function TitleBar({
   item,
@@ -382,7 +148,9 @@ function TitleBar({
   onClose,
   onMinimize,
   onToggleMax,
-  nav,
+  onAttach,
+  onReload,
+  href,
 }: {
   item: NavItem | null;
   pathname: string;
@@ -392,11 +160,12 @@ function TitleBar({
   onClose: () => void;
   onMinimize: () => void;
   onToggleMax: () => void;
-  /** a frame's own reload and address (the page's own window uses the router) */
-  nav?: { reload: () => void; href: string };
+  /** back inline, in place of the page there */
+  onAttach: () => void;
+  onReload: () => void;
+  /** its page's address, for a new browser tab */
+  href: string;
 }) {
-  const router = useRouter();
-  const reload = nav?.reload ?? (() => router.refresh());
   const crumbs = subPath(pathname, item?.href ?? null);
   const btn =
     "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
@@ -442,14 +211,17 @@ function TitleBar({
       </div>
 
       <div className="z-10 ml-auto flex items-center">
-        <button type="button" aria-label="Reload" title="Reload" onClick={reload} className={btn}>
+        <button type="button" aria-label="Put back in the page" title="Put back in the page (in place of the one there)" onClick={onAttach} className={btn}>
+          <SquareArrowDownLeft className="size-3.5" />
+        </button>
+        <button type="button" aria-label="Reload" title="Reload" onClick={onReload} className={btn}>
           <RotateCw className="size-3.5" />
         </button>
         <button
           type="button"
           aria-label="Open in a new browser tab"
           title="Open in a new browser tab"
-          onClick={() => window.open(nav ? nav.href : `${BASE_PATH}${pathname}${window.location.search}`, "_blank", "noopener")}
+          onClick={() => window.open(href, "_blank", "noopener")}
           className={btn}
         >
           <ExternalLink className="size-3.5" />
@@ -517,17 +289,14 @@ function ResizeHandles({ onPointerDown }: { onPointerDown: (edges: Edges, e: Rea
   );
 }
 
-/* ------------------------------ more windows ------------------------------ */
-
-/** A window's layer: its place in the stack, back to front, from 1 (all under the phone's sidebar drawer, from 40). */
+/** A pop-up's layer: its place in the stack, back to front, from 1 (all under the phone's sidebar drawer, from 40). */
 function winZ(order: string[], id: string): number {
   return Math.min(order.indexOf(id) + 1, 39);
 }
 
 /**
- * The desktop's other windows: each another page of the app in a frame (the page there renders alone, as
- * app-shell's FramedPage), back to front as `stack` says, each a layer at its place in it (winZ), as the page's own
- * window is while they're open.
+ * The pop-ups: each a page of the app in a frame (the page there renders alone, as app-shell's FramedPage), back to
+ * front as `stack` says, each a layer at its place in it (winZ), over the content area.
  */
 function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null; mobile: boolean }) {
   const [list] = useSubject(frames);
@@ -573,8 +342,10 @@ function FrameWindow({
   area: { w: number; h: number };
   mobile: boolean;
 }) {
+  const router = useRouter();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
+  const [{ geoms }] = useSubject(desk);
   // (the frame's first page: later ones it goes to itself, and its src mustn't follow, or it would reload)
   const [src] = useState(() => `${BASE_PATH}${win.path}`);
   const [dragAny] = useSubject(deskDrag);
@@ -583,17 +354,23 @@ function FrameWindow({
   const [glide, setGlide] = useState(false);
   const item = win.app ? (BY_HREF.get(win.app) ?? null) : null;
   const { w: W, h: H } = area;
-  const max = !!win.geom?.max;
-  // a new window: the default place, each one a step down and right from the one before
-  const start = (): Rect => {
-    const d = defaultGeom(W, H);
-    const step = 28 * ((cascade % 6) + 1);
-    return clampRect({ ...d, x: d.x + step, y: d.y + step }, W, H);
-  };
-  const placed = win.geom ? clampRect(win.geom, W, H) : start();
+  // a new one: where its app's last was (or the default), a step down and right for each one open before it
+  const start = win.geom ?? popupStart(win.app ? geoms[win.app] : undefined, cascade, W, H);
+  const max = !!start.max;
+  const placed = clampRect(start, W, H);
   const rect = live ?? (max ? maxRect(W, H) : placed);
+  // (kept from the first: another of its app's moving later doesn't move this one)
+  useEffect(() => {
+    if (!win.geom) updateFrame(win.id, { geom: start });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const saveGeom = (r: Rect, isMax = max) => updateFrame(win.id, { geom: { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) } });
+  // its place, and where its app's next one opens
+  const saveGeom = (r: Rect, isMax = max) => {
+    const geom = { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) };
+    updateFrame(win.id, { geom });
+    if (win.app) setGeom(win.app, geom);
+  };
 
   function toggleMax() {
     if (mobile) return;
@@ -692,10 +469,12 @@ function FrameWindow({
         onClose={() => closeFrame(win.id)}
         onMinimize={() => updateFrame(win.id, { hidden: true })}
         onToggleMax={toggleMax}
-        nav={{
-          reload: () => cw()?.location.reload(),
-          href: `${BASE_PATH}${win.path}`,
+        onAttach={() => {
+          closeFrame(win.id);
+          router.push(win.path);
         }}
+        onReload={() => cw()?.location.reload()}
+        href={`${BASE_PATH}${win.path}`}
       />
       <iframe
         ref={frameRef}
@@ -925,7 +704,6 @@ function DeskMenu({
   onClose: () => void;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.querySelector("button")?.focus();
@@ -957,7 +735,7 @@ function DeskMenu({
     <div
       ref={ref}
       role="menu"
-      aria-label="Desktop"
+      aria-label="Home"
       style={place}
       onContextMenu={(e) => e.preventDefault()}
       className="fixed z-50 w-56 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10"
@@ -975,7 +753,7 @@ function DeskMenu({
         );
       })}
       <div className="-mx-1 my-1 h-px bg-border" />
-      <button type="button" role="menuitem" onClick={pick(() => openSettings(pathname, (href) => router.push(href)))} className={row}>
+      <button type="button" role="menuitem" onClick={pick(() => openSettings((href) => router.push(href)))} className={row}>
         Settings…
       </button>
     </div>,
@@ -1120,11 +898,12 @@ function WidgetFrame({
 
 /**
  * An app's right-click menu in the sidebar, in the desktop (`children`: more of its own), "Hide from sidebar" last
- * (Settings → General has them all; the home and Settings stay).
+ * (Settings → General has them all; the home and Settings stay). No new window on a phone (`onNewWindow` absent).
  */
 function AppMenu({
   href,
   label,
+  windows,
   onOpen,
   onNewWindow,
   onNewTab,
@@ -1133,21 +912,23 @@ function AppMenu({
 }: {
   href: string;
   label: string;
+  /** how many pop-ups it has (onClose closes them) */
+  windows: number;
   onOpen: () => void;
-  onNewWindow: () => void;
+  onNewWindow?: () => void;
   onNewTab: () => void;
-  onClose?: () => void;
+  onClose: () => void;
   children?: React.ReactNode;
 }) {
   return (
     <ContextMenuContent className="w-52">
       <ContextMenuItem onClick={onOpen}>Open {label}</ContextMenuItem>
-      <ContextMenuItem onClick={onNewWindow}>Open in a new window</ContextMenuItem>
+      {onNewWindow && <ContextMenuItem onClick={onNewWindow}>Open in a new window</ContextMenuItem>}
       <ContextMenuItem onClick={onNewTab}>Open in a new browser tab</ContextMenuItem>
-      {onClose && (
+      {windows > 0 && (
         <>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={onClose}>Close window</ContextMenuItem>
+          <ContextMenuItem onClick={onClose}>{windows > 1 ? `Close its ${windows} windows` : "Close its window"}</ContextMenuItem>
         </>
       )}
       {children && (
@@ -1168,101 +949,22 @@ function AppMenu({
 
 /* ------------------------ the sidebar, in the desktop ----------------------- */
 
-/**
- * A macOS dock's swell, down the sidebar (app-sidebar.tsx, in the desktop): each [data-magnify] item in `list` grows as the
- * pointer passes (a `--s` scale per item, set straight on the DOM in a frame callback, so a pointer move re-renders
- * nothing), and the list is drawn up by as much as the items above the pointer grew, so what's under the pointer stays
- * there (magnify, lib/desktop.ts). Where they'd be at rest is worked out afresh each frame from where they're drawn
- * (atRest), so a scroll, or a swell still settling, doesn't throw it. Returns the pointer handlers for `scroller` (the
- * list's scrolling box); none when `on` isn't (a phone's drawer). Off on touch and for reduced motion.
- */
-export function useMagnify(
-  on: boolean,
-  size: number,
-  scroller: React.RefObject<HTMLElement | null>,
-  list: React.RefObject<HTMLDivElement | null>,
-): Pick<React.HTMLAttributes<HTMLElement>, "onPointerMove" | "onPointerLeave" | "onScroll"> {
-  const frame = useRef(0);
-  // the pointer's clientY while it's over the sidebar
-  const pointer = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!on) unswell(list.current);
-    return () => cancelAnimationFrame(frame.current);
-  }, [on, list]);
-
-  const swell = () => {
-    cancelAnimationFrame(frame.current);
-    frame.current = requestAnimationFrame(() => {
-      const box = scroller.current;
-      const ul = list.current;
-      if (!box || !ul || pointer.current === null) return;
-      const b = box.getBoundingClientRect();
-      const els = [...ul.querySelectorAll<HTMLElement>("[data-magnify]")];
-      const t = getComputedStyle(ul).transform;
-      const rest = atRest(
-        els.map((el) => {
-          const r = el.getBoundingClientRect();
-          const slot = el.querySelector("[data-magnify-slot]")?.getBoundingClientRect().height ?? size;
-          return { top: r.top - b.top + box.scrollTop, h: r.height, grow: slot - size };
-        }),
-        t && t !== "none" ? -new DOMMatrixReadOnly(t).m42 : 0,
-      );
-      const { scales, shift } = magnify(rest, pointer.current - b.top + box.scrollTop, size);
-      els.forEach((el, i) => el.style.setProperty("--s", scales[i].toFixed(3)));
-      ul.style.setProperty("transform", `translateY(${(-shift).toFixed(1)}px)`);
-    });
-  };
-
-  if (!on) return {};
-  return {
-    onPointerMove: (e) => {
-      if (e.pointerType === "touch" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-      pointer.current = e.clientY;
-      swell();
-    },
-    onPointerLeave: () => {
-      pointer.current = null;
-      cancelAnimationFrame(frame.current);
-      unswell(list.current);
-    },
-    onScroll: () => {
-      if (pointer.current !== null) swell();
-    },
-  };
-}
-
-/** Every item in the sidebar's list back to its size, and the list back in place. */
-function unswell(ul: HTMLElement | null) {
-  for (const el of ul?.querySelectorAll<HTMLElement>("[data-magnify]") ?? []) el.style.setProperty("--s", "1");
-  ul?.style.setProperty("transform", "translateY(0px)");
-}
-
-/** A row of the sidebar, in the desktop: classic's (its icon in a slot as wide as it grows, so as tall and as far in). */
+/** A row of the sidebar, in the desktop: classic's (as tall as the size picked, 32 px at the default, as classic's). */
 function sideRow(active: boolean, rail: boolean) {
-  return `relative flex min-w-0 items-center gap-1.5 rounded-md py-1 leading-5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
-    rail ? "justify-center" : "px-1.5"
+  return `relative flex min-w-0 items-center gap-2.5 rounded-md px-2.5 py-1 leading-5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+    rail ? "justify-center" : ""
   } ${active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"}`;
 }
 
 /** The names' size beside icons of `size` px: classic's 13 px, a little more with the bigger ones. */
 const sideFont = (size: number) => Math.max(13, Math.round(10 + size / 8));
 
-/**
- * An icon in the sidebar: classic's glyph, in the row's colour (sideGlyph: 15 px at the default size), in a slot as wide
- * as it grows (tileSlot) and as tall as the row is now (`--s`), scaled in it.
- */
+/** An icon in the sidebar: classic's glyph, in the row's colour (sideGlyph: 15 px at the default size), the row `size` tall. */
 function SideIcon({ icon: Icon, size }: { icon: NavItem["icon"]; size: number }) {
   const px = sideGlyph(size);
   return (
-    <span
-      data-magnify-slot
-      className="flex shrink-0 items-center justify-center transition-[height] duration-100 ease-out"
-      style={{ width: tileSlot(size), height: `calc(var(--s, 1) * ${size}px)` }}
-    >
-      <span className="flex transition-transform duration-100 ease-out" style={{ transform: "scale(var(--s, 1))" }}>
-        <Icon className="shrink-0" style={{ width: px, height: px }} />
-      </span>
+    <span className="flex shrink-0 items-center" style={{ height: size }}>
+      <Icon className="shrink-0" style={{ width: px, height: px }} />
     </span>
   );
 }
@@ -1278,10 +980,10 @@ function RailBadge({ count }: { count: number }) {
 
 /**
  * An app in the sidebar, in the desktop interface (app-sidebar.tsx): its icon, classic's, at the sidebar's size
- * (desk.sidebarSize, swelling with useMagnify), a dot by it while it's open in this tab or has a window. A click: the app's window in front
- * goes down (a taskbar's), else its window comes up, else it opens (openAppWindow), where it was left; a click with a
- * modifier is the browser's (onNavigate isn't called). Right-click: open it, in a new window or tab, close it, `menu`
- * (its own), hide it from the sidebar. The home is the desktop itself: a click shows it (showDesktop).
+ * (desk.sidebarSize), a dot by it while it's popped out. A click shows its page inline, as classic's does, unless it's
+ * popped out: then its window comes to the front (raiseApp); a click with a modifier is the browser's (onNavigate isn't
+ * called). Right-click: open it, in a new window (not on a phone) or tab, close its windows, `menu` (its own), hide it
+ * from the sidebar. The home is Home: the wallpaper with its widgets, a page like the others.
  */
 export function DeskNavLink({
   item,
@@ -1297,7 +999,7 @@ export function DeskNavLink({
   item: NavItem;
   size: number;
   rail: boolean;
-  /** its window is the one in front (the home: none is) */
+  /** its page is the one inline */
   active: boolean;
   /** a count by the icon (on the rail, which has no room for the row's own) */
   badge?: number | null;
@@ -1309,52 +1011,27 @@ export function DeskNavLink({
   children?: React.ReactNode;
 }) {
   const router = useRouter();
-  const pathname = usePathname();
-  const mainApp = appOf(pathname, NAV_HREFS);
-  const [open] = useSubject(openApps);
+  const mobile = useIsMobile();
   const [wins] = useSubject(frames);
-  const [{ hidden }] = useSubject(deskView);
   const href = item.href;
   const home = item.desktop;
   const label = home?.label ?? item.label;
-  const entry = home ? undefined : open.find((o) => o.app === href);
   const appFrames = home ? [] : wins.filter((f) => f.app === href);
-  const path = entry?.path ?? appFrames[0]?.path ?? href;
 
   const link = (
     <Link
-      href={path}
-      data-magnify
+      href={href}
       aria-current={active ? "page" : undefined}
       aria-label={rail ? label : undefined}
       title={rail ? `${label}${badge ? ` (${badge})` : ""}` : undefined}
       onClick={onClick}
       onNavigate={(e) => {
-        if (home) {
-          e.preventDefault();
-          showDesktop();
-          return;
-        }
-        // the app in front: its window goes down (as a taskbar's)
-        const front = frontWin();
-        if (href === mainApp && !hidden && front === MAIN_WIN) {
-          e.preventDefault();
-          minimizeWindow();
-          return;
-        }
-        const inFront = appFrames.find((f) => f.id === front);
-        if (inFront) {
-          e.preventDefault();
-          updateFrame(inFront.id, { hidden: true });
-          return;
-        }
-        if (openAppWindow(href, path, mainApp)) e.preventDefault();
-        else showWindow();
+        if (!home && raiseApp(href)) e.preventDefault();
       }}
       className={`flex-1 ${sideRow(active, rail)}`}
-      style={{ fontSize: sideFont(size), paddingLeft: indent ? 6 + indent : undefined }}
+      style={{ fontSize: sideFont(size), paddingLeft: indent ? 10 + indent : undefined }}
     >
-      {(entry || appFrames.length > 0) && (
+      {appFrames.length > 0 && (
         <span aria-hidden className="absolute top-1/2 size-1 -translate-y-1/2 rounded-full bg-foreground/60" style={{ left: indent }} />
       )}
       <SideIcon icon={home?.icon ?? item.icon} size={size} />
@@ -1370,25 +1047,15 @@ export function DeskNavLink({
       <AppMenu
         href={href}
         label={item.label}
+        windows={appFrames.length}
         onOpen={() => {
-          if (openAppWindow(href, path, mainApp)) return;
-          showWindow();
-          router.push(path);
+          if (!raiseApp(href)) router.push(href);
         }}
-        onNewWindow={() => openFrame(path, href)}
-        onNewTab={() => window.open(`${BASE_PATH}${path}`, "_blank", "noopener")}
-        onClose={
-          entry || appFrames.length
-            ? () => {
-                for (const f of appFrames) closeFrame(f.id);
-                if (!entry) return;
-                const next = closeApp(href);
-                // closing the one in front shows the next (or the bare desktop)
-                if (href === mainApp && next) router.push(next);
-                else if (href !== mainApp) showWindow();
-              }
-            : undefined
-        }
+        onNewWindow={mobile ? undefined : () => openFrame(href, href)}
+        onNewTab={() => window.open(`${BASE_PATH}${href}`, "_blank", "noopener")}
+        onClose={() => {
+          for (const f of appFrames) closeFrame(f.id);
+        }}
       >
         {menu}
       </AppMenu>
@@ -1408,7 +1075,6 @@ export function DeskVsCodeLink({ size, rail, onClick }: { size: number; rail: bo
           href="/vscode/"
           target="_blank"
           rel="noreferrer"
-          data-magnify
           onClick={onClick}
           aria-label={rail ? "VS Code" : undefined}
           title={rail ? "VS Code" : undefined}

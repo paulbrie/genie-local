@@ -26,7 +26,7 @@ import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { PROJECT_TAB_LABELS, PROJECT_TABS } from "@/lib/project-tabs";
 import { cn } from "@/lib/utils";
 import { Z_COMMAND_PALETTE } from "@/lib/z-layers";
-import { showDesktop, showWindow } from "@/store/desktop";
+import { raisePath } from "@/store/desktop";
 import { liveTerminals, openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 
@@ -117,36 +117,22 @@ function Palette() {
   }, []);
 
   const items = useMemo<Item[]>(() => {
+    const desktop = mode === "desktop";
+    // (the desktop: inline, or its window to the front if it's popped out)
     const go = (href: string) => () => {
       close();
-      router.push(href);
-      showWindow(); // (the desktop: bring its window back if it was minimized or closed)
+      if (!(desktop && raisePath(href))) router.push(href);
     };
-    const desktop = mode === "desktop";
     const dark = resolvedTheme === "dark";
-    const out: Item[] = NAV_FLAT.map((n) =>
-      // (in the desktop the home is the desktop itself: every window down, not a page)
-      desktop && n.desktop
-        ? {
-            id: `page:${n.href}`,
-            kind: "page",
-            label: n.desktop.label,
-            keywords: "home show desktop",
-            icon: n.desktop.icon,
-            run: () => {
-              close();
-              showDesktop();
-            },
-          }
-        : {
-            id: `page:${n.href}`,
-            kind: "page",
-            label: n.label,
-            keywords: n.href.slice(1).replace(/\//g, " "),
-            icon: n.icon,
-            run: go(n.href),
-          },
-    );
+    // (in the desktop the home is Home, the wallpaper with its widgets)
+    const out: Item[] = NAV_FLAT.map((n) => ({
+      id: `page:${n.href}`,
+      kind: "page",
+      label: desktop && n.desktop ? n.desktop.label : n.label,
+      keywords: desktop && n.desktop ? "home desktop widgets" : n.href.slice(1).replace(/\//g, " "),
+      icon: desktop && n.desktop ? n.desktop.icon : n.icon,
+      run: go(n.href),
+    }));
     // (the Settings app's panes but its first, which is the app itself: Users in Settings)
     for (const p of SETTINGS_PANES.slice(1))
       out.push({ id: `page:${p.href}`, kind: "page", label: p.label, detail: "Settings", keywords: `settings ${p.keywords}`, icon: p.icon, run: go(p.href) });

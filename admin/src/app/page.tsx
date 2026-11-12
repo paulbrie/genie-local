@@ -10,8 +10,9 @@ import { parseShellMode, SHELL_COOKIE } from "@/lib/desktop";
 export const dynamic = "force-dynamic";
 
 /**
- * The Dashboard: headline metrics from every area of the app. In the desktop interface the home is the desktop itself
- * (components/desktop), so there's nothing to measure (switching to classic here refreshes it: app-shell.tsx).
+ * The Dashboard: headline metrics from every area of the app. In the desktop interface the home is Home, the wallpaper
+ * with its widgets (components/desktop), so there's nothing to measure (switching to classic here refreshes it:
+ * app-shell.tsx).
  */
 export default async function Home() {
   if (parseShellMode((await cookies()).get(SHELL_COOKIE)?.value) === "desktop") return null;
