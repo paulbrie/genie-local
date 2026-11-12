@@ -15,10 +15,7 @@ import {
   resizeRect,
   subPath,
   unmaximizeUnder,
-  iconGridSize,
-  layoutIcons,
-  moveIcon,
-  sortedIcons,
+  gridSize,
   cellsRect,
   defaultWidgetAt,
   deskWidgets,
@@ -32,8 +29,11 @@ import {
   fitShift,
   widgetMode,
   arrangementFits,
+  NAV_ALWAYS,
+  navShown,
   SIDEBAR_ICON,
   sidebarWidth,
+  sideGlyph,
   stackDesktop,
   tileSlot,
   widgetWants,
@@ -81,12 +81,8 @@ describe("subPath", () => {
 
 describe("window geometry", () => {
   // (the workspace is right of the sidebar and under the top bar: nothing in it is kept clear for either)
-  it("a first window leaves two icon columns on a wide screen, and fills the rest down to a small gap", () => {
-    const g = defaultGeom(1600, 900);
-    assert.equal(g.x, 204);
-    assert.equal(g.x + g.w, 1600 - 16);
-    assert.equal(g.y, 12);
-    assert.equal(g.y + g.h, 900 - 12);
+  it("a first window fills the workspace, a small margin around it", () => {
+    assert.deepEqual(defaultGeom(1600, 900), { x: 24, y: 12, w: 1600 - 48, h: 900 - 24 });
   });
   it("a first window on a narrow screen fills the width", () => {
     const g = defaultGeom(1000, 700);
@@ -165,69 +161,33 @@ describe("parseDesk", () => {
   it("lets go of what the dock kept (its apps, VS Code)", () => {
     assert.deepEqual(parseDesk(JSON.stringify({ pinned: ["/", "vscode", "/files"] }), APPS), { geoms: {} });
   });
+  it("lets go of the desktop's icons, and the ones taken off it, keeping the rest", () => {
+    const d = parseDesk(
+      JSON.stringify({
+        icons: { "/files": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } },
+        removedIcons: ["/files", "vscode"],
+        widgets: { git: { mode: "open" } },
+        align: "right",
+      }),
+      APPS,
+    );
+    assert.deepEqual(d, { geoms: {}, widgets: { git: { mode: "open" } }, align: "right" });
+  });
 });
 
-describe("desktop icons", () => {
-  const ids = ["a", "b", "c", "d", "e"];
-  it("lays them down the first column, then the next, by default", () => {
-    assert.deepEqual(layoutIcons(ids, undefined, 4, 2), { a: { c: 0, r: 0 }, b: { c: 0, r: 1 }, c: { c: 1, r: 0 }, d: { c: 1, r: 1 }, e: { c: 2, r: 0 } });
-  });
-  it("keeps saved spots, and fills around them", () => {
-    const l = layoutIcons(ids, { e: { c: 0, r: 0 }, c: { c: 3, r: 1 } }, 4, 2);
-    assert.deepEqual(l.e, { c: 0, r: 0 });
-    assert.deepEqual(l.c, { c: 3, r: 1 });
-    assert.deepEqual(l.a, { c: 0, r: 1 });
-    assert.deepEqual(l.b, { c: 1, r: 0 });
-    assert.equal(new Set(Object.values(l).map((c) => `${c.c},${c.r}`)).size, ids.length);
-  });
-  it("moves a saved spot that no longer fits to the nearest free one", () => {
-    const l = layoutIcons(["a", "b"], { a: { c: 9, r: 9 } }, 3, 2);
-    assert.deepEqual(l.a, { c: 2, r: 1 });
-    assert.deepEqual(l.b, { c: 0, r: 0 });
-  });
-  it("gives two icons saved on one spot one each", () => {
-    const l = layoutIcons(["a", "b"], { a: { c: 1, r: 0 }, b: { c: 1, r: 0 } }, 3, 2);
-    assert.deepEqual(l.a, { c: 1, r: 0 });
-    assert.notDeepEqual(l.b, { c: 1, r: 0 });
-  });
-  it("swaps with the icon dropped on, moves into a free spot", () => {
-    const l = layoutIcons(ids, undefined, 4, 2);
-    const swapped = moveIcon(l, "a", { c: 1, r: 1 });
-    assert.deepEqual(swapped.a, { c: 1, r: 1 });
-    assert.deepEqual(swapped.d, { c: 0, r: 0 });
-    const free = moveIcon(l, "a", { c: 3, r: 1 });
-    assert.deepEqual(free.a, { c: 3, r: 1 });
-    assert.equal(Object.values(free).filter((c) => c.c === 0 && c.r === 0).length, 0);
-    assert.equal(moveIcon(l, "a", { c: 0, r: 0 }), l);
-  });
-  it("sorts by name", () => {
-    const l = sortedIcons(["/z", "/a", "/m"], (id) => ({ "/z": "Zed", "/a": "Apple", "/m": "Mango" })[id]!, 2);
-    assert.deepEqual(l, { "/a": { c: 0, r: 0 }, "/m": { c: 0, r: 1 }, "/z": { c: 1, r: 0 } });
-  });
-  it("reads saved spots back, dropping what it doesn't know", () => {
-    const d = parseDesk(JSON.stringify({ icons: { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 }, "/gone": { c: 1, r: 1 }, "/projects": { c: -1, r: 0 } } }), ["/", "/projects"]);
-    assert.deepEqual(d.icons, { "/": { c: 2, r: 1 }, vscode: { c: 0, r: 3 } });
-  });
-  it("keep off the widgets' cells", () => {
-    const l = layoutIcons(["a", "b", "c"], { a: { c: 1, r: 0 } }, 4, 2, [{ c: 0, r: 0, w: 2, h: 1 }]);
-    assert.deepEqual(l.a, { c: 1, r: 1 }, "a saved spot under a widget: the nearest free one");
-    assert.deepEqual(l.b, { c: 0, r: 1 });
-    assert.deepEqual(l.c, { c: 2, r: 0 });
-    const sorted = sortedIcons(["/z", "/a", "/m"], (id) => id, 2, [{ c: 0, r: 0, w: 1, h: 1 }]);
-    assert.deepEqual(sorted, { "/a": { c: 0, r: 1 }, "/m": { c: 1, r: 0 }, "/z": { c: 1, r: 1 } });
-  });
+describe("the desktop's grid", () => {
   it("fits as many columns and rows as the desktop has room for", () => {
-    assert.deepEqual(iconGridSize(1440, 860), { cols: 15, rows: 8 });
+    assert.deepEqual(gridSize(1440, 860), { cols: 15, rows: 8 });
   });
-  it("take the whole height, inset as from the sides (nothing kept at the bottom)", () => {
-    assert.equal(iconGridSize(1440, 12 + 7 * 96 + 12).rows, 7);
-    assert.equal(iconGridSize(1440, 12 + 7 * 96 + 11).rows, 6);
-    assert.equal(iconGridSize(1440, 50).rows, 1, "always one");
+  it("takes the whole height, inset as from the sides", () => {
+    assert.equal(gridSize(1440, 12 + 7 * 96 + 12).rows, 7);
+    assert.equal(gridSize(1440, 12 + 7 * 96 + 11).rows, 6);
+    assert.equal(gridSize(1440, 50).rows, 1, "always one");
   });
 });
 
 describe("desktop widgets", () => {
-  it("are three icons by three at the least, on the icons' own grid, inset so two side by side are 16px apart", () => {
+  it("are three cells by three at the least, inset so two side by side are 16px apart", () => {
     const r = cellsRect({ c: 1, r: 2, ...WIDGET_MIN });
     assert.deepEqual(r, { x: 12 + 92 + 8, y: 12 + 2 * 96 + 8, w: 3 * 92 - 16, h: 3 * 96 - 16 });
     const next = cellsRect({ c: 4, r: 2, ...WIDGET_MIN });
@@ -296,24 +256,23 @@ describe("desktop widgets", () => {
 });
 
 describe("the arrangement across the desktop", () => {
-  // two columns of icons and a widget beside them: columns 0 to 4, on a 1440px desktop (15 columns)
+  // two widgets: columns 0 to 4, on a 1440px desktop (15 columns); what shows is inset 8px in its span
   const spans = [
-    { c: 0, r: 0, w: 1, h: 1 },
-    { c: 1, r: 2, w: 1, h: 1 },
-    { c: 2, r: 0, w: 3, h: 3 },
+    { c: 0, r: 0, w: 3, h: 3 },
+    { c: 2, r: 3, w: 3, h: 4 },
   ];
+  const leftEdge = 12 + 8;
+  const rightEdge = 12 + 5 * 92 - 8;
   it("stays where it is against the left", () => {
     assert.equal(alignShift("left", spans, 1440), 0);
   });
-  it("goes against the right edge, as far from it as the left edge's padding", () => {
+  it("goes against the right edge, as far from it as the first widget is from the left against the left", () => {
     const shift = alignShift("right", spans, 1440);
-    assert.equal(12 + 5 * 92 - 8 + shift, 1440 - 12);
+    assert.equal(rightEdge + shift, 1440 - leftEdge);
   });
   it("centres what it takes, keeping the gaps in it", () => {
     const shift = alignShift("center", spans, 1440);
-    const left = 12 + shift;
-    const right = 12 + 5 * 92 - 8 + shift;
-    assert.ok(Math.abs(left - (1440 - right)) <= 1);
+    assert.ok(Math.abs(leftEdge + shift - (1440 - (rightEdge + shift))) <= 1);
     assert.equal(alignShift("center", [], 1440), 0);
   });
   it("lets a drop land past the arrangement's first column when it's drawn away from the left, never off screen", () => {
@@ -329,16 +288,11 @@ describe("the arrangement across the desktop", () => {
     assert.equal(fitShift([{ c: 13, r: 0, w: 3, h: 3 }], 15), -1);
     assert.equal(fitShift([], 15), 0);
   });
-  it("remembers icons taken off the desktop, the sidebar's size and the arrangement's side", () => {
-    const d = parseDesk(
-      JSON.stringify({ removedIcons: ["/files", "/files", "vscode", "/gone", 3], sidebarSize: 32, align: "right" }),
-      ["/", "/files"],
-    );
-    assert.deepEqual(d.removedIcons, ["/files", "vscode"]);
+  it("remembers the sidebar's size and the arrangement's side", () => {
+    const d = parseDesk(JSON.stringify({ sidebarSize: 32, align: "right" }), ["/"]);
     assert.equal(d.sidebarSize, 32);
     assert.equal(d.align, "right");
-    const bad = parseDesk(JSON.stringify({ removedIcons: [], sidebarSize: 500, align: "up" }), ["/"]);
-    assert.equal(bad.removedIcons, undefined);
+    const bad = parseDesk(JSON.stringify({ sidebarSize: 500, align: "up" }), ["/"]);
     assert.equal(bad.sidebarSize, undefined);
     assert.equal(bad.align, undefined);
   });
@@ -381,21 +335,35 @@ describe("the stacked desktop", () => {
       return { at: { c, r, w: 3, h: 3 } };
     }
   });
-  it("puts the widgets one a row, the whole width, in reading order, then the icons a row after another", () => {
+  it("puts the widgets one a row, the whole width, in reading order", () => {
     const s = stackDesktop(
       [
         { id: "b", at: { c: 9, r: 0, w: 3, h: 4 } },
         { id: "a", at: { c: 2, r: 0, w: 3, h: 3 } },
         { id: "c", at: { c: 0, r: 5, w: 3, h: 1 } },
       ],
-      ["x", "y", "z"],
       12 + 2 * 92 + 88 + 12,
     );
     assert.deepEqual(s.widgets.a, { x: 20, y: 20, w: 12 + 2 * 92 + 88 + 12 - 40, h: 3 * 96 - 16 });
     assert.equal(s.widgets.b.y, 12 + 3 * 96 + 8);
     assert.equal(s.widgets.c.y, 12 + 7 * 96 + 8);
-    assert.deepEqual(s.icons, { x: { c: 0, r: 8 }, y: { c: 1, r: 8 }, z: { c: 2, r: 8 } });
-    assert.equal(s.rows, 9);
+    assert.equal(s.rows, 8);
+  });
+});
+
+describe("the sidebar's items", () => {
+  it("are all shown until some are left out, and never the home or Settings", () => {
+    assert.ok(navShown(undefined, "/files"));
+    assert.ok(!navShown(["/files"], "/files"));
+    assert.ok(navShown(["/files"], "/boards"));
+    for (const id of NAV_ALWAYS) assert.ok(navShown([id], id), id);
+  });
+  it("remember which are left out: known ones once each, VS Code too, never the home or Settings", () => {
+    const d = parseDesk(JSON.stringify({ hiddenNav: ["/files", "/files", "vscode", "/gone", 3, "/", "/settings", null] }), [...APPS, "/settings"]);
+    assert.deepEqual(d.hiddenNav, ["/files", "vscode"]);
+    assert.equal(parseDesk(JSON.stringify({ hiddenNav: [] }), APPS).hiddenNav, undefined);
+    assert.equal(parseDesk(JSON.stringify({ hiddenNav: "/files" }), APPS).hiddenNav, undefined);
+    assert.equal(parseDesk(JSON.stringify({ hiddenNav: { "/files": true } }), APPS).hiddenNav, undefined);
   });
 });
 
@@ -408,10 +376,12 @@ describe("the sidebar, in the desktop", () => {
     assert.equal(parseDesk(JSON.stringify({ dockSize: 2 }), ["/"]).sidebarSize, undefined);
   });
   it("gives each icon the room it grows to, and is classic's width at the default size", () => {
-    assert.equal(tileSlot(24), 24 * (1 + MAGNIFY.by));
-    assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224);
-    assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 60);
-    assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= SIDEBAR_ICON.max * (1 + MAGNIFY.by) + 12 + 10, "the list's padding, a scrollbar");
+    assert.equal(sideGlyph(SIDEBAR_ICON.default), 15, "classic's icon");
+    assert.equal(sideGlyph(SIDEBAR_ICON.max), 25);
+    assert.equal(tileSlot(24), Math.round(15 * (1 + MAGNIFY.by)));
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224, "classic's");
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 56, "classic's rail");
+    assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= sideGlyph(SIDEBAR_ICON.max) * (1 + MAGNIFY.by) + 12 + 10, "the list's padding, a scrollbar");
   });
 
   // ten rows of 32px, 24px icons, at rest
@@ -451,24 +421,6 @@ describe("the sidebar, in the desktop", () => {
       assert.ok(Math.abs(r.top - rows[i].top) < 1e-9);
       assert.ok(Math.abs(r.h - rows[i].h) < 1e-9);
     });
-  });
-});
-
-describe("a shorter window", () => {
-  it("fills the rows that show with the icons never placed, then goes on under them, never past the last column", () => {
-    const l = layoutIcons(["a", "b", "c", "d", "e", "f", "g"], undefined, 2, 9, [], 2);
-    assert.deepEqual(l, {
-      a: { c: 0, r: 0 },
-      b: { c: 0, r: 1 },
-      c: { c: 1, r: 0 },
-      d: { c: 1, r: 1 },
-      e: { c: 0, r: 2 },
-      f: { c: 1, r: 2 },
-      g: { c: 0, r: 3 },
-    });
-  });
-  it("keeps the icons placed by hand where they are, below what shows too", () => {
-    assert.deepEqual(layoutIcons(["a"], { a: { c: 1, r: 6 } }, 3, 7, [], 3).a, { c: 1, r: 6 });
   });
 });
 

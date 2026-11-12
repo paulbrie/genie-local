@@ -19,7 +19,7 @@ import {
 import { useSubject } from "subjecto/react";
 
 import { Lockup, Wisp } from "@/components/brand/wisp";
-import { DeskLaunchpadLink, DeskNavLink, DeskVsCodeLink, useMagnify } from "@/components/desktop/desktop";
+import { DeskNavLink, DeskVsCodeLink, useMagnify } from "@/components/desktop/desktop";
 import { useFrontPath } from "@/components/desktop/desktop-menu";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
@@ -28,14 +28,14 @@ import { NewProjectDialog } from "@/components/new-project-dialog";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import { SIDEBAR_ICON, sidebarWidth, tileSlot } from "@/lib/desktop";
+import { NAV_ALWAYS, navShown, SIDEBAR_ICON, sidebarWidth, tileSlot, VSCODE_NAV } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { type NavBadges, useWispState } from "@/lib/use-nav-badges";
-import { desk, openPathWindow, showDesktop } from "@/store/desktop";
+import { useNavBadges, useWispState } from "@/lib/use-nav-badges";
+import { desk, loadDesk, openPathWindow, setNavShown, showDesktop } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { openRun } from "@/store/runs";
@@ -57,20 +57,32 @@ const DeskSideContext = createContext<DeskSide | null>(null);
 /**
  * Collapsible left navigation rail. Holds every top-level route plus the global
  * theme + logout controls. Collapsed/expanded state persists in localStorage.
+ * Settings → General picks which items it shows (desk.hiddenNav, this browser's:
+ * the home and Settings always), and an item's right-click hides it too.
  *
- * The desktop interface has it too, under its top bar: the apps as tiles at the
+ * The desktop interface has it too, under its top bar: the same icons, at the
  * size Settings picks, swelling as the pointer passes, a dot by the ones open,
  * and lit what's in the window in front, or the Desktop (the home) when none is
- * (desktop.tsx's DeskNavLink, useMagnify). The Launchpad heads it.
+ * (desktop.tsx's DeskNavLink, useMagnify).
  */
-export function AppSidebar({ badges }: { badges: NavBadges }) {
+export function AppSidebar() {
   const pathname = usePathname();
   const desktop = useShellMode().mode === "desktop";
   const front = useFrontPath();
   // what's lit: the page (classic), the window in front (desktop)
   const current = desktop ? front : pathname;
-  const [{ sidebarSize }] = useSubject(desk);
+  const [{ sidebarSize, hiddenNav }] = useSubject(desk);
+  // (what this browser chose: read here too, so classic has it)
+  useEffect(() => loadDesk(NAV_HREFS), []);
   const size = sidebarSize ?? SIDEBAR_ICON.default;
+  // the items it shows, a group's children too (a group with none left is a plain item)
+  const nav = useMemo(
+    () =>
+      NAV.filter((i) => navShown(hiddenNav, i.href)).map((i) =>
+        i.children ? { ...i, children: i.children.filter((c) => navShown(hiddenNav, c.href)) } : i,
+      ),
+    [hiddenNav],
+  );
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen] = useSubject(mobileNav);
   const isMobile = useIsMobile();
@@ -78,7 +90,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
   // full-width off-canvas drawer, so it never uses the rail.
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
-  const { dockerStats, liveRuns, workingTerms, badgeOf } = badges;
+  const { dockerStats, liveRuns, workingTerms, badgeOf } = useNavBadges(pathname);
   const navRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const swell = useMagnify(desktop && !isMobile, size, navRef, listRef);
@@ -236,13 +248,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
         className={`scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5 ${desktop ? "overflow-x-hidden" : ""}`}
       >
         <div ref={listRef} className={desktop ? "flex flex-col gap-px transition-transform duration-100 ease-out" : "contents"}>
-        {desktop && (
-          <>
-            <DeskLaunchpadLink size={size} rail={rail} onClick={closeMobile} />
-            <div aria-hidden className="mx-1.5 my-1 h-px bg-border" />
-          </>
-        )}
-        {NAV.map((item) => {
+        {nav.map((item) => {
           if (item.href === "/projects")
             return (
               <ProjectsGroup
@@ -255,7 +261,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
                 onNavigate={closeMobile}
               />
             );
-          if (item.children)
+          if (item.children?.length)
             return (
               <NavGroup
                 key={item.href}
@@ -295,6 +301,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
                   )}
                 </DeskNavLink>
               ) : (
+              <NavMenu id={item.href} className="flex min-w-0 flex-1">
               <Link
                 href={item.href}
                 onClick={closeMobile}
@@ -327,6 +334,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
                     </span>
                   ))}
               </Link>
+              </NavMenu>
               )}
               {foldable && (
                 <button
@@ -464,9 +472,10 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
         {/* VS Code (code-server) — lives outside the /admin basePath, so a raw
             <a> (Next <Link> would prefix it with basePath). Gated by the admin
             session cookie in nginx. */}
-        {desktop ? (
+        {!navShown(hiddenNav, VSCODE_NAV) ? null : desktop ? (
           <DeskVsCodeLink size={size} rail={rail} onClick={closeMobile} />
         ) : (
+        <NavMenu id={VSCODE_NAV}>
         <a
           href="/vscode/"
           target="_blank"
@@ -485,6 +494,7 @@ export function AppSidebar({ badges }: { badges: NavBadges }) {
             </>
           )}
         </a>
+        </NavMenu>
         )}
         </div>
       </nav>
@@ -531,6 +541,25 @@ function fmtBytes(n: number): string {
 }
 
 /**
+ * An item's right-click menu in classic (desktop's is DeskNavLink's): `extra`, its own, then "Hide from sidebar",
+ * which Settings → General undoes. The home and Settings always show: no hiding them.
+ */
+function NavMenu({ id, extra, className, children }: { id: string; extra?: React.ReactNode; className?: string; children: React.ReactNode }) {
+  const hideable = !NAV_ALWAYS.includes(id);
+  if (!hideable && !extra) return children;
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-44">
+        {extra}
+        {extra && hideable && <ContextMenuSeparator />}
+        {hideable && <ContextMenuItem onClick={() => setNavShown(id, false)}>Hide from sidebar</ContextMenuItem>}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/**
  * A collapsible nav group: its row links to the group's own page (Team → the
  * Teams page), the chevron folds it, and its sub-items sit under it, the one
  * you're on highlighted. On the icon rail the sub-items show as icons.
@@ -556,7 +585,7 @@ function NavGroup({
   const row = (it: NavItem, sub: boolean) => {
     const on = isActive(it, pathname);
     const ItIcon = it.icon;
-    // (in the desktop, its apps are the sidebar's like any: tiles, a group's items set in a little)
+    // (in the desktop, its apps are the sidebar's like any: swelling, a group's items set in a little)
     if (side)
       return (
         <div key={it.href} className="flex">
@@ -571,8 +600,8 @@ function NavGroup({
         </div>
       );
     return (
+      <NavMenu key={it.href} id={it.href}>
       <Link
-        key={it.href}
         href={it.href}
         onClick={onNavigate}
         aria-current={on ? "page" : undefined}
@@ -588,6 +617,7 @@ function NavGroup({
         <ItIcon className={`shrink-0 ${sub && !rail ? "size-3.5" : "size-[15px]"}`} />
         {!rail && <span className="truncate">{it.label}</span>}
       </Link>
+      </NavMenu>
     );
   };
   if (rail)
@@ -618,6 +648,7 @@ function NavGroup({
     );
   return (
     <div>
+      <NavMenu id={item.href}>
       <div
         className={`flex items-center rounded-md transition-colors ${
           active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -643,6 +674,7 @@ function NavGroup({
           <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
         </button>
       </div>
+      </NavMenu>
       {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
     </div>
   );
@@ -702,17 +734,19 @@ function ProjectsGroup({
   const rowClass = (on: boolean) =>
     on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground";
 
-  // Right-click on Projects (the row, or its icon in the rail): New project.
+  // Right-click on Projects (the row, or its icon in the rail): New project, and hide it.
   const withMenu = (trigger: React.ReactNode) => (
     <>
-      <ContextMenu>
-        <ContextMenuTrigger>{trigger}</ContextMenuTrigger>
-        <ContextMenuContent className="w-44">
+      <NavMenu
+        id={item.href}
+        extra={
           <ContextMenuItem onClick={() => setCreating(true)}>
             <FolderPlus /> New project…
           </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+        }
+      >
+        {trigger}
+      </NavMenu>
       {creating && <NewProjectDialog onClose={() => setCreating(false)} onCreated={() => setReload((n) => n + 1)} />}
     </>
   );

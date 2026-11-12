@@ -2,43 +2,29 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownAZ, LayoutGrid, LogOut, Monitor, Moon, PanelLeft, RotateCcw, Settings, Sun, Undo2 } from "lucide-react";
+import { LogOut, Monitor, Moon, PanelLeft, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSubject } from "subjecto/react";
 
 import { Wisp } from "@/components/brand/wisp";
 import { useShellMode } from "@/components/desktop/shell-mode";
 import { WIDGET_ICON } from "@/components/desktop/widget-registry";
-import { DESK_APPS, NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
+import { NAV_FLAT, NAV_HREFS } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
-import { appOf, type CellRect, deskWidgets, iconGridSize, sortedIcons, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
+import { appOf, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { useWispState } from "@/lib/use-nav-badges";
 import {
   desk,
   deskView,
   frames,
   frontWin,
-  launchpad,
   MAIN_WIN,
   openAppWindow,
-  restoreIcons,
-  setIcons,
   setWidgetMode,
   showDesktop,
   showWindow,
   stack,
 } from "@/store/desktop";
-
-/** The icons in alphabetical order, flowing around the widgets (on the desktop as it's laid out: IconGrid's box). */
-export function sortIconsByName() {
-  const { widgets, removedIcons } = desk.getValue();
-  const box = document.querySelector<HTMLElement>("[data-desk-grid]");
-  const { cols, rows } = iconGridSize(box?.clientWidth ?? window.innerWidth, box?.clientHeight ?? window.innerHeight - 40);
-  const around = Object.values(deskWidgets(widgets, cols, rows)).filter((r): r is CellRect => !!r);
-  const labels = new Map<string, string>([...DESK_APPS.map((i) => [i.href, i.label] as const), [VSCODE_ICON, "VS Code"]]);
-  const shown = [...labels.keys()].filter((id) => !removedIcons?.includes(id));
-  setIcons(sortedIcons(shown, (id) => labels.get(id) ?? id, rows, around));
-}
 
 /**
  * Where the window in front is, in the desktop: its path (the page's own window's, or a frame's), or the home, "/",
@@ -64,9 +50,9 @@ export function openSettings(pathname: string, push: (href: string) => void) {
 /**
  * The top bar's left end in the desktop interface, where a desktop OS keeps its
  * menu: the wisp (the agents' state, as on the sidebar) opening the Spiridus
- * menu (Settings, show the desktop, Launchpad, sort, reset or put back the icons, show or hide the widgets, back to classic, theme, log
- * out), then
- * the name of the app in the window in front ("Desktop" when none is).
+ * menu (Settings, show the desktop, show or hide the widgets, back to classic,
+ * theme, log out), then the name of the app in the window in front ("Desktop"
+ * when none is).
  */
 export function DesktopMenu() {
   const pathname = usePathname();
@@ -75,7 +61,7 @@ export function DesktopMenu() {
   const { motion, title, wink } = useWispState();
   const { resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
-  const [{ widgets, removedIcons }] = useSubject(desk);
+  const [{ widgets }] = useSubject(desk);
   const rootRef = useRef<HTMLDivElement>(null);
   const front = useFrontPath();
   const app = NAV_FLAT.find((i) => i.href === appOf(front, NAV_HREFS));
@@ -141,25 +127,6 @@ export function DesktopMenu() {
           >
             <Monitor /> Show desktop
           </button>
-          <button type="button" role="menuitem" onClick={pick(() => launchpad.next(true))} className={row}>
-            <LayoutGrid /> Launchpad
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={pick(sortIconsByName)}
-            className={row}
-          >
-            <ArrowDownAZ /> Sort icons by name
-          </button>
-          <button type="button" role="menuitem" onClick={pick(() => setIcons(null))} className={row}>
-            <RotateCcw /> Reset icon order
-          </button>
-          {!!removedIcons?.length && (
-            <button type="button" role="menuitem" onClick={pick(restoreIcons)} className={row}>
-              <Undo2 /> Put back removed icons ({removedIcons.length})
-            </button>
-          )}
           {WIDGETS.map((id) => {
             const hidden = widgetMode(widgets, id) === "hidden";
             const Icon = WIDGET_ICON[id];

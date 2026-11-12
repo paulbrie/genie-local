@@ -10,7 +10,6 @@ import { rememberShellMode, ShellModeContext } from "@/components/desktop/shell-
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { isPaletteShortcut } from "@/lib/command-search";
 import type { ShellMode } from "@/lib/desktop";
-import { useNavBadges } from "@/lib/use-nav-badges";
 import { useScrollActivity } from "@/lib/use-scroll-activity";
 import { openTerminalsIn } from "@/store/terminals";
 
@@ -50,8 +49,6 @@ export function AppShell({
     [mode, pathname, router],
   );
   const desktop = mode === "desktop" && pathname !== "/login";
-  // the live counts on the sidebar's items and the desktop's icons, polled once for both
-  const badges = useNavBadges(pathname, !embedded);
   if (embedded) {
     return (
       <ShellModeContext value={ctx}>
@@ -68,7 +65,7 @@ export function AppShell({
             : "flex h-screen overflow-hidden"
         }
       >
-        <AppSidebar badges={badges} />
+        <AppSidebar />
         <div
           className={
             desktop
@@ -77,9 +74,7 @@ export function AppShell({
           }
         >
           <StatsToolbar />
-          <Workspace desktop={desktop} badgeOf={badges.badgeOf}>
-            {children}
-          </Workspace>
+          <Workspace desktop={desktop}>{children}</Workspace>
         </div>
       </div>
       <CommandPalette />

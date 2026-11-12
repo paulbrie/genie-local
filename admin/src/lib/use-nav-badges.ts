@@ -9,12 +9,12 @@ import { activeRuns } from "@/store/runs";
 import { liveTerminals } from "@/store/terminals";
 
 /**
- * The live counts the navigation shows on its items (the sidebar's pills, the
- * desktop's icon badges): running Chrome instances, running containers and
- * their memory, active agent runs, terminals at work. Polls off the login page,
- * afresh on each navigation, and only while `enabled` (one shell shows at a time).
+ * The live counts the sidebar shows on its items (its pills, in either
+ * interface): running Chrome instances, running containers and their memory,
+ * active agent runs, terminals at work. Polls off the login page, afresh on
+ * each navigation.
  */
-export function useNavBadges(pathname: string, enabled = true) {
+export function useNavBadges(pathname: string) {
   const [chromeCount, setChromeCount] = useState<number | null>(null);
   const [dockerStats, setDockerStats] = useState<{
     running: number;
@@ -31,7 +31,7 @@ export function useNavBadges(pathname: string, enabled = true) {
 
   // Live count of running Chrome instances, shown as a badge on the nav item.
   useEffect(() => {
-    if (!enabled || pathname === "/login") return;
+    if (pathname === "/login") return;
     let active = true;
     const load = async () => {
       try {
@@ -51,12 +51,12 @@ export function useNavBadges(pathname: string, enabled = true) {
       active = false;
       clearInterval(id);
     };
-  }, [pathname, enabled]);
+  }, [pathname]);
 
   // Live running-container count + memory, shown as a badge on the Docker item.
   // `docker stats` is slower than a plain list, so this polls on its own timer.
   useEffect(() => {
-    if (!enabled || pathname === "/login") return;
+    if (pathname === "/login") return;
     let active = true;
     const load = async () => {
       try {
@@ -83,7 +83,7 @@ export function useNavBadges(pathname: string, enabled = true) {
       active = false;
       clearInterval(id);
     };
-  }, [pathname, enabled]);
+  }, [pathname]);
 
   /** The numeric count an item shows, or null. */
   const badgeOf = (href: string): number | null =>
@@ -99,9 +99,6 @@ export function useNavBadges(pathname: string, enabled = true) {
 
   return { dockerStats, liveRuns, workingTerms, badgeOf };
 }
-
-/** What useNavBadges gives (app-shell.tsx polls once, for the sidebar and the desktop's icons). */
-export type NavBadges = ReturnType<typeof useNavBadges>;
 
 /**
  * The wisp's state (brand motion): looking for you while an agent waits on

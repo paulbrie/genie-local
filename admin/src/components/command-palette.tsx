@@ -4,7 +4,6 @@ import {
   ArrowRight,
   Code2,
   FolderKanban,
-  LayoutGrid,
   Monitor,
   MoonStar,
   PanelLeft,
@@ -27,7 +26,7 @@ import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { PROJECT_TAB_LABELS, PROJECT_TABS } from "@/lib/project-tabs";
 import { cn } from "@/lib/utils";
 import { Z_COMMAND_PALETTE } from "@/lib/z-layers";
-import { launchpad, showDesktop, showWindow } from "@/store/desktop";
+import { showDesktop, showWindow } from "@/store/desktop";
 import { liveTerminals, openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 
@@ -222,19 +221,6 @@ function Palette() {
         },
       },
     );
-    if (desktop) {
-      out.push({
-        id: "action:launchpad",
-        kind: "action",
-        label: "Show every app (Launchpad)",
-        keywords: "launchpad apps all",
-        icon: LayoutGrid,
-        run: () => {
-          close();
-          launchpad.next(true);
-        },
-      });
-    }
     return out;
   }, [projects, terminals, mode, setMode, resolvedTheme, setTheme, router]);
 

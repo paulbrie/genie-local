@@ -1,15 +1,14 @@
 "use client";
 
-import { Code2, FolderGit2, LayoutGrid } from "lucide-react";
-
 import type { NavItem } from "@/components/nav-items";
 import { cn } from "@/lib/utils";
 
 /**
- * Each app's tile on the desktop: a squircle in its own gradient (lit from the
- * top left), its glyph in white or, on the light tiles, in a deep tone of the
- * tile. The hues go round the wheel so neighbours tell apart; peach is left out
- * (it's Claude's, and Claude's own tile is its terracotta).
+ * Each app's tile in the desktop (a window's title bar, a widget's header): a
+ * squircle in its own gradient (lit from the top left), its glyph in white or,
+ * on the light tiles, in a deep tone of the tile. The hues go round the wheel so
+ * neighbours tell apart; peach is left out (it's Claude's, and Claude's own tile
+ * is its terracotta).
  */
 type Tint = {
   from: string;
@@ -48,38 +47,20 @@ const TINTS: Record<string, Tint> = {
   "/agents3d": { from: "#f472b6", to: "#6d28d9" },
   "/tasks": { from: "#fda4af", to: "#e11d48" },
   "/settings": { from: "#a1a1aa", to: "#3f3f46" },
-  "/vscode": { from: "#4fb3ff", to: "#0065a9" },
-  launchpad: { from: "#e4e4e7", to: "#a1a1aa", glyph: "#3f3f46", light: true },
 };
 
 const FALLBACK: Tint = { from: "#a1a1aa", to: "#52525b" };
-
-/** A project's tile colour, steady per name (the folder hues of the palette above). */
-const PROJECT_TINTS: Tint[] = ["/projects", "/files", "/db", "/agents", "/diagrams", "/tasks", "/teams", "/browsers"].map(
-  (k) => TINTS[k],
-);
-function projectTint(slug: string): Tint {
-  let h = 0;
-  for (const c of slug) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return PROJECT_TINTS[h % PROJECT_TINTS.length];
-}
 
 /** The tile itself; `glyph` is a lucide icon. Sizes in px. */
 export function Tile({
   tint,
   glyph: Glyph,
   size,
-  badge,
-  dot,
   className,
 }: {
   tint: Tint;
   glyph: NavItem["icon"];
   size: number;
-  /** A count in the corner (a notification badge). */
-  badge?: number | string | null;
-  /** A small green light in the corner: running. */
-  dot?: boolean;
   className?: string;
 }) {
   return (
@@ -101,36 +82,11 @@ export function Tile({
         className={cn("relative", tint.light ? "drop-shadow-[0_1px_0_rgb(255_255_255/0.55)]" : "drop-shadow-[0_1px_1px_rgb(0_0_0/0.25)]")}
         style={{ width: size * 0.5, height: size * 0.5, color: tint.glyph ?? "#ffffff" }}
       />
-      {badge != null && badge !== 0 && (
-        <span
-          className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] leading-none font-semibold text-white tabular-nums shadow-sm ring-2 ring-white/70 dark:ring-black/40"
-        >
-          {badge}
-        </span>
-      )}
-      {dot && (
-        <span className="absolute -right-0.5 -bottom-0.5 size-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-zinc-900" />
-      )}
     </span>
   );
 }
 
 /** An app's tile. */
-export function AppIcon({ item, size = 56, badge }: { item: Pick<NavItem, "href" | "icon">; size?: number; badge?: number | string | null }) {
-  return <Tile tint={TINTS[item.href] ?? FALLBACK} glyph={item.icon} size={size} badge={badge} />;
-}
-
-/** VS Code's tile (it opens outside the admin). */
-export function VsCodeIcon({ size = 56 }: { size?: number }) {
-  return <Tile tint={TINTS["/vscode"]} glyph={Code2} size={size} />;
-}
-
-/** The Launchpad's tile: every app. */
-export function LaunchpadIcon({ size = 56 }: { size?: number }) {
-  return <Tile tint={TINTS.launchpad} glyph={LayoutGrid} size={size} />;
-}
-
-/** A project's tile: a folder in the project's colour, lit when one of its apps runs. */
-export function ProjectIcon({ slug, size = 56, running }: { slug: string; size?: number; running?: boolean }) {
-  return <Tile tint={projectTint(slug)} glyph={FolderGit2} size={size} dot={running} />;
+export function AppIcon({ item, size = 56 }: { item: Pick<NavItem, "href" | "icon">; size?: number }) {
+  return <Tile tint={TINTS[item.href] ?? FALLBACK} glyph={item.icon} size={size} />;
 }

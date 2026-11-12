@@ -5,10 +5,10 @@ import { Subject } from "subjecto";
 import { BASE_PATH } from "@/lib/config";
 import {
   appOf,
-  type Cell,
   type CellRect,
   type DeskAlign,
   type DeskSaved,
+  NAV_ALWAYS,
   parseDesk,
   SIDEBAR_ICON,
   type WidgetId,
@@ -24,12 +24,11 @@ import {
  * sidebar, reopened at the path you left it on), so switching apps feels like
  * switching windows. Its home ("/") is the desktop itself: no page in a window.
  *
- * `desk`      — each app window's place, the desktop icons' arrangement (once
- *               moved) and the widgets', the sidebar's size: localStorage.
+ * `desk`      — each app window's place, the widgets', the sidebar's size and
+ *               the items it leaves out (classic's too): localStorage.
  * `openApps`  — the apps open in this tab, in the order opened: sessionStorage.
  * `deskView`  — the window minimized (kept mounted) or closed (the page unmounted,
  *               the bare desktop showing); not persisted: a reload shows the page.
- * `launchpad` — the all-apps overlay.
  * `frames`    — more windows, each another page of the app in a frame (FrameWindows
  *               in desktop.tsx): sessionStorage, so a reload brings them back.
  * `stack`     — every window's id, back to front ("main" is the page's own window).
@@ -45,7 +44,6 @@ const OPEN_KEY = "admin.desktop.open";
 export const desk = new Subject<DeskSaved>({ geoms: {} }, { name: "desk" });
 export const openApps = new Subject<OpenApp[]>([], { name: "desk.open" });
 export const deskView = new Subject<DeskView>({ hidden: null }, { name: "desk.view" });
-export const launchpad = new Subject<boolean>(false, { name: "desk.launchpad" });
 
 /** A window other than the page's own: another page in a frame. */
 export type FrameWin = { id: string; app: string | null; path: string; geom?: WinGeom; hidden?: boolean };
@@ -299,7 +297,7 @@ export function setWidgetView(id: WidgetId, key: string, value: string) {
   patchWidget(id, { views: { ...desk.getValue().widgets?.[id]?.views, [key]: value } });
 }
 
-/** Where a widget is on the icon grid, and how big (`show`: and on the desktop, if it was off it). */
+/** Where a widget is on the grid, and how big (`show`: and on the desktop, if it was off it). */
 export function setWidgetAt(id: WidgetId, at: CellRect, show = false) {
   patchWidget(id, show ? { at, mode: WIDGETS_OFF.has(id) ? "open" : undefined } : { at });
 }
@@ -335,16 +333,20 @@ export function openPathWindow(path: string, mainPath: string, apps: readonly st
   return true;
 }
 
-/** Take an icon (an app's href, or VSCODE_ICON) off the desktop, or put it back (at its old spot, when that's free). */
-export function setOnDesktop(id: string, on: boolean) {
-  const { removedIcons, ...rest } = desk.getValue();
-  const next = on ? (removedIcons ?? []).filter((x) => x !== id) : [...new Set([...(removedIcons ?? []), id])];
-  save(next.length ? { ...rest, removedIcons: next } : rest);
+/**
+ * Show a sidebar item (an app's href, or VSCODE_NAV) or leave it out, in both interfaces (Settings → General, or its
+ * right-click menu); the home and Settings always show. Its window, if it has one, stays open.
+ */
+export function setNavShown(id: string, on: boolean) {
+  if (NAV_ALWAYS.includes(id)) return;
+  const { hiddenNav, ...rest } = desk.getValue();
+  const next = on ? (hiddenNav ?? []).filter((x) => x !== id) : [...new Set([...(hiddenNav ?? []), id])];
+  save(next.length ? { ...rest, hiddenNav: next } : rest);
 }
 
-/** Every icon taken off the desktop back on it. */
-export function restoreIcons() {
-  const { removedIcons: _old, ...rest } = desk.getValue();
+/** Every sidebar item back in it. */
+export function showAllNav() {
+  const { hiddenNav: _old, ...rest } = desk.getValue();
   void _old;
   save(rest);
 }
@@ -357,30 +359,19 @@ export function setSidebarSize(px: number) {
   save(size === SIDEBAR_ICON.default ? rest : { ...rest, sidebarSize: size });
 }
 
-/** The icons and widgets, as one arrangement, against the left, centred or against the right. */
+/** The widgets, as one arrangement, against the left, centred or against the right. */
 export function setAlign(align: DeskAlign) {
   const { align: _old, ...rest } = desk.getValue();
   void _old;
   save(align === "left" ? rest : { ...rest, align });
 }
 
-/**
- * The icons' and the widgets' new places at once (a drop, or a widget added, that moves the whole arrangement over);
- * `show`: a widget that goes on the desktop too.
- */
-export function setArrangement(icons: Record<string, Cell>, widgets: Partial<Record<WidgetId, CellRect>>, show?: WidgetId) {
+/** The widgets' new places at once (a drop that moves the whole arrangement over, to keep it on the grid). */
+export function setArrangement(widgets: Partial<Record<WidgetId, CellRect>>) {
   const cur = desk.getValue();
   const next = { ...cur.widgets };
-  for (const [id, at] of Object.entries(widgets) as [WidgetId, CellRect][])
-    next[id] = { ...next[id], at, ...(id === show ? { mode: WIDGETS_OFF.has(id) ? ("open" as const) : undefined } : {}) };
-  save({ ...cur, icons, widgets: next });
-}
-
-/** The desktop icons' arrangement, placed by hand (null: back to the default order). */
-export function setIcons(icons: Record<string, Cell> | null) {
-  const { icons: _old, ...rest } = desk.getValue();
-  void _old;
-  save(icons ? { ...rest, icons } : rest);
+  for (const [id, at] of Object.entries(widgets) as [WidgetId, CellRect][]) next[id] = { ...next[id], at };
+  save({ ...cur, widgets: next });
 }
 
 export function setGeom(app: string, g: WinGeom) {

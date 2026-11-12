@@ -18,7 +18,7 @@ import { desk, openAppWindow, openPathWindow, setWidgetMode, setWidgetView, show
 /**
  * A widget's header, the grip its frame is dragged by: its icon and name, what matters now, its count, then fold and
  * hide (those two only while the pointer is over the widget, or a key's focus is on them: they keep their room, so
- * nothing moves when they show). Folded, the widget is one row of icons tall and this is all of it, as a glance: the
+ * nothing moves when they show). Folded, the widget is one row of the grid tall and this is all of it, as a glance: the
  * icon on a tile, the name over what matters, the count larger; a double-click unfolds it. The app it's a glance at,
  * when there's one, is its own icon, always there.
  */

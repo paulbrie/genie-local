@@ -53,16 +53,14 @@ export const MIN_WIN = { w: 380, h: 240 };
 const GRIP = 96;
 /** The gap around a maximized window. */
 const MAX_GAP = 8;
-/** Icon columns left uncovered by a new window on a wide screen. */
-const ICON_COLUMNS_W = 204;
 
 // (the workspace is the area right of the sidebar and under the top bar: nothing in it is kept clear for either)
 
-/** A first window: right of two columns of icons on a wide screen, filling the rest down to a small gap. */
+/** A first window: the workspace, a small margin around it. */
 export function defaultGeom(W: number, H: number): Rect {
-  const x = W >= 1280 ? ICON_COLUMNS_W : Math.min(24, Math.round(W * 0.03));
+  const x = Math.min(24, Math.round(W * 0.03));
   const y = 12;
-  return clampRect({ x, y, w: W - x - 16, h: H - 2 * y }, W, H);
+  return clampRect({ x, y, w: W - 2 * x, h: H - 2 * y }, W, H);
 }
 
 /** The maximized rect: the whole workspace, a small gap around it. */
@@ -122,23 +120,42 @@ export function unmaximizeUnder(restored: Rect, max: Rect, px: number): Rect {
 
 /* -------------------------- the sidebar, in the desktop -------------------------- */
 
-/** The sidebar's app icons in the desktop interface, in px: by default, and how small or big Settings makes them. */
+/**
+ * The sidebar's rows in the desktop interface, in px (each as tall as this, plus its padding): by default, and how
+ * small or big Settings makes them.
+ */
 export const SIDEBAR_ICON = { min: 16, max: 40, default: 24 } as const;
+
+/** VS Code (code-server, outside the app's pages): its key among the sidebar's items. */
+export const VSCODE_NAV = "vscode";
+
+/** The sidebar's items never left out of it (Settings → General → Sidebar): the home, and Settings, where the rest come back. */
+export const NAV_ALWAYS: readonly string[] = ["/", "/settings"];
+
+/** Whether the sidebar shows item `id` (an app's href, or VSCODE_NAV), in either interface, with `hidden` left out. */
+export function navShown(hidden: readonly string[] | undefined, id: string): boolean {
+  return NAV_ALWAYS.includes(id) || !hidden?.includes(id);
+}
 
 /** How much the icon under the pointer grows (by half), and how far from its centre the swell reaches (px). */
 export const MAGNIFY = { by: 0.5, reach: 120 } as const;
 
-/** The room an icon of `size` px has in the sidebar: as wide as it grows, so the names beside it never move. */
+/** The icon on a row of `size` px: classic's glyph, at classic's 15 px by default. */
+export function sideGlyph(size: number): number {
+  return Math.round((size * 15) / SIDEBAR_ICON.default);
+}
+
+/** The room an icon on a row of `size` px has: as wide as its glyph grows, so the names beside it never move. */
 export function tileSlot(size: number): number {
-  return Math.round(size * (1 + MAGNIFY.by));
+  return Math.round(sideGlyph(size) * (1 + MAGNIFY.by));
 }
 
 /**
- * The sidebar's width with icons of `size` px: with the names (classic's at the default), or an icon rail, each icon's
- * room plus the list's padding, its border and a thin scrollbar's width.
+ * The sidebar's width with rows of `size` px, with the names or as an icon rail (classic's 224 and 56 px at the
+ * default): each icon's room plus the list's padding, its border and a thin scrollbar's width.
  */
 export function sidebarWidth(size: number, rail: boolean): number {
-  return tileSlot(size) + (rail ? 24 : 188);
+  return tileSlot(size) + (rail ? 33 : 201);
 }
 
 /**
@@ -176,22 +193,20 @@ export function atRest(drawn: readonly { top: number; h: number; grow: number }[
 export type DeskSaved = {
   /** Each app window's place, by app href. */
   geoms: Record<string, WinGeom>;
-  /** Where each desktop icon sits, by app href (and VSCODE_ICON), once placed by hand; absent: the default order. */
-  icons?: Record<string, Cell>;
   /** The widgets on the wallpaper, by id: where each is and how big (absent: its default spot), folded or hidden (absent: open). */
   widgets?: Partial<Record<WidgetId, WidgetSaved>>;
-  /** Icons taken off the desktop (by app href, and VSCODE_ICON). */
-  removedIcons?: string[];
   /** The sidebar's icon size in the desktop, in px (absent: SIDEBAR_ICON.default). */
   sidebarSize?: number;
-  /** Where the icons and widgets sit across the desktop, as one arrangement: absent is against the left. */
+  /** Where the widgets sit across the desktop, as one arrangement: absent is against the left. */
   align?: "center" | "right";
+  /** The sidebar's items left out of it, in both interfaces (by app href, and VSCODE_NAV; never NAV_ALWAYS's). */
+  hiddenNav?: string[];
 };
 
 export type DeskAlign = "left" | "center" | "right";
 
 /**
- * The desktop's widgets, among the icons: the terminals, the projects, the disk, the memory, the processes and Docker, and the ones that start off
+ * The desktop's widgets: the terminals, the projects, the disk, the memory, the processes and Docker, and the ones that start off
  * (WIDGETS_OFF: a right-click on the desktop adds them): the services' health, the production errors, the repos'
  * state, the load, the tickets and the sign-ins.
  */
@@ -241,8 +256,9 @@ export function widgetMode(saved: DeskSaved["widgets"], id: WidgetId): WidgetMod
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
 /**
- * A stored desktop, kept to the apps that still exist; anything unreadable gives the defaults. (What the dock kept, its
- * apps, is let go; its size carries over to the sidebar's, at the same place in the range: half.)
+ * A stored desktop, kept to the apps that still exist; anything unreadable gives the defaults. (What's gone is let go:
+ * the dock's apps, the desktop's icons and the ones taken off it; the dock's size carries over to the sidebar's, at
+ * the same place in the range: half.)
  */
 export function parseDesk(raw: string | null, apps: readonly string[]): DeskSaved {
   const known = new Set(apps);
@@ -255,20 +271,13 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   }
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   const s = v as Record<string, unknown>;
-  if (s.icons && typeof s.icons === "object" && !Array.isArray(s.icons)) {
-    const icons: Record<string, Cell> = {};
-    for (const [id, cell] of Object.entries(s.icons as Record<string, unknown>)) {
-      if ((!known.has(id) && id !== VSCODE_ICON) || !cell || typeof cell !== "object") continue;
-      const { c, r } = cell as Record<string, unknown>;
-      if (Number.isInteger(c) && Number.isInteger(r) && (c as number) >= 0 && (r as number) >= 0) icons[id] = { c: c as number, r: r as number };
-    }
-    if (Object.keys(icons).length) out.icons = icons;
-  }
   const widgets = parseWidgets(s);
   if (widgets) out.widgets = widgets;
-  if (Array.isArray(s.removedIcons)) {
-    const removed = [...new Set(s.removedIcons.filter((id): id is string => typeof id === "string" && (known.has(id) || id === VSCODE_ICON)))];
-    if (removed.length) out.removedIcons = removed;
+  if (Array.isArray(s.hiddenNav)) {
+    const hidden = [
+      ...new Set(s.hiddenNav.filter((id): id is string => typeof id === "string" && (known.has(id) || id === VSCODE_NAV) && !NAV_ALWAYS.includes(id))),
+    ];
+    if (hidden.length) out.hiddenNav = hidden;
   }
   const side = s.sidebarSize ?? (Number.isInteger(s.dockSize) ? Math.round((s.dockSize as number) / 2) : undefined);
   if (Number.isInteger(side) && (side as number) >= SIDEBAR_ICON.min && (side as number) <= SIDEBAR_ICON.max) out.sidebarSize = side as number;
@@ -283,127 +292,28 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   return out;
 }
 
-/* ---------------------------- the desktop's icons --------------------------- */
-
-/** A spot on the desktop's icon grid: column c (from the left), row r (from the top). */
-export type Cell = { c: number; r: number };
-
-/** VS Code's desktop icon (code-server, outside the app's pages): its key among the icons. */
-export const VSCODE_ICON = "vscode";
-
-/** The icon grid: each spot's size (an 88px column and a 4px gap; a 96px row), and its inset from the edges. */
-export const ICON_GRID = { x: 92, y: 96, pad: 12 } as const;
-
-/** How many columns and rows of icons fit in a desktop of W × H (inset from every edge). */
-export function iconGridSize(W: number, H: number): { cols: number; rows: number } {
-  return {
-    cols: Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x)),
-    rows: Math.max(1, Math.floor((H - ICON_GRID.pad * 2) / ICON_GRID.y)),
-  };
-}
-
-const cellKey = (c: Cell) => `${c.c},${c.r}`;
-
-/** Every cell the spans cover, by cellKey. */
-function covered(spans: readonly CellRect[]): Set<string> {
-  const out = new Set<string>();
-  for (const s of spans) for (let c = s.c; c < s.c + s.w; c++) for (let r = s.r; r < s.r + s.h; r++) out.add(`${c},${r}`);
-  return out;
-}
-
-/**
- * Where every icon goes on a grid of `cols` × `rows`, off the cells `blocked` covers (the widgets'): its saved spot
- * when that's on the grid and free; a saved one that no longer fits (a smaller window, a widget over it) the nearest
- * free spot to it; one never placed the first free spot in the default order: down the first column, then the next,
- * `flowRows` deep (the rows the window shows; the grid's own by default), and when those are full, row after row
- * under them (the desktop scrolls), never past the last column.
- */
-export function layoutIcons(
-  ids: readonly string[],
-  saved: Record<string, Cell> | undefined,
-  cols: number,
-  rows: number,
-  blocked: readonly CellRect[] = [],
-  flowRows: number = rows,
-): Record<string, Cell> {
-  const out: Record<string, Cell> = {};
-  const taken = covered(blocked);
-  const put = (id: string, c: Cell) => {
-    out[id] = c;
-    taken.add(cellKey(c));
-  };
-  const fits = (c: Cell) => c.c >= 0 && c.r >= 0 && c.c < cols && c.r < rows;
-  // 1. saved spots that are on the grid and not already someone's
-  for (const id of ids) {
-    const c = saved?.[id];
-    if (c && fits(c) && !taken.has(cellKey(c))) put(id, c);
-  }
-  // 2. saved ones that don't fit any more: the nearest free spot
-  for (const id of ids) {
-    const want = saved?.[id];
-    if (out[id] || !want) continue;
-    const target = { c: Math.min(Math.max(want.c, 0), cols - 1), r: Math.min(Math.max(want.r, 0), rows - 1) };
-    let best: Cell | null = null;
-    let bestD = Infinity;
-    for (let c = 0; c < cols; c++)
-      for (let r = 0; r < rows; r++) {
-        if (taken.has(`${c},${r}`)) continue;
-        const d = (c - target.c) ** 2 + (r - target.r) ** 2;
-        if (d < bestD) {
-          bestD = d;
-          best = { c, r };
-        }
-      }
-    if (best) put(id, best);
-  }
-  // 3. the rest (never placed, or no room left): the first free spot, column by column in the rows that show, then
-  // row by row under them
-  const deep = Math.max(1, Math.min(flowRows, rows));
-  const nth = (n: number): Cell => (n < cols * deep ? { c: Math.floor(n / deep), r: n % deep } : { c: (n - cols * deep) % cols, r: deep + Math.floor((n - cols * deep) / cols) });
-  let next = 0;
-  for (const id of ids) {
-    if (out[id]) continue;
-    for (;; next++) {
-      const c = nth(next);
-      if (!taken.has(cellKey(c))) {
-        put(id, c);
-        break;
-      }
-    }
-  }
-  return out;
-}
-
-/** `id` dropped on `to`: it goes there, and whatever was there takes its old spot. The whole arrangement, so it holds. */
-export function moveIcon(layout: Record<string, Cell>, id: string, to: Cell): Record<string, Cell> {
-  const from = layout[id];
-  if (!from || (from.c === to.c && from.r === to.r)) return layout;
-  const out = { ...layout, [id]: { c: to.c, r: to.r } };
-  const other = Object.keys(layout).find((k) => k !== id && layout[k].c === to.c && layout[k].r === to.r);
-  if (other) out[other] = { c: from.c, r: from.r };
-  return out;
-}
-
-/** The icons in alphabetical order (by `labelOf`), in the default flow around the `blocked` cells: "Sort by name". */
-export function sortedIcons(ids: readonly string[], labelOf: (id: string) => string, rows: number, blocked: readonly CellRect[] = []): Record<string, Cell> {
-  const order = [...ids].sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
-  const taken = covered(blocked);
-  const out: Record<string, Cell> = {};
-  let next = 0;
-  for (const id of order) {
-    while (taken.has(`${Math.floor(next / rows)},${next % rows}`)) next++;
-    out[id] = { c: Math.floor(next / rows), r: next % rows };
-    next++;
-  }
-  return out;
-}
-
 /* ------------------------------- the widgets ------------------------------- */
 
-/** A span of the icon grid: from column c, row r, w columns wide and h rows tall. */
+/** A spot on the desktop's grid: column c (from the left), row r (from the top). */
+export type Cell = { c: number; r: number };
+/** A span of the grid: from column c, row r, w columns wide and h rows tall. */
 export type CellRect = Cell & { w: number; h: number };
 
-/** The smallest a widget gets: three icons by three. */
+/**
+ * The grid the widgets snap to: each cell's size (an 88px column and a 4px gap, a 96px row: the icons' that were, so
+ * the spans saved then still hold), and its inset from the edges.
+ */
+export const GRID = { x: 92, y: 96, pad: 12 } as const;
+
+/** How many columns and rows of the grid fit in a desktop of W × H (inset from every edge; the last column's gap needn't). */
+export function gridSize(W: number, H: number): { cols: number; rows: number } {
+  return {
+    cols: Math.max(1, Math.floor((W - GRID.pad * 2 + (GRID.x - 88)) / GRID.x)),
+    rows: Math.max(1, Math.floor((H - GRID.pad * 2) / GRID.y)),
+  };
+}
+
+/** The smallest a widget gets: three cells by three. */
 export const WIDGET_MIN = { w: 3, h: 3 } as const;
 
 /** The room a widget leaves inside its span on every side: two side by side are twice that apart. */
@@ -414,10 +324,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
 /** Where a widget on a span of cells is on the desktop, in pixels (inset from the span's edges). */
 export function cellsRect(a: CellRect): Rect {
   return {
-    x: ICON_GRID.pad + a.c * ICON_GRID.x + WIDGET_INSET,
-    y: ICON_GRID.pad + a.r * ICON_GRID.y + WIDGET_INSET,
-    w: a.w * ICON_GRID.x - 2 * WIDGET_INSET,
-    h: a.h * ICON_GRID.y - 2 * WIDGET_INSET,
+    x: GRID.pad + a.c * GRID.x + WIDGET_INSET,
+    y: GRID.pad + a.r * GRID.y + WIDGET_INSET,
+    w: a.w * GRID.x - 2 * WIDGET_INSET,
+    h: a.h * GRID.y - 2 * WIDGET_INSET,
   };
 }
 
@@ -492,7 +402,7 @@ export function widgetWants(saved: DeskSaved["widgets"], cols: number): { id: Wi
 
 /**
  * The widgets that show (not hidden), placed on a grid of `cols` × `rows` (placeWidgets). A folded one takes only
- * the row its header is on, so the icons can have the rest.
+ * the row its header is on, so the others can have the rest.
  */
 export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: number): Partial<Record<WidgetId, CellRect>> {
   return placeWidgets(widgetWants(saved, cols), cols, rows);
@@ -502,7 +412,7 @@ export function deskWidgets(saved: DeskSaved["widgets"], cols: number, rows: num
  * Whether the widgets put by hand fit the desktop's width: from the first one's left edge to the last one's right
  * edge, no more columns than it has; and the ones still at their default (counted from the right edge) have room
  * there. When not (a narrower window), the desktop is stacked. Only the width counts: a widget on another's spot (a
- * new one, at its default) just finds the nearest free one, and a shorter window scrolls; the icons always find room.
+ * new one, at its default) just finds the nearest free one, and a shorter window scrolls.
  */
 export function arrangementFits(wants: readonly { at: CellRect; custom?: boolean }[], cols: number): boolean {
   if (wants.some((w) => !w.custom && w.at.c < 0)) return false;
@@ -514,27 +424,20 @@ export function arrangementFits(wants: readonly { at: CellRect; custom?: boolean
 }
 
 /**
- * The stacked desktop (a window too narrow for the arrangement): the widgets one a row, the whole width, in reading
- * order (top to bottom, then left to right, as they were placed), each as tall as it was (in rows); then the icons,
- * a row after another, under them. Returns each widget's rect (in pixels, inset as cellsRect's), each icon's cell,
- * and the rows it all takes.
+ * The stacked desktop (a window too narrow for the arrangement, a phone's): the widgets one a row, the whole width, in
+ * reading order (top to bottom, then left to right, as they were placed), each as tall as it was (in rows). Returns
+ * each widget's rect (in pixels, inset as cellsRect's) and the rows they take.
  */
-export function stackDesktop(
-  wants: readonly { id: string; at: CellRect }[],
-  iconIds: readonly string[],
-  W: number,
-): { widgets: Record<string, Rect>; icons: Record<string, Cell>; rows: number } {
+export function stackDesktop(wants: readonly { id: string; at: CellRect }[], W: number): { widgets: Record<string, Rect>; rows: number } {
   const order = [...wants].sort((a, b) => a.at.r - b.at.r || a.at.c - b.at.c);
   const widgets: Record<string, Rect> = {};
   let row = 0;
   for (const w of order) {
     const r = cellsRect({ c: 0, r: row, w: 1, h: w.at.h });
-    widgets[w.id] = { ...r, w: Math.max(0, W - 2 * ICON_GRID.pad - 2 * (r.x - ICON_GRID.pad)) };
+    widgets[w.id] = { ...r, w: Math.max(0, W - 2 * GRID.pad - 2 * (r.x - GRID.pad)) };
     row += w.at.h;
   }
-  const perRow = Math.max(1, Math.floor((W - ICON_GRID.pad * 2 + (ICON_GRID.x - 88)) / ICON_GRID.x));
-  const icons = Object.fromEntries(iconIds.map((id, i) => [id, { c: i % perRow, r: row + Math.floor(i / perRow) }]));
-  return { widgets, icons, rows: row + Math.ceil(iconIds.length / perRow) };
+  return { widgets, rows: row };
 }
 
 /**
@@ -554,16 +457,16 @@ function colsOf(spans: readonly CellRect[]): { min: number; max: number } | null
 }
 
 /**
- * How far right (px) to draw the arrangement (the icons and widgets, `spans`) in a desktop W wide: centred, or with
- * its last column against the right edge (as far as the left one is from the left); left, where it is.
+ * How far right (px) to draw the arrangement (the widgets' spans) in a desktop W wide: centred, or with its last
+ * widget against the right edge (as far from it as the first one is from the left, against the left); left, where it is.
  */
 export function alignShift(align: DeskAlign, spans: readonly CellRect[], W: number): number {
   const cols = colsOf(spans);
   if (align === "left" || !cols) return 0;
-  const left = ICON_GRID.pad + cols.min * ICON_GRID.x;
-  // (an icon is 84 wide in its 92px column, a widget inset as much: what shows ends 8px short of the last column)
-  const right = ICON_GRID.pad + (cols.max + 1) * ICON_GRID.x - (ICON_GRID.x - 84);
-  return Math.round(align === "right" ? W - ICON_GRID.pad - right : (W - (right - left)) / 2 - left);
+  // (what shows: a widget is inset in its span)
+  const left = GRID.pad + cols.min * GRID.x + WIDGET_INSET;
+  const right = GRID.pad + (cols.max + 1) * GRID.x - WIDGET_INSET;
+  return Math.round(align === "right" ? W - GRID.pad - WIDGET_INSET - right : (W - (right - left)) / 2 - left);
 }
 
 /**
@@ -573,8 +476,9 @@ export function alignShift(align: DeskAlign, spans: readonly CellRect[], W: numb
  */
 export function dropRange(others: readonly CellRect[], w: number, cols: number, shift: number, W: number): { lo: number; hi: number } {
   const span = colsOf(others);
-  const lo = Math.ceil(-(ICON_GRID.pad + shift) / ICON_GRID.x) || 0; // (not -0)
-  const hi = Math.floor((W - ICON_GRID.pad - shift + (ICON_GRID.x - 84)) / ICON_GRID.x) - w;
+  const lo = Math.ceil(-(GRID.pad + shift) / GRID.x) || 0; // (not -0)
+  // (a span's last column shows up to its widget's inset short of its end)
+  const hi = Math.floor((W - GRID.pad - shift + WIDGET_INSET) / GRID.x) - w;
   return span
     ? { lo: Math.max(lo, span.max - cols + 1), hi: Math.min(hi, span.min + cols - w) }
     : { lo: Math.max(lo, 0), hi: Math.min(hi, cols - w) };

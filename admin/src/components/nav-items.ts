@@ -28,9 +28,9 @@ import {
 } from "lucide-react";
 
 /**
- * The app's areas, as the classic sidebar (app-sidebar.tsx) lists them and the
- * desktop (components/desktop) lays them out as icons. One list, so a new page
- * shows up in both.
+ * The app's areas, as the sidebar (app-sidebar.tsx, in both interfaces) lists
+ * them and the desktop's windows (components/desktop) name them. One list, so a
+ * new page shows up everywhere.
  */
 export type NavItem = {
   href: string;
@@ -87,5 +87,3 @@ export const isActive = (item: NavItem, pathname: string) =>
 /** Every page as one list, a group's children after it. */
 export const NAV_FLAT: NavItem[] = NAV.flatMap((i) => [i, ...(i.children ?? [])]);
 export const NAV_HREFS = NAV_FLAT.map((i) => i.href);
-/** The apps on the desktop (its icons, the Launchpad's): every page but the home, which there is the desktop itself. */
-export const DESK_APPS: NavItem[] = NAV_FLAT.filter((i) => !i.desktop);

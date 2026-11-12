@@ -1,24 +1,23 @@
 "use client";
 
-import { AlignCenter, AlignLeft, AlignRight, Monitor, Moon, PanelLeft, Sun, SunMoon } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Code2, Monitor, Moon, PanelLeft, Sun, SunMoon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useSyncExternalStore } from "react";
 import { useSubject } from "subjecto/react";
 
-import { AppIcon, VsCodeIcon } from "@/components/desktop/app-icon";
 import { useShellMode } from "@/components/desktop/shell-mode";
-import { DESK_APPS, NAV_HREFS } from "@/components/nav-items";
+import { NAV, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { type DeskAlign, SIDEBAR_ICON, VSCODE_ICON, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
+import { type DeskAlign, NAV_ALWAYS, navShown, SIDEBAR_ICON, VSCODE_NAV, WIDGET_LABEL, widgetMode, WIDGETS } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { desk, loadDesk, restoreIcons, setAlign, setIcons, setOnDesktop, setSidebarSize, setWidgetMode } from "@/store/desktop";
+import { desk, loadDesk, setAlign, setNavShown, setSidebarSize, setWidgetMode, showAllNav } from "@/store/desktop";
 
 /**
- * The Settings app (/settings): the interface and the theme, and the desktop's arrangement, sidebar, widgets and icons
- * (`desk`, this browser's localStorage). It reads them itself (loadDesk), so it works from the classic interface too,
- * and a change made here in a window's frame reaches the desktop around it.
+ * The Settings app (/settings): the interface and the theme, the sidebar's items (in both interfaces) and size, and the
+ * desktop's arrangement and widgets (`desk`, this browser's localStorage). It reads them itself (loadDesk), so it works
+ * from the classic interface too, and a change made here in a window's frame reaches the desktop around it.
  */
 export function SettingsPanel() {
   const [d] = useSubject(desk);
@@ -33,10 +32,17 @@ export function SettingsPanel() {
   useEffect(() => loadDesk(NAV_HREFS), []);
 
   const side = d.sidebarSize ?? SIDEBAR_ICON.default;
-  const removed = new Set(d.removedIcons ?? []);
-  const icons = [
-    ...DESK_APPS.map((i) => ({ id: i.href, label: i.label, icon: <AppIcon item={i} size={22} /> })),
-    { id: VSCODE_ICON, label: "VS Code", icon: <VsCodeIcon size={22} /> },
+  // Every item the sidebar can show, in its order (a group's under it, set in), VS Code last; the home as this
+  // interface names it.
+  const item = (i: NavItem, parent?: string) => ({
+    id: i.href,
+    label: mode === "desktop" && i.desktop ? i.desktop.label : i.label,
+    icon: mode === "desktop" && i.desktop ? i.desktop.icon : i.icon,
+    parent,
+  });
+  const items = [
+    ...NAV.flatMap((i) => [item(i), ...(i.children ?? []).map((c) => item(c, i.href))]),
+    { id: VSCODE_NAV, label: "VS Code", icon: Code2, parent: undefined },
   ];
 
   return (
@@ -46,7 +52,7 @@ export function SettingsPanel() {
           <CardTitle>Appearance</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <Setting label="Interface" hint="The classic view with its sidebar, or a desktop with windows, icons and widgets, the sidebar beside it.">
+          <Setting label="Interface" hint="The classic view with its sidebar, or a desktop with windows and widgets, the same sidebar beside it.">
             <Segmented
               value={mode}
               onChange={setMode}
@@ -72,25 +78,46 @@ export function SettingsPanel() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Desktop</CardTitle>
-          <CardDescription>
-            {mode === "desktop" ? "The desktop interface: its icons, widgets and sidebar." : "For the desktop interface (switch to it above)."}
-          </CardDescription>
+          <CardTitle>Sidebar</CardTitle>
+          <CardDescription>The one in both interfaces.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <Setting label="Arrangement" hint="The icons and widgets as you've laid them out, kept together against the left, in the middle, or against the right.">
-            <Segmented<DeskAlign>
-              value={d.align ?? "left"}
-              onChange={setAlign}
-              options={[
-                { value: "left", label: "Left", icon: AlignLeft },
-                { value: "center", label: "Centre", icon: AlignCenter },
-                { value: "right", label: "Right", icon: AlignRight },
-              ]}
-            />
+          <Setting
+            label="Items"
+            hint="The ones it shows. A right-click on one in the sidebar hides it too; the home and Settings always stay."
+            actions={
+              d.hiddenNav?.length ? (
+                <Button variant="outline" size="sm" onClick={showAllNav}>
+                  Show all
+                </Button>
+              ) : null
+            }
+          >
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-1.5">
+              {items.map((i) => {
+                const always = NAV_ALWAYS.includes(i.id);
+                // (a group's item goes with it: off while the group is)
+                const under = !!i.parent && !navShown(d.hiddenNav, i.parent);
+                return (
+                  <label
+                    key={i.id}
+                    title={always ? "Always in the sidebar" : under ? "Its group is hidden" : undefined}
+                    className={cn("flex min-w-0 items-center gap-2 rounded-md py-0.5 text-sm", i.parent && "pl-6", (always || under) && "text-muted-foreground")}
+                  >
+                    <Checkbox
+                      checked={navShown(d.hiddenNav, i.id) && !under}
+                      disabled={always || under}
+                      onCheckedChange={(on) => setNavShown(i.id, on)}
+                    />
+                    <i.icon className="size-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{i.label}</span>
+                  </label>
+                );
+              })}
+            </div>
           </Setting>
 
-          <Setting label="Sidebar size" hint="How big the apps' icons are in the desktop's sidebar; they grow as the pointer passes over them.">
+          <Setting label="Size" hint="In the desktop interface: how big its icons are; they grow as the pointer passes over them.">
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -110,6 +137,28 @@ export function SettingsPanel() {
               )}
             </div>
           </Setting>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Desktop</CardTitle>
+          <CardDescription>
+            {mode === "desktop" ? "The desktop interface: its widgets." : "For the desktop interface (switch to it above)."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5">
+          <Setting label="Arrangement" hint="The widgets as you've laid them out, kept together against the left, in the middle, or against the right.">
+            <Segmented<DeskAlign>
+              value={d.align ?? "left"}
+              onChange={setAlign}
+              options={[
+                { value: "left", label: "Left", icon: AlignLeft },
+                { value: "center", label: "Centre", icon: AlignCenter },
+                { value: "right", label: "Right", icon: AlignRight },
+              ]}
+            />
+          </Setting>
 
           <Setting label="Widgets" hint="Each is moved by its header and resized from its edges, on the desktop itself.">
             <div className="flex flex-wrap gap-x-6 gap-y-2">
@@ -125,32 +174,6 @@ export function SettingsPanel() {
             </div>
           </Setting>
 
-          <Setting
-            label="Icons on the desktop"
-            hint="One taken off stays in the sidebar and the Launchpad, whose menus put it back too."
-            actions={
-              <>
-                {removed.size > 0 && (
-                  <Button variant="outline" size="sm" onClick={restoreIcons}>
-                    Show all
-                  </Button>
-                )}
-                <Button variant="ghost" size="sm" onClick={() => setIcons(null)}>
-                  Reset their order
-                </Button>
-              </>
-            }
-          >
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-x-4 gap-y-1.5">
-              {icons.map((i) => (
-                <label key={i.id} className="flex min-w-0 items-center gap-2 rounded-md py-0.5 text-sm">
-                  <Checkbox checked={!removed.has(i.id)} onCheckedChange={(on) => setOnDesktop(i.id, on)} />
-                  {i.icon}
-                  <span className="truncate">{i.label}</span>
-                </label>
-              ))}
-            </div>
-          </Setting>
         </CardContent>
       </Card>
     </div>

@@ -166,34 +166,38 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   page at the same place in the tree in both (`Workspace`, whose wrappers are `display: contents` in
   classic), so switching never remounts it; in desktop the shell is a grid (the top bar the whole
   width, the sidebar under it at the left, the workspace beside it), its inner column `contents` too.
-  Desktop (`desktop.tsx`): a wallpaper with every page of `NAV` (`src/components/nav-items.ts`,
-  shared with the sidebar) but the home as an icon in its own colours (`app-icon.tsx`), live badges
-  (`useNavBadges`, polled once in app-shell for the sidebar and the icons), the page as a window
-  (drag, resize from any edge, maximize, minimize, close; placed per app), the classic sidebar
-  (`AppSidebar`, always there, see below), a Launchpad with search (apps and projects), and the
-  Spiridus menu at the bar's left. The home ("/") is the desktop itself: no window (`atHome`: the
-  page's own window is closed there, so the next app opens in it), the sidebar's first item is
-  Desktop instead of Dashboard (`NavItem.desktop`), and `src/app/page.tsx` skips the Dashboard's
-  metrics when the cookie says desktop (switching to classic there refreshes it). Its state is
+  Desktop (`desktop.tsx`): a wallpaper with its widgets (no icons, no Launchpad: the sidebar and ⌘K
+  reach every app and project), the page as a window (drag, resize from any edge, maximize,
+  minimize, close; placed per app; its title bar has the app's tile, `app-icon.tsx`), the classic
+  sidebar (`AppSidebar`, always there, see below), and the Spiridus menu at the bar's left. The
+  sidebar is one in both interfaces: Settings → General → Sidebar → Items picks what it shows
+  (`desk.hiddenNav`, `setNavShown`; `navShown` / `NAV_ALWAYS` in lib/desktop.ts: the home and
+  Settings always show, so there's a way back; a group's items go with it), and an item's
+  right-click has "Hide from sidebar" (classic: `NavMenu`; desktop: `DeskNavLink`'s menu). Hiding
+  one closes no window. The sidebar reads `desk` itself (`loadDesk`), so classic has it too (it
+  shows everything until that's read, a moment after load). The home ("/") is the desktop itself:
+  no window (`atHome`: the page's own window is closed there, so the next app opens in it), the
+  sidebar's first item is Desktop instead of Dashboard (`NavItem.desktop`), and `src/app/page.tsx`
+  skips the Dashboard's metrics when the cookie says desktop (switching to classic there refreshes
+  it). Its state is
   `src/store/desktop.ts`; the geometry is pure and tested (`src/lib/desktop.ts`). The window has no
   transform or filter, so a page's own `fixed` panels behave as they do in classic; alone it has no
   z-index either, but with other windows open every window is a layer at its place in `stack`
   (`winZ`), or what it holds with a z-index (its title bar's buttons, a page's sticky parts) would
   show through the windows in front.
-  · Icons: dragged anywhere, snapped to a grid (`layoutIcons` / `moveIcon` in `src/lib/desktop.ts`;
-    a drop on another icon swaps them), kept in `desk.icons`; the Spiridus menu sorts or resets them.
-    Right-click → Remove from Desktop (`desk.removedIcons`); the sidebar's and the Launchpad's menus,
-    Settings, and the Spiridus menu's "Put back" bring one back (at its old spot when that's free).
-    The icons and widgets are drawn as one arrangement against the left, centred or against the right
+  · The widgets sit on a grid (`GRID`, `gridSize`: 92 × 96 px cells, the icons' that were, so saved
+    spans hold), drawn as one arrangement against the left, centred or against the right
     (`desk.align`, `alignShift`); there a drop can land left of column 0, and the whole moves over to
-    stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen.
-  · Drags (an icon, a widget's move or resize) also end when the window loses the pointer or the
+    stay on the grid (`dropRange` / `fitShift`), so nothing else moves on screen. Old `desk.icons` /
+    `desk.removedIcons` are dropped when read (`parseDesk`).
+  · Drags (a widget's move or resize) also end when the window loses the pointer or the
     focus mid-drag (`lostpointercapture`, `blur`), which sends no pointerup: they go back, rather
     than stay drawn half-way with their drop target.
-  · The sidebar in desktop (no dock): classic's, under the top bar, the Launchpad at its head and VS
-    Code where classic has it; the apps as tiles at Settings' "Sidebar size" (`desk.sidebarSize`,
-    `SIDEBAR_ICON` 16–40 px; an old `dockSize` carries over halved), each in a slot as wide as it
-    grows (`tileSlot`, `sidebarWidth`), the rail collapse in its footer. The pointer swells them as
+  · The sidebar in desktop (no dock): classic's, under the top bar, VS Code where classic has it;
+    classic's own black-and-white icons, sized by Settings' Sidebar → Size (`desk.sidebarSize`,
+    `SIDEBAR_ICON` 16–40 px rows, 24 = classic's 15 px glyph, `sideGlyph`; an old `dockSize` carries
+    over halved), each in a slot as wide as it grows (`tileSlot`, `sidebarWidth`: classic's widths at
+    the default), the rail collapse in its footer. The pointer swells them as
     macOS's dock does (`useMagnify` in desktop.tsx, `--s` per `[data-magnify]` item; `magnify` /
     `atRest` in lib/desktop.ts draw the list up so what's under the pointer stays there); off on
     touch, on a phone and for reduced motion. Lit is the window in front (`useFrontPath`,
@@ -201,12 +205,14 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     A click (`DeskNavLink`, through Link's `onNavigate`, so a modifier-click is a new tab): the app's
     window in front goes down, else it comes up, else it opens (`openAppWindow`); Desktop puts every
     window down (`showDesktop`, also the Spiridus menu's and ⌘K's). Projects and boards under their
-    items open in their window (`openPathWindow`). Right-click: open, in a new window or tab, on or off
-    the desktop, close. On a phone it's classic's drawer (the top bar's menu button), the Spiridus
-    menu from `md` up. Windows and the icon grid have the whole workspace: nothing is kept clear.
+    items open in their window (`openPathWindow`). Right-click: open, in a new window or tab, close,
+    hide from the sidebar. On a phone it's classic's drawer (the top bar's menu button), the Spiridus
+    menu from `md` up, and the widgets go one a row. Windows and the widgets have the whole
+    workspace: nothing is kept clear.
   · Settings (`/settings`, in `NAV`): panes listed in `SETTINGS_PANES` (also in ⌘K). General
-    (`settings-panel.tsx`): interface, theme, and the desktop's arrangement, sidebar size, widgets and
-    icons. Users (`/settings/users`; `/users` redirects there): who may Sign in with Genie. It reads `desk` itself
+    (`settings-panel.tsx`): interface, theme, the sidebar's items and size, and the desktop's
+    arrangement and widgets. Users (`/settings/users`; `/users` redirects there): who may Sign in
+    with Genie. It reads `desk` itself
     (`loadDesk`), so it works from classic too; `loadDesk` follows `storage` events, so a change
     made in a window's frame (a separate document) reaches the desktop around it.
   · Widgets (registry: `widget-registry.tsx`, `WIDGET_BODY` / `WIDGET_ICON`; `WIDGETS` /
@@ -228,19 +234,18 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     done), Sign-ins. A row opens the page behind it (`openPathWindow`); a widget with an app has the
     app's icon in its header. Fold and hide show on hover (always on a device that can't hover). A
     right-click on the wallpaper (`DeskMenu`) lists every widget: one added goes under the pointer.
-    Folded, a widget is one icon row tall, a glance. A window shorter than the arrangement doesn't
-    squeeze it: the grid keeps the rows it needs and the desktop scrolls (icons never placed by hand
-    fill the rows that show first, `layoutIcons`' `flowRows`; a widget with no free spot on
-    the grid goes under the others, `placeWidgets`, never on one). Only the width stacks the desktop:
+    Folded, a widget is one grid row tall, a glance. A window shorter than the arrangement doesn't
+    squeeze it: the grid keeps the rows it needs and the desktop scrolls (a widget with no free spot
+    on the grid goes under the others, `placeWidgets`, never on one). Only the width stacks the desktop:
     when the widgets put by hand, from the first's left edge to the last's right edge, are wider than
     it (`arrangementFits`; a default spot only counts when it has no room at all), the widgets go one
-    a row the whole width, the icons under them (`stackDesktop`), nothing dragged until there's room
+    a row the whole width (`stackDesktop`; always on a phone), nothing dragged until there's room
     again. Narrower but still wide enough, they move over together (`fitShift`) to stay as they are.
   · More windows: each another page in a frame (`FrameWindows`, `stack` / `frames` in the store,
     sessionStorage). A request with `Sec-Fetch-Dest: iframe` renders the page alone (the root layout's
     `embedded`: `FramedPage` in app-shell.tsx, none of the shell, nor what runs once per tab: terminal
     dock, voice, alerts, activity). The framed page posts its path, clicks, ⌘K and the terminals it
-    opens to the page around it (`openTerminalsIn`). An icon or dock click brings its app's window up,
+    opens to the page around it (`openTerminalsIn`). A sidebar click brings its app's window up,
     else opens a new one (`openAppWindow`); right-click → Open in a new window for a second one.
 - **⌘K / Ctrl+K: the command palette** (`src/components/command-palette.tsx`, search in
   `src/lib/command-search.ts`): pages, projects and their tabs, terminals, a few actions, in both
