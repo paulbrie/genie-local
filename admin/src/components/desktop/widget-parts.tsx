@@ -5,12 +5,11 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useSubject } from "subjecto/react";
 
-import { AppIcon } from "@/components/desktop/app-icon";
 import { NAV_FLAT } from "@/components/nav-items";
 import { BASE_PATH } from "@/lib/config";
 import { WIDGET_APP, type WidgetId } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
-import { desk, raiseApp, raisePath, setWidgetMode, setWidgetView } from "@/store/desktop";
+import { desk, openPage, setWidgetMode, setWidgetView } from "@/store/desktop";
 
 // What the desktop's widgets are made of (status-widget.tsx, more-widgets.tsx): a header that's the grip their frame
 // (desktop.tsx's WidgetFrame) is dragged by and, folded, all of the widget; the list under it; its rows; a meter.
@@ -19,8 +18,8 @@ import { desk, raiseApp, raisePath, setWidgetMode, setWidgetView } from "@/store
  * A widget's header, the grip its frame is dragged by: its icon and name, what matters now, its count, then fold and
  * hide (those two only while the pointer is over the widget, or a key's focus is on them: they keep their room, so
  * nothing moves when they show). Folded, the widget is one row of the grid tall and this is all of it, as a glance: the
- * icon on a tile, the name over what matters, the count larger; a double-click unfolds it. The app it's a glance at,
- * when there's one, is its own icon, always there.
+ * icon on a tile, the name over what matters, the count larger; a double-click unfolds it. The name opens the app it's
+ * a glance at, when there's one.
  */
 export function WidgetHeader({
   id,
@@ -39,19 +38,16 @@ export function WidgetHeader({
 }) {
   const btn = "rounded-md p-0.5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground";
   const openApp = useOpenApp();
-  // (the app it's a glance at, by its own icon)
+  // (the app it's a glance at, opened from its name)
   const app = WIDGET_APP[id] ? NAV_FLAT.find((n) => n.href === WIDGET_APP[id]) : undefined;
-  const appButton = app && (
-    <button
-      type="button"
-      onClick={() => openApp(app.href)}
-      aria-label={`Open ${app.label}`}
-      title={`Open ${app.label}`}
-      className="shrink-0 rounded-md p-px opacity-80 transition hover:scale-110 hover:opacity-100"
-    >
-      <AppIcon item={app} size={16} />
-    </button>
-  );
+  const name = (className: string) =>
+    app ? (
+      <button type="button" onClick={() => openApp(app.href)} title={`Open ${app.label}`} className={cn(className, "text-left hover:underline")}>
+        {title}
+      </button>
+    ) : (
+      <span className={className}>{title}</span>
+    );
   // (on a device that can't hover, a tablet's touch, they're always there)
   const onHover = "opacity-0 transition-opacity group-hover/widget:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100";
   const controls = (
@@ -87,23 +83,19 @@ export function WidgetHeader({
           <Icon className="size-5 text-foreground/70" />
         </span>
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[13px] leading-5 font-semibold">{title}</span>
+          {name("max-w-full self-start truncate text-[13px] leading-5 font-semibold")}
           <span className="truncate text-xs text-muted-foreground">{note}</span>
         </div>
         {count !== null && <span className="shrink-0 text-xl leading-none font-semibold tabular-nums">{count}</span>}
-        <div className="flex shrink-0 flex-col items-center gap-0.5">
-          {appButton}
-          <div className={cn("flex flex-col gap-0.5", onHover)}>{controls}</div>
-        </div>
+        <div className={cn("flex shrink-0 flex-col items-center gap-0.5", onHover)}>{controls}</div>
       </div>
     );
   return (
     <div data-widget-grip className="flex shrink-0 items-center gap-2 px-3 pt-2.5 pb-2 select-none">
       <Icon className="size-[15px] shrink-0 text-muted-foreground" />
-      <span className="shrink-0 text-[13px] font-semibold">{title}</span>
+      {name("shrink-0 text-[13px] font-semibold")}
       <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{note}</span>
       {count !== null && <span className="text-xs text-muted-foreground tabular-nums opacity-80">{count}</span>}
-      {appButton}
       <span className={cn("flex shrink-0 items-center gap-0.5", onHover)}>{controls}</span>
     </div>
   );
@@ -181,9 +173,7 @@ export function usePolled<T>(path: string | null, everyMs: number, soon?: (data:
 /** A page (a project's tab, Services…) from a widget: inline, or its window to the front if it's popped out. */
 export function useOpenPath() {
   const router = useRouter();
-  return (path: string) => {
-    if (!raisePath(path)) router.push(path);
-  };
+  return (path: string) => openPage(path, (href) => router.push(href));
 }
 
 /** One of a widget's choices of how to show, by `key` (one of `views`; `fallback` until one's picked), remembered with the desktop. */
@@ -231,9 +221,7 @@ export function ViewSwitch<T extends string>({
 /** An app (an href of NAV) from a widget: inline, or its window to the front if it's popped out. */
 export function useOpenApp() {
   const router = useRouter();
-  return (href: string) => {
-    if (!raiseApp(href)) router.push(href);
-  };
+  return (href: string) => openPage(href, (to) => router.push(to));
 }
 
 /** A small heading inside a widget's list ("Connected", "Failed today"). */

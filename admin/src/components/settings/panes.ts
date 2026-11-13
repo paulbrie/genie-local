@@ -5,6 +5,6 @@ import { SlidersHorizontal, UsersRound } from "lucide-react";
  * a page of its own there, "Users" in Settings).
  */
 export const SETTINGS_PANES = [
-  { href: "/settings", label: "General", icon: SlidersHorizontal, keywords: "appearance theme interface desktop sidebar items hide dock widgets" },
+  { href: "/settings", label: "General", icon: SlidersHorizontal, keywords: "appearance theme home desktop sidebar items hide dock widgets" },
   { href: "/settings/users", label: "Users", icon: UsersRound, keywords: "people accounts sign in genie google" },
 ] as const;

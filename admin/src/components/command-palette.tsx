@@ -4,9 +4,7 @@ import {
   ArrowRight,
   Code2,
   FolderKanban,
-  Monitor,
   MoonStar,
-  PanelLeft,
   Search,
   SquareTerminal,
   Sun,
@@ -17,7 +15,6 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { useTheme } from "next-themes";
 import { useSubject } from "subjecto/react";
 
-import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV_FLAT } from "@/components/nav-items";
 import { SETTINGS_PANES } from "@/components/settings/panes";
 import { rankCommands, isPaletteShortcut, type Command } from "@/lib/command-search";
@@ -26,7 +23,7 @@ import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { PROJECT_TAB_LABELS, PROJECT_TABS } from "@/lib/project-tabs";
 import { cn } from "@/lib/utils";
 import { Z_COMMAND_PALETTE } from "@/lib/z-layers";
-import { raisePath } from "@/store/desktop";
+import { openPage } from "@/store/desktop";
 import { liveTerminals, openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 
@@ -91,7 +88,6 @@ let projectsCache: { at: number; list: ProjectNavItem[] } | null = null;
 
 function Palette() {
   const router = useRouter();
-  const { mode, setMode } = useShellMode();
   const { resolvedTheme, setTheme } = useTheme();
   const [terminals] = useSubject(liveTerminals);
   const [projects, setProjects] = useState<ProjectNavItem[]>(projectsCache?.list ?? []);
@@ -117,20 +113,19 @@ function Palette() {
   }, []);
 
   const items = useMemo<Item[]>(() => {
-    const desktop = mode === "desktop";
-    // (the desktop: inline, or its window to the front if it's popped out)
+    // (inline, or its window to the front if it's popped out)
     const go = (href: string) => () => {
       close();
-      if (!(desktop && raisePath(href))) router.push(href);
+      openPage(href, (to) => router.push(to));
     };
     const dark = resolvedTheme === "dark";
-    // (in the desktop the home is Home, the wallpaper with its widgets)
     const out: Item[] = NAV_FLAT.map((n) => ({
       id: `page:${n.href}`,
       kind: "page",
-      label: desktop && n.desktop ? n.desktop.label : n.label,
-      keywords: desktop && n.desktop ? "home desktop widgets" : n.href.slice(1).replace(/\//g, " "),
-      icon: desktop && n.desktop ? n.desktop.icon : n.icon,
+      label: n.label,
+      // (Home: the wallpaper with its widgets)
+      keywords: n.href === "/" ? "home desktop widgets" : n.href.slice(1).replace(/\//g, " "),
+      icon: n.icon,
       run: go(n.href),
     }));
     // (the Settings app's panes but its first, which is the app itself: Users in Settings)
@@ -147,7 +142,9 @@ function Palette() {
         icon: FolderKanban,
         run: go(base),
       });
+      // (not Next.js: only some projects have it, and nothing here says which)
       for (const tab of PROJECT_TABS) {
+        if (tab === "next") continue;
         out.push({
           id: `tab:${p.slug}:${tab}`,
           kind: "tab",
@@ -174,17 +171,6 @@ function Palette() {
     }
     out.push(
       {
-        id: "action:shell",
-        kind: "action",
-        label: desktop ? "Switch to the classic view" : "Switch to the desktop view",
-        keywords: "interface shell sidebar desktop classic view",
-        icon: desktop ? PanelLeft : Monitor,
-        run: () => {
-          close();
-          setMode(desktop ? "classic" : "desktop");
-        },
-      },
-      {
         id: "action:theme",
         kind: "action",
         label: dark ? "Switch to the light theme" : "Switch to the dark theme",
@@ -208,7 +194,7 @@ function Palette() {
       },
     );
     return out;
-  }, [projects, terminals, mode, setMode, resolvedTheme, setTheme, router]);
+  }, [projects, terminals, resolvedTheme, setTheme, router]);
 
   // (an empty query lists the pages and the actions; projects, tabs and terminals answer to typing)
   const results = useMemo(

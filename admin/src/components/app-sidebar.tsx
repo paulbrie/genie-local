@@ -3,38 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import {
-  Bot,
-  ChevronDown,
-  Code2,
-  ExternalLink,
-  LogOut,
-  MemoryStick,
-  PanelLeftClose,
-  PanelLeftOpen,
-  FolderPlus,
-  Workflow,
-  X,
-} from "lucide-react";
+import { Bot, ChevronDown, LogOut, MemoryStick, PanelLeftClose, PanelLeftOpen, FolderPlus, Workflow, X } from "lucide-react";
 import { useSubject } from "subjecto/react";
 
-import { Lockup, Wisp } from "@/components/brand/wisp";
 import { DeskNavLink, DeskVsCodeLink } from "@/components/desktop/desktop";
-import { useShellMode } from "@/components/desktop/shell-mode";
+import { SpiridusMenu } from "@/components/desktop/desktop-menu";
 import { fmtTokens, memoryTitle, shortBytes, termLabel, TermDot } from "@/components/nav-status";
 import { isActive, NAV, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import { NewProjectDialog } from "@/components/new-project-dialog";
 import { ProjectContextMenu } from "@/components/project-context-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { TerminalContextMenu } from "@/components/terminal-context-menu";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
-import { NAV_ALWAYS, navShown, SIDEBAR_ICON, sidebarWidth, sideGlyph, VSCODE_NAV } from "@/lib/desktop";
+import { navShown, SIDEBAR_ICON, sidebarWidth, sideGlyph, VSCODE_NAV } from "@/lib/desktop";
 import { useIsMobile } from "@/lib/use-is-mobile";
-import { useNavBadges, useWispState } from "@/lib/use-nav-badges";
-import { desk, loadDesk, raisePath, setNavShown } from "@/store/desktop";
+import { useNavBadges } from "@/lib/use-nav-badges";
+import { desk, liveWin, loadDesk, raisePath } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { hydrateRecentBoards, recentBoards, syncRecentBoards } from "@/store/recent-boards";
 import { openRun } from "@/store/runs";
@@ -46,28 +33,30 @@ const STORAGE_KEY = "admin.sidebar.collapsed";
 const GROUPS_KEY = "admin.sidebar.closedGroups";
 
 /**
- * The sidebar in the desktop interface (null in classic): its icons' size (Settings: desk.sidebarSize), the indent that
- * puts a sub-item under its heading's name, and how a page (a project's, a board) opens there: inline, as in classic,
- * unless it's popped out, when its window comes to the front instead (raisePath).
+ * The sidebar's rows: their icons' size (Settings: desk.sidebarSize), the indent that puts a sub-item under its
+ * heading's name, and how a page (a project's, a board) opens from them: inline, unless it's popped out, when its
+ * window comes to the front instead (raisePath).
  */
-type DeskSide = { size: number; sub: React.CSSProperties; openPage: (href: string, e: { preventDefault: () => void }) => void };
-const DeskSideContext = createContext<DeskSide | null>(null);
+type Side = { size: number; sub: React.CSSProperties; openPage: (href: string, e: { preventDefault: () => void }) => void };
+const SideContext = createContext<Side>({ size: SIDEBAR_ICON.default, sub: {}, openPage: () => {} });
 
 /**
  * Collapsible left navigation rail. Holds every top-level route plus the global
  * theme + logout controls. Collapsed/expanded state persists in localStorage.
- * Settings → General picks which items it shows (desk.hiddenNav, this browser's:
- * the home and Settings always), and an item's right-click hides it too.
- *
- * The desktop interface has it too, under its top bar: the same icons, at the
- * size Settings picks, lit the page inline (Home at "/"), a dot by the ones
- * popped out as windows (desktop.tsx's DeskNavLink).
+ * Its header is the Spiridus lockup (the wisp alone on the rail), which opens
+ * the Spiridus menu (desktop-menu.tsx), and the collapse toggle. Settings →
+ * General picks which items it shows (desk.hiddenNav, this browser's: Home and
+ * Settings always) and its size; an item's right-click hides it too. Lit is the
+ * page inline (Home at "/", or while the page floats over it, live), a dot by
+ * the apps popped out as windows (desktop.tsx's DeskNavLink).
  */
 export function AppSidebar() {
   const pathname = usePathname();
-  const desktop = useShellMode().mode === "desktop";
+  const [live] = useSubject(liveWin);
+  // what's lit: the page inline; Home while the page floats over it, live
+  const current = live && live.path.split("?")[0] === pathname ? "/" : pathname;
   const [{ sidebarSize, hiddenNav }] = useSubject(desk);
-  // (what this browser chose: read here too, so classic has it)
+  // (what this browser chose)
   useEffect(() => loadDesk(NAV_HREFS), []);
   const size = sidebarSize ?? SIDEBAR_ICON.default;
   // the items it shows, a group's children too (a group with none left is a plain item)
@@ -86,19 +75,16 @@ export function AppSidebar() {
   const rail = collapsed && !isMobile;
   const closeMobile = () => mobileNav.next(false);
   const { dockerStats, liveRuns, workingTerms, badgeOf } = useNavBadges(pathname);
-  const side = useMemo<DeskSide | null>(
-    () =>
-      desktop
-        ? {
-            size,
-            // (classic's 28 px in at the default size)
-            sub: { paddingLeft: sideGlyph(size) + 13 },
-            openPage: (href, e) => {
-              if (raisePath(href)) e.preventDefault();
-            },
-          }
-        : null,
-    [desktop, size],
+  const side = useMemo<Side>(
+    () => ({
+      size,
+      // (28 px in at the default size)
+      sub: { paddingLeft: sideGlyph(size) + 13 },
+      openPage: (href, e) => {
+        if (raisePath(href)) e.preventDefault();
+      },
+    }),
+    [size],
   );
   const [boards] = useSubject(recentBoards);
   // The boards last opened on this browser, as sub-items under Boards: their
@@ -110,7 +96,6 @@ export function AppSidebar() {
       .then((list) => Array.isArray(list) && syncRecentBoards(list))
       .catch(() => {});
   }, []);
-  const { motion: wispMotion, title: wispTitle, wink } = useWispState();
 
   const [closedGroups, setClosedGroups] = useState<string[]>([]);
 
@@ -157,7 +142,7 @@ export function AppSidebar() {
   if (pathname === "/login") return null;
 
   return (
-    <DeskSideContext value={side}>
+    <SideContext value={side}>
       {/* Scrim behind the mobile drawer (below md only). */}
       {mobileOpen && (
         <div
@@ -167,40 +152,17 @@ export function AppSidebar() {
         />
       )}
       <aside
-        // (in the desktop: under the top bar, in app-shell's grid, as wide as its icons need)
-        style={desktop ? ({ "--side-w": `${sidebarWidth(size, rail)}px` } as React.CSSProperties) : undefined}
-        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r bg-background/95 transition-transform duration-200 md:static md:z-auto md:transition-[width] ${
-          desktop ? "md:h-auto md:w-(--side-w)" : rail ? "md:w-14" : "md:w-56"
-        } ${mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"}`}
+        // (as wide as its icons need; a layer over the content area's, so the Spiridus menu, wider than the rail, shows
+        // whole over it)
+        style={{ "--side-w": `${sidebarWidth(size, rail)}px` } as React.CSSProperties}
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-60 shrink-0 flex-col border-r bg-background/95 transition-transform duration-200 md:static md:z-40 md:w-(--side-w) md:transition-[width] ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
+        }`}
       >
-        {/* (in the desktop, the top bar has the wisp: this is the phone's drawer's only) */}
-        <div className={`flex h-10 shrink-0 items-center gap-2 border-b ${rail ? "justify-center px-2" : "px-3"} ${desktop ? "md:hidden" : ""}`}>
-          {/* The Spiridus lockup (mark only on the rail, where it expands the
-              sidebar). The wisp shows the agents' state; winks on hover. */}
-          {rail ? (
-            <button
-              type="button"
-              onClick={toggle}
-              onMouseEnter={wink}
-              aria-label="Expand sidebar"
-              title="Spiridus · expand"
-              className="hidden rounded-md p-0.5 md:block"
-            >
-              <Wisp size={22} motion={wispMotion} title="" />
-            </button>
-          ) : (
-            <Link
-              href="/"
-              onClick={closeMobile}
-              onMouseEnter={wink}
-              aria-label={desktop ? "Spiridus · Home" : "Spiridus · Dashboard"}
-              title={wispTitle}
-              className="flex min-w-0 flex-1 items-center"
-            >
-              <Lockup size={20} motion={wispMotion} />
-            </Link>
-          )}
-          {/* Collapse toggle — desktop only (on the rail the wisp expands). */}
+        <div className={`flex h-10 shrink-0 items-center gap-2 border-b ${rail ? "justify-center px-2" : "px-3"}`}>
+          {/* The Spiridus lockup (the wisp alone on the rail), opening the Spiridus menu. */}
+          <SpiridusMenu rail={rail} onPick={closeMobile} />
+          {/* Collapse toggle — not on the phone's drawer (on the rail, the footer's expands). */}
           <button
             onClick={toggle}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -224,16 +186,16 @@ export function AppSidebar() {
         </div>
 
       {/* Scrollbar hidden at rest, shown on hover (globals.css scrollbar-hover). */}
-      <nav className={`scrollbar-hover flex flex-1 flex-col gap-px overflow-y-auto p-1.5 ${desktop ? "overflow-x-hidden" : ""}`}>
+      <nav className="scrollbar-hover flex flex-1 flex-col gap-px overflow-x-hidden overflow-y-auto p-1.5">
         {nav.map((item) => {
           if (item.href === "/projects")
             return (
               <ProjectsGroup
                 key={item.href}
                 item={item}
-                pathname={pathname}
+                pathname={current}
                 rail={rail}
-                open={!closedGroups.includes(item.href) || pathname.startsWith("/projects/")}
+                open={!closedGroups.includes(item.href) || current.startsWith("/projects/")}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
@@ -243,16 +205,15 @@ export function AppSidebar() {
               <NavGroup
                 key={item.href}
                 item={item}
-                pathname={pathname}
+                pathname={current}
                 rail={rail}
                 // a group with the page you're on stays open
-                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, pathname))}
+                open={!closedGroups.includes(item.href) || item.children.some((c) => isActive(c, current))}
                 onToggle={() => toggleGroup(item.href)}
                 onNavigate={closeMobile}
               />
             );
-          const active = isActive(item, pathname);
-          const Icon = item.icon;
+          const active = isActive(item, current);
           // Numeric count drives the collapsed-rail pill; Docker also gets a
           // wider text badge (count · memory) in the expanded sidebar.
           const badge = badgeOf(item.href);
@@ -268,51 +229,15 @@ export function AppSidebar() {
           return (
             <div key={item.href}>
               <div className="flex items-center">
-              {side ? (
-                <DeskNavLink item={item} size={size} rail={rail} active={active} badge={badge} onClick={closeMobile}>
-                  {foldable && <span className="ml-auto text-xs tabular-nums opacity-60">{subCount}</span>}
-                  {badge != null && !foldable && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium whitespace-nowrap text-primary">
-                      {badgeText}
-                    </span>
-                  )}
-                </DeskNavLink>
-              ) : (
-              <NavMenu id={item.href} className="flex min-w-0 flex-1">
-              <Link
-                href={item.href}
-                onClick={closeMobile}
-                aria-current={active ? "page" : undefined}
-                title={
-                  rail
-                    ? `${item.label}${badge ? ` (${badge})` : ""}`
-                    : undefined
-                }
-                className={`relative flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
-                  rail ? "justify-center" : ""
-                } ${
-                  active
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                }`}
-              >
-                <Icon className="size-[15px] shrink-0" />
-                {!rail && <span className="truncate">{item.label}</span>}
+              <DeskNavLink item={item} size={size} rail={rail} active={active} badge={badge} onClick={closeMobile}>
                 {/* a foldable group counts what it lists, plainly, as Projects does; the pill is for live counts on plain rows and the rail */}
                 {foldable && <span className="ml-auto text-xs tabular-nums opacity-60">{subCount}</span>}
-                {badge != null && !foldable &&
-                  (rail ? (
-                    <span className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
-                      {badge}
-                    </span>
-                  ) : (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium whitespace-nowrap text-primary">
-                      {badgeText}
-                    </span>
-                  ))}
-              </Link>
-              </NavMenu>
-              )}
+                {badge != null && !foldable && (
+                  <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-medium whitespace-nowrap text-primary">
+                    {badgeText}
+                  </span>
+                )}
+              </DeskNavLink>
               {foldable && (
                 <button
                   type="button"
@@ -346,8 +271,8 @@ export function AppSidebar() {
                             ? ` — ${r.stepsDone}/${r.stepsTotal}`
                             : ""
                         }`}
-                        style={side?.sub}
-                        className="flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        style={side.sub}
+                        className="flex items-center gap-2 rounded-md py-0.5 pr-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                       >
                         <StatusDot color="bg-emerald-500" pulse size="sm" />
                         <KindIcon className="size-3 shrink-0 opacity-70" />
@@ -367,17 +292,17 @@ export function AppSidebar() {
               {item.href === "/boards" && !rail && !folded && boards.length > 0 && (
                 <div className="mt-px flex flex-col gap-px">
                   {boards.map((b) => {
-                    const here = pathname === `/boards/${b.id}`;
+                    const here = current === `/boards/${b.id}`;
                     return (
                       <Link
                         key={b.id}
                         href={`/boards/${b.id}`}
                         onClick={closeMobile}
-                        onNavigate={side ? (e) => side.openPage(`/boards/${b.id}`, e) : undefined}
+                        onNavigate={(e) => side.openPage(`/boards/${b.id}`, e)}
                         aria-current={here ? "page" : undefined}
                         title={b.title}
-                        style={side?.sub}
-                        className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
+                        style={side.sub}
+                        className={`flex items-center gap-2 rounded-md py-0.5 pr-2 text-xs transition-colors ${
                           here
                             ? "font-medium text-foreground"
                             : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -417,8 +342,8 @@ export function AppSidebar() {
                               : `Open ${t.name} — ${termLabel(t.status)}${t.background ? ` (${t.background})` : ""}`) +
                             (t.memBytes ? ` · ${shortBytes(t.memBytes)} in memory` : "")
                           }
-                          style={side?.sub}
-                          className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                          style={side.sub}
+                          className="flex w-full min-w-0 items-center gap-2 rounded-md py-0.5 pr-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
                         >
                           <TermDot status={t.status} />
                           <span className="min-w-0 truncate">{t.name}</span>
@@ -449,30 +374,7 @@ export function AppSidebar() {
         {/* VS Code (code-server) — lives outside the /admin basePath, so a raw
             <a> (Next <Link> would prefix it with basePath). Gated by the admin
             session cookie in nginx. */}
-        {!navShown(hiddenNav, VSCODE_NAV) ? null : desktop ? (
-          <DeskVsCodeLink size={size} rail={rail} onClick={closeMobile} />
-        ) : (
-        <NavMenu id={VSCODE_NAV}>
-        <a
-          href="/vscode/"
-          target="_blank"
-          rel="noreferrer"
-          onClick={closeMobile}
-          title={rail ? "VS Code" : undefined}
-          className={`relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] leading-5 transition-colors ${
-            rail ? "justify-center" : ""
-          } text-muted-foreground hover:bg-accent/50 hover:text-foreground`}
-        >
-          <Code2 className="size-[15px] shrink-0" />
-          {!rail && (
-            <>
-              <span className="truncate">VS Code</span>
-              <ExternalLink className="ml-auto size-3.5 shrink-0 opacity-50" />
-            </>
-          )}
-        </a>
-        </NavMenu>
-        )}
+        {navShown(hiddenNav, VSCODE_NAV) && <DeskVsCodeLink size={size} rail={rail} onClick={closeMobile} />}
       </nav>
 
         <div
@@ -491,20 +393,20 @@ export function AppSidebar() {
             <LogOut className="size-[15px] shrink-0" />
             {!rail && <span>Logout</span>}
           </button>
-          {/* Collapse to the icon rail — in the desktop, where the header (and its toggle) is the phone's only. */}
-          {desktop && (
+          {/* Expand — on the rail, where the header has only the wisp (it opens the menu). */}
+          {rail && (
             <button
               onClick={toggle}
-              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              title={collapsed ? "Expand" : "Collapse"}
+              aria-label="Expand sidebar"
+              title="Expand"
               className="hidden rounded-md px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground md:block"
             >
-              {collapsed ? <PanelLeftOpen className="size-[15px]" /> : <PanelLeftClose className="size-[15px]" />}
+              <PanelLeftOpen className="size-[15px]" />
             </button>
           )}
         </div>
       </aside>
-    </DeskSideContext>
+    </SideContext>
   );
 }
 
@@ -514,25 +416,6 @@ function fmtBytes(n: number): string {
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
   if (n >= 1024) return `${Math.round(n / 1024)} KB`;
   return `${n} B`;
-}
-
-/**
- * An item's right-click menu in classic (desktop's is DeskNavLink's): `extra`, its own, then "Hide from sidebar",
- * which Settings → General undoes. The home and Settings always show: no hiding them.
- */
-function NavMenu({ id, extra, className, children }: { id: string; extra?: React.ReactNode; className?: string; children: React.ReactNode }) {
-  const hideable = !NAV_ALWAYS.includes(id);
-  if (!hideable && !extra) return children;
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger className={className}>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-44">
-        {extra}
-        {extra && hideable && <ContextMenuSeparator />}
-        {hideable && <ContextMenuItem onClick={() => setNavShown(id, false)}>Hide from sidebar</ContextMenuItem>}
-      </ContextMenuContent>
-    </ContextMenu>
-  );
 }
 
 /**
@@ -555,47 +438,20 @@ function NavGroup({
   onToggle: () => void;
   onNavigate: () => void;
 }) {
-  const side = useContext(DeskSideContext);
-  const Icon = item.icon;
-  const active = isActive(item, pathname);
-  const row = (it: NavItem, sub: boolean) => {
-    const on = isActive(it, pathname);
-    const ItIcon = it.icon;
-    // (in the desktop, its apps are the sidebar's like any, a group's items set in as classic's)
-    if (side)
-      return (
-        <div key={it.href} className="flex">
-          <DeskNavLink
-            item={it}
-            size={side.size}
-            rail={rail}
-            active={on}
-            indent={sub && !rail ? sideGlyph(side.size) + 3 : 0}
-            onClick={onNavigate}
-          />
-        </div>
-      );
-    return (
-      <NavMenu key={it.href} id={it.href}>
-      <Link
-        href={it.href}
+  const side = useContext(SideContext);
+  // (its apps are the sidebar's like any, a group's items set in)
+  const row = (it: NavItem, sub: boolean) => (
+    <div key={it.href} className="flex">
+      <DeskNavLink
+        item={it}
+        size={side.size}
+        rail={rail}
+        active={isActive(it, pathname)}
+        indent={sub && !rail ? sideGlyph(side.size) + 3 : 0}
         onClick={onNavigate}
-        aria-current={on ? "page" : undefined}
-        title={rail ? it.label : undefined}
-        className={`flex items-center gap-2.5 rounded-md text-[13px] leading-5 transition-colors ${
-          rail ? "justify-center px-2.5 py-1.5" : sub ? "py-1 pr-2.5 pl-7" : "px-2.5 py-1.5"
-        } ${
-          on
-            ? "bg-accent font-medium text-accent-foreground"
-            : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-        }`}
-      >
-        <ItIcon className={`shrink-0 ${sub && !rail ? "size-3.5" : "size-[15px]"}`} />
-        {!rail && <span className="truncate">{it.label}</span>}
-      </Link>
-      </NavMenu>
-    );
-  };
+      />
+    </div>
+  );
   if (rail)
     return (
       <div className="flex flex-col gap-px">
@@ -603,54 +459,21 @@ function NavGroup({
         {item.children!.map((c) => row(c, true))}
       </div>
     );
-  if (side)
-    return (
-      <div>
-        <div className="flex items-center">
-          <DeskNavLink item={item} size={side.size} rail={false} active={active} onClick={onNavigate} />
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={open}
-            aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
-            title={open ? "Fold" : "Unfold"}
-            className="mr-1 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100"
-          >
-            <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
-          </button>
-        </div>
-        {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
-      </div>
-    );
   return (
     <div>
-      <NavMenu id={item.href}>
-      <div
-        className={`flex items-center rounded-md transition-colors ${
-          active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-        }`}
-      >
-        <Link
-          href={item.href}
-          onClick={onNavigate}
-          aria-current={active ? "page" : undefined}
-          className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
-        >
-          <Icon className="size-[15px] shrink-0" />
-          <span className="truncate">{item.label}</span>
-        </Link>
+      <div className="flex items-center">
+        <DeskNavLink item={item} size={side.size} rail={false} active={isActive(item, pathname)} onClick={onNavigate} />
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={open}
           aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
           title={open ? "Fold" : "Unfold"}
-          className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
+          className="mr-1 rounded p-0.5 text-muted-foreground opacity-70 hover:bg-accent hover:opacity-100"
         >
           <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
         </button>
       </div>
-      </NavMenu>
       {open && <div className="mt-px flex flex-col gap-px">{item.children!.map((c) => row(c, true))}</div>}
     </div>
   );
@@ -676,7 +499,7 @@ function ProjectsGroup({
   onToggle: () => void;
   onNavigate: () => void;
 }) {
-  const side = useContext(DeskSideContext);
+  const side = useContext(SideContext);
   const [list, setList] = useState<ProjectNavItem[] | null>(null);
   const [memory] = useSubject(projectMemory);
   // Bumped after a script is started / stopped from a project's menu, or a project is created.
@@ -705,30 +528,11 @@ function ProjectsGroup({
     };
   }, [pathname, reload]);
 
-  const Icon = item.icon;
   const active = isActive(item, pathname);
-  const rowClass = (on: boolean) =>
-    on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground";
 
-  // Right-click on Projects (the row, or its icon in the rail): New project, and hide it.
-  const withMenu = (trigger: React.ReactNode) => (
-    <>
-      <NavMenu
-        id={item.href}
-        extra={
-          <ContextMenuItem onClick={() => setCreating(true)}>
-            <FolderPlus /> New project…
-          </ContextMenuItem>
-        }
-      >
-        {trigger}
-      </NavMenu>
-      {creating && <NewProjectDialog onClose={() => setCreating(false)} onCreated={() => setReload((n) => n + 1)} />}
-    </>
-  );
-
-  // In the desktop: the app's own row (its menu has New project… too), and the fold.
-  const deskRow = side && (
+  // The app's own row (its right-click has New project… too), and the fold; the icon rail has no room for a dozen
+  // names: just the Projects page, lit for any project's.
+  const head = (
     <>
       <div className="flex items-center">
         <DeskNavLink
@@ -761,47 +565,11 @@ function ProjectsGroup({
       {creating && <NewProjectDialog onClose={() => setCreating(false)} onCreated={() => setReload((n) => n + 1)} />}
     </>
   );
-
-  // The icon rail has no room for a dozen names: just the Projects page.
-  if (rail)
-    return deskRow || withMenu(
-      <Link
-        href={item.href}
-        onClick={onNavigate}
-        title={item.label}
-        aria-current={active ? "page" : undefined}
-        className={`flex items-center justify-center rounded-md px-2.5 py-1.5 transition-colors ${rowClass(active || pathname.startsWith("/projects/"))}`}
-      >
-        <Icon className="size-[15px] shrink-0" />
-      </Link>,
-    );
+  if (rail) return head;
 
   return (
     <div>
-      {deskRow || withMenu(
-        <div className={`flex items-center rounded-md transition-colors ${rowClass(active)}`}>
-          <Link
-            href={item.href}
-            onClick={onNavigate}
-            aria-current={active ? "page" : undefined}
-            className={`flex min-w-0 flex-1 items-center gap-2.5 px-2.5 py-1.5 text-[13px] leading-5 ${active ? "font-medium" : ""}`}
-          >
-            <Icon className="size-[15px] shrink-0" />
-            <span className="truncate">{item.label}</span>
-            {list && <span className="ml-auto text-xs tabular-nums opacity-60">{list.length}</span>}
-          </Link>
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={open}
-            aria-label={`${open ? "Fold" : "Unfold"} ${item.label}`}
-            title={open ? "Fold" : "Unfold"}
-            className="mr-1 rounded p-0.5 opacity-70 hover:bg-accent hover:opacity-100"
-          >
-            <ChevronDown className={`size-3.5 transition-transform ${open ? "" : "-rotate-90"}`} />
-          </button>
-        </div>,
-      )}
+      {head}
       {open && list && (
         <div className="mt-px flex flex-col gap-px">
           {list.map((p) => {
@@ -825,11 +593,11 @@ function ProjectsGroup({
                 <Link
                   href={href}
                   onClick={onNavigate}
-                  onNavigate={side ? (e) => side.openPage(href, e) : undefined}
+                  onNavigate={(e) => side.openPage(href, e)}
                   aria-current={on ? "page" : undefined}
-                  style={side?.sub}
+                  style={side.sub}
                   title={`${p.slug}${p.running ? ` · running${(p.ports ?? []).length ? ` on :${(p.ports ?? []).join(", :")}` : ""}` : ""}${mem ? ` · ${memoryTitle(mem)}${limit ? ` (limit ${shortBytes(limit * 1024 * 1024)})` : ""}` : ""} · ${p.openTasks} ticket${p.openTasks === 1 ? "" : "s"} to do${p.inProgress ? ` (${p.inProgress} in progress)` : ""}`}
-                  className={`flex items-center gap-2 rounded-md py-0.5 pr-2 pl-7 text-xs transition-colors ${
+                  className={`flex items-center gap-2 rounded-md py-0.5 pr-2 text-xs transition-colors ${
                     on ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
                   }`}
                 >

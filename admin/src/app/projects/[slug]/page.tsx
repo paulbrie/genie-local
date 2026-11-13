@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { ProjectTabRedirect } from "@/components/project-tab-nav";
+import { nextDependency } from "@/lib/next-dir";
 import { getProject, PROJECT_TABS } from "@/lib/project-page";
 
 export const dynamic = "force-dynamic";
@@ -35,10 +36,11 @@ export default async function ProjectPage({
 
   const detail = await getProject(slug);
   const hasGit = !!detail?.apps.some(({ app }) => app.isGit);
+  const hasNext = (await Promise.all((detail?.apps ?? []).map(({ app }) => nextDependency(app.path)))).some((v) => v !== null);
   return (
     <ProjectTabRedirect
       slug={slug}
-      tabs={PROJECT_TABS.filter((t) => t !== "git" || hasGit)}
+      tabs={PROJECT_TABS.filter((t) => (t !== "git" || hasGit) && (t !== "next" || hasNext))}
     />
   );
 }

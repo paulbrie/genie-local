@@ -6,11 +6,12 @@ import {
   clampRect,
   defaultGeom,
   frontmost,
+  LIVE_ID,
+  liveFate,
   maxRect,
   MIN_WIN,
   parseDesk,
   parsePopups,
-  parseShellMode,
   pathUnder,
   popupStart,
   resizeRect,
@@ -40,13 +41,6 @@ import {
 } from "./desktop";
 
 const APPS = ["/", "/projects", "/terminals", "/boards", "/files", "/claude", "/tasks", "/teams", "/agents", "/agents3d"];
-
-describe("parseShellMode", () => {
-  it("is desktop only when the cookie says so", () => {
-    assert.equal(parseShellMode("desktop"), "desktop");
-    for (const v of ["classic", "", "Desktop", undefined, null]) assert.equal(parseShellMode(v), "classic", String(v));
-  });
-});
 
 describe("appOf", () => {
   it("finds the app a path is, or sits under", () => {
@@ -182,6 +176,7 @@ describe("parsePopups", () => {
         { id: "w2", app: null, path: "/somewhere" },
       ],
       order: ["w2", "w1"],
+      live: null,
     });
   });
   it("drops what doesn't read as one, and orders the ones the stack misses last", () => {
@@ -202,10 +197,45 @@ describe("parsePopups", () => {
         { id: "d", app: "/boards", path: "/boards/7" },
       ],
       order: ["d", "c"],
+      live: null,
     });
   });
   it("is empty for nothing stored or anything unreadable", () => {
-    for (const raw of [null, "", "nope", "[]", "42", JSON.stringify({ frames: 3 })]) assert.deepEqual(parsePopups(raw, APPS), { list: [], order: [] });
+    for (const raw of [null, "", "nope", "[]", "42", JSON.stringify({ frames: 3 })])
+      assert.deepEqual(parsePopups(raw, APPS), { list: [], order: [], live: null });
+  });
+  it("brings back the page popped out live, in its place among the frames", () => {
+    const raw = JSON.stringify({
+      frames: [{ id: "w1", app: "/boards", path: "/boards" }, { id: LIVE_ID, app: "/files", path: "/files" }],
+      live: { app: "/files", path: "/files?dir=/tmp", geom: { x: 1, y: 2, w: 500, h: 300 }, hidden: true, closing: true },
+      stack: [LIVE_ID, "w1"],
+    });
+    assert.deepEqual(parsePopups(raw, APPS), {
+      list: [{ id: "w1", app: "/boards", path: "/boards" }],
+      order: [LIVE_ID, "w1"],
+      live: { app: "/files", path: "/files?dir=/tmp", geom: { x: 1, y: 2, w: 500, h: 300 }, hidden: true },
+    });
+  });
+  it("drops a live page that doesn't read as one (and never Home: it has no page to float)", () => {
+    for (const live of [{ app: "/gone", path: "/gone" }, { app: "/files", path: "files" }, { app: null, path: "/" }, "x"])
+      assert.deepEqual(parsePopups(JSON.stringify({ frames: [], live, stack: [LIVE_ID] }), APPS), { list: [], order: [], live: null }, JSON.stringify(live));
+  });
+});
+
+describe("liveFate", () => {
+  const live = { app: "/files", path: "/files?dir=/tmp" };
+  it("stays while the route is its page, a query aside", () => {
+    assert.equal(liveFate(live, "/files", false), "stay");
+    assert.equal(liveFate(live, "/files", true), "stay");
+  });
+  it("follows where it went itself, and goes on in a frame when something else took the route", () => {
+    assert.equal(liveFate(live, "/files/x", true), "follow");
+    assert.equal(liveFate(live, "/db", false), "frame");
+    assert.equal(liveFate(live, "/", false), "frame");
+  });
+  it("closed, stays out of sight until Home is here, then is gone", () => {
+    assert.equal(liveFate({ ...live, closing: true }, "/files", false), "stay");
+    assert.equal(liveFate({ ...live, closing: true }, "/", true), "gone");
   });
 });
 
@@ -444,11 +474,11 @@ describe("the sidebar, in the desktop", () => {
     assert.equal(parseDesk(JSON.stringify({ dockSize: 64, sidebarSize: 20 }), ["/"]).sidebarSize, 20);
     assert.equal(parseDesk(JSON.stringify({ dockSize: 2 }), ["/"]).sidebarSize, undefined);
   });
-  it("is classic's: its icon and its widths at the default size", () => {
-    assert.equal(sideGlyph(SIDEBAR_ICON.default), 15, "classic's icon");
+  it("has 15 px icons at the default size, and is 224 px wide (56 as a rail)", () => {
+    assert.equal(sideGlyph(SIDEBAR_ICON.default), 15);
     assert.equal(sideGlyph(SIDEBAR_ICON.max), 25);
-    assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224, "classic's");
-    assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 56, "classic's rail");
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, false), 224);
+    assert.equal(sidebarWidth(SIDEBAR_ICON.default, true), 56, "the rail");
     assert.ok(sidebarWidth(SIDEBAR_ICON.max, true) >= sideGlyph(SIDEBAR_ICON.max) + 20 + 12 + 6, "the rows' and the list's padding, a scrollbar");
   });
 });

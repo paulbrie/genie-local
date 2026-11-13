@@ -294,7 +294,9 @@ export function FileExplorer({ project }: { project?: string } = {}) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <nav aria-label="Folder" className="flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm">
+        {/* (flex-auto, not flex-1: sized by its crumbs, it takes a line of its own when the window's narrow, rather than
+            squeezed to nothing beside the buttons, its crumbs spilling under the search box) */}
+        <nav aria-label="Folder" className="flex min-w-0 flex-auto flex-wrap items-center gap-1 text-sm">
           {crumbs.map((c, i) => (
             <span key={c.path} className="flex items-center gap-1">
               {i > 0 && <ChevronRight className="size-3.5 text-muted-foreground" />}

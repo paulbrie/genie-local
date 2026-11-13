@@ -1,20 +1,11 @@
-// Pure, dependency-free: safe for server and client (the layout reads the cookie).
+// Pure, dependency-free: safe for server and client.
 /**
- * The desktop shell (components/desktop): which interface a browser uses, the
- * app a path belongs to, the pop-up windows' geometry over the content area (the
- * area beside the sidebar, under the top bar) and what a tab remembers of them,
- * the sidebar's sizes, the widgets' grid. Pure, so it is unit-tested; the
- * components do the storage and the DOM.
+ * The desktop shell (components/desktop): the app a path belongs to, the pop-up
+ * windows' geometry over the content area (the area beside the sidebar, under
+ * the top bar) and what a tab remembers of them, the sidebar's sizes, the
+ * widgets' grid. Pure, so it is unit-tested; the components do the storage and
+ * the DOM.
  */
-
-export type ShellMode = "classic" | "desktop";
-
-/** Remembers the interface per browser, so the server renders the right one at once (no flash of the other). */
-export const SHELL_COOKIE = "admin_shell";
-
-export function parseShellMode(v: string | undefined | null): ShellMode {
-  return v === "desktop" ? "desktop" : "classic";
-}
 
 /**
  * The app a path belongs to: the longest app href it is, or sits under ("/" only
@@ -60,6 +51,24 @@ export type WinGeom = Rect & { max?: boolean };
  */
 export type PopupSaved = { id: string; app: string | null; path: string; geom?: WinGeom; hidden?: boolean };
 
+/**
+ * The page inline popped out live: the route's own page in a window, kept as it is (no reload). Its path (with the
+ * query it had), app, place once set, minimized or not; `closing`: closed, on its way out (never stored).
+ */
+export type LiveSaved = { path: string; app: string | null; geom?: WinGeom; hidden?: boolean; closing?: boolean };
+
+/**
+ * What becomes of the page popped out live when the route is at `pathname`: it stays (it's still its page; closed, it
+ * stays out of sight until the route is Home), follows (it went there itself: the last press or key, `ownMove`, was in
+ * it), goes on in a frame at its old path (something else took the route: a sidebar click, ⌘K, a link elsewhere), or is
+ * gone (closed, and Home is here).
+ */
+export function liveFate(live: LiveSaved, pathname: string, ownMove: boolean): "stay" | "follow" | "frame" | "gone" {
+  if (live.closing) return pathname === "/" ? "gone" : "stay";
+  if (live.path.split("?")[0] === pathname) return "stay";
+  return ownMove ? "follow" : "frame";
+}
+
 /** The smallest a window gets. */
 export const MIN_WIN = { w: 380, h: 240 };
 /** How much of a window's title bar has to stay on screen. */
@@ -95,6 +104,9 @@ export function maxRect(W: number, H: number): Rect {
     h: Math.max(0, H - 2 * MAX_GAP),
   };
 }
+
+/** The live page's window's id in the pop-ups' order (the frames' are generated, never this). */
+export const LIVE_ID = "live";
 
 /** Of the pop-ups `ids`, the one nearest the front (`order`: every pop-up's id, back to front); null for none. */
 export function frontmost(order: readonly string[], ids: readonly string[]): string | null {
@@ -150,7 +162,7 @@ export function unmaximizeUnder(restored: Rect, max: Rect, px: number): Rect {
 /* -------------------------- the sidebar, in the desktop -------------------------- */
 
 /**
- * The sidebar's rows in the desktop interface, in px (each as tall as this, plus its padding): by default, and how
+ * The sidebar's rows, in px (each as tall as this, plus its padding): by default, and how
  * small or big Settings makes them.
  */
 export const SIDEBAR_ICON = { min: 16, max: 40, default: 24 } as const;
@@ -161,19 +173,19 @@ export const VSCODE_NAV = "vscode";
 /** The sidebar's items never left out of it (Settings → General → Sidebar): the home, and Settings, where the rest come back. */
 export const NAV_ALWAYS: readonly string[] = ["/", "/settings"];
 
-/** Whether the sidebar shows item `id` (an app's href, or VSCODE_NAV), in either interface, with `hidden` left out. */
+/** Whether the sidebar shows item `id` (an app's href, or VSCODE_NAV), with `hidden` left out. */
 export function navShown(hidden: readonly string[] | undefined, id: string): boolean {
   return NAV_ALWAYS.includes(id) || !hidden?.includes(id);
 }
 
-/** The icon on a row of `size` px: classic's glyph, at classic's 15 px by default. */
+/** The icon on a row of `size` px: its glyph, 15 px by default. */
 export function sideGlyph(size: number): number {
   return Math.round((size * 15) / SIDEBAR_ICON.default);
 }
 
 /**
- * The sidebar's width with rows of `size` px, with the names or as an icon rail (classic's 224 and 56 px at the
- * default): each icon plus the rows' and the list's padding, its border and a thin scrollbar's width.
+ * The sidebar's width with rows of `size` px, with the names or as an icon rail (224 and 56 px at the default): each
+ * icon plus the rows' and the list's padding, its border and a thin scrollbar's width.
  */
 export function sidebarWidth(size: number, rail: boolean): number {
   return sideGlyph(size) + (rail ? 41 : 209);
@@ -189,7 +201,7 @@ export type DeskSaved = {
   sidebarSize?: number;
   /** Where the widgets sit across the desktop, as one arrangement: absent is against the left. */
   align?: "center" | "right";
-  /** The sidebar's items left out of it, in both interfaces (by app href, and VSCODE_NAV; never NAV_ALWAYS's). */
+  /** The sidebar's items left out of it (by app href, and VSCODE_NAV; never NAV_ALWAYS's). */
   hiddenNav?: string[];
 };
 
@@ -282,37 +294,53 @@ export function parseDesk(raw: string | null, apps: readonly string[]): DeskSave
   return out;
 }
 
+/** A window's place as stored, when it reads as one. */
+function parseGeom(geom: unknown): WinGeom | undefined {
+  if (!geom || typeof geom !== "object") return undefined;
+  const { x, y, w, h, max } = geom as Record<string, unknown>;
+  return finite(x) && finite(y) && finite(w) && finite(h) && w > 0 && h > 0 ? { x, y, w, h, ...(max === true ? { max: true } : {}) } : undefined;
+}
+
 /**
- * The pop-ups a tab had (`{ frames, stack }`, as stored) and their order back to front: each once, showing a page of
- * a known app (or of none), its place kept only when it reads as one; the order holds each of them once.
+ * The pop-ups a tab had (`{ frames, stack, live }`, as stored) and their order back to front: each once, showing a
+ * page of a known app (or of none), its place kept only when it reads as one; the page popped out live, the same way
+ * (LIVE_ID in the order); the order holds each of them once.
  */
-export function parsePopups(raw: string | null, apps: readonly string[]): { list: PopupSaved[]; order: string[] } {
+export function parsePopups(raw: string | null, apps: readonly string[]): { list: PopupSaved[]; order: string[]; live: LiveSaved | null } {
   const known = new Set(apps);
   let v: unknown;
   try {
     v = raw ? JSON.parse(raw) : null;
   } catch {
-    return { list: [], order: [] };
+    return { list: [], order: [], live: null };
   }
-  if (!v || typeof v !== "object" || Array.isArray(v)) return { list: [], order: [] };
+  if (!v || typeof v !== "object" || Array.isArray(v)) return { list: [], order: [], live: null };
   const s = v as Record<string, unknown>;
   const list: PopupSaved[] = [];
   for (const f of Array.isArray(s.frames) ? s.frames : []) {
     if (!f || typeof f !== "object") continue;
     const { id, app, path, geom, hidden } = f as Record<string, unknown>;
-    if (typeof id !== "string" || list.some((o) => o.id === id) || typeof path !== "string" || !path.startsWith("/")) continue;
+    if (typeof id !== "string" || id === LIVE_ID || list.some((o) => o.id === id) || typeof path !== "string" || !path.startsWith("/")) continue;
     if (app !== null && (typeof app !== "string" || !known.has(app))) continue;
     const one: PopupSaved = { id, app, path };
-    if (geom && typeof geom === "object") {
-      const { x, y, w, h, max } = geom as Record<string, unknown>;
-      if (finite(x) && finite(y) && finite(w) && finite(h) && w > 0 && h > 0) one.geom = { x, y, w, h, ...(max === true ? { max: true } : {}) };
-    }
+    const g = parseGeom(geom);
+    if (g) one.geom = g;
     if (hidden === true) one.hidden = true;
     list.push(one);
   }
-  const ids = list.map((f) => f.id);
+  let live: LiveSaved | null = null;
+  if (s.live && typeof s.live === "object") {
+    const { app, path, geom, hidden } = s.live as Record<string, unknown>;
+    if (typeof path === "string" && path.startsWith("/") && path !== "/" && (app === null || (typeof app === "string" && known.has(app)))) {
+      live = { path, app };
+      const g = parseGeom(geom);
+      if (g) live.geom = g;
+      if (hidden === true) live.hidden = true;
+    }
+  }
+  const ids = [...(live ? [LIVE_ID] : []), ...list.map((f) => f.id)];
   const order = [...new Set(Array.isArray(s.stack) ? s.stack.filter((x): x is string => typeof x === "string" && ids.includes(x)) : [])];
-  return { list, order: [...order, ...ids.filter((id) => !order.includes(id))] };
+  return { list, order: [...order, ...ids.filter((id) => !order.includes(id))], live };
 }
 
 /* ------------------------------- the widgets ------------------------------- */

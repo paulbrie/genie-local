@@ -11,8 +11,7 @@ import { StatsHistoryChart } from "@/components/stats-history-chart";
 import { mobileNav } from "@/store/ui";
 import { AdminUpdateButton } from "@/components/admin-update-button";
 import { CommandPaletteButton } from "@/components/command-palette";
-import { DesktopMenu } from "@/components/desktop/desktop-menu";
-import { ShellSwitch, useShellMode } from "@/components/desktop/shell-mode";
+import { PageTitle } from "@/components/desktop/desktop-menu";
 import { SessionsIndicator } from "@/components/sessions-indicator";
 import { ProjectsMemoryBadge } from "@/components/project-memory-badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -21,13 +20,12 @@ import { cn } from "@/lib/utils";
 const POLL_MS = 5000;
 
 /**
- * Slim top bar showing live system telemetry, and the Classic / Desktop switch.
- * Navigation and the theme/logout controls live in {@link AppSidebar}; in the
- * desktop interface the bar is its menu bar, the Spiridus menu at its left.
+ * Slim top bar beside the sidebar: the page's name and its detach icon, live
+ * system telemetry, search. Navigation, the Spiridus menu (on its logo) and the
+ * theme/logout controls live in {@link AppSidebar}.
  */
 export function StatsToolbar() {
   const pathname = usePathname();
-  const desktop = useShellMode().mode === "desktop";
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [error, setError] = useState(false);
 
@@ -63,14 +61,10 @@ export function StatsToolbar() {
 
   return (
     <header
-      className={`flex h-10 shrink-0 items-center gap-2 border-b px-4 sm:gap-4 ${
-        desktop
-          ? // over the desktop's window, so the bar's own popovers open on top of it
-            "relative z-30 bg-background/90 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70"
-          : "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
-      }`}
+      // (a layer over the content area's pop-ups, so the bar's own popovers open on top of them)
+      className="relative z-30 flex h-10 shrink-0 items-center gap-2 border-b bg-background/90 px-4 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 sm:gap-4"
     >
-      {/* Mobile nav trigger — the sidebar is an off-canvas drawer below `md` (in either interface). */}
+      {/* Mobile nav trigger — the sidebar is an off-canvas drawer below `md`. */}
       <button
         type="button"
         onClick={() => mobileNav.next(true)}
@@ -79,7 +73,7 @@ export function StatsToolbar() {
       >
         <Menu className="size-5" />
       </button>
-      {desktop && <DesktopMenu />}
+      <PageTitle />
       <div className="flex min-w-0 flex-1 items-center">
         <Gauges stats={stats} error={error} />
       </div>
@@ -95,7 +89,6 @@ export function StatsToolbar() {
       <AdminUpdateButton />
       <SessionsIndicator />
       <StatsHistoryChart />
-      <ShellSwitch />
     </header>
   );
 }

@@ -11,7 +11,6 @@ import {
   KanbanSquare,
   KeyRound,
   House,
-  LayoutDashboard,
   UsersRound,
   MessagesSquare,
   Network,
@@ -28,23 +27,22 @@ import {
 } from "lucide-react";
 
 /**
- * The app's areas, as the sidebar (app-sidebar.tsx, in both interfaces) lists
- * them and the desktop's windows (components/desktop) name them. One list, so a
- * new page shows up everywhere.
+ * The app's areas, as the sidebar (app-sidebar.tsx) lists them and the pop-up
+ * windows (components/desktop) name them. One list, so a new page shows up
+ * everywhere.
  */
 export type NavItem = {
   href: string;
   label: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof House;
   exact?: boolean;
   /** A collapsible group: the item itself links to its own page, these under it. */
   children?: NavItem[];
-  /** What it is in the desktop interface instead (the home: Home, the wallpaper with its widgets, not the Dashboard). */
-  desktop?: { label: string; icon: typeof LayoutDashboard };
 };
 
 export const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true, desktop: { label: "Home", icon: House } },
+  // the wallpaper with its widgets (components/desktop)
+  { href: "/", label: "Home", icon: House, exact: true },
   // Its sub-items are the projects themselves (ProjectsGroup), loaded live.
   { href: "/projects", label: "Projects", icon: FolderKanban, exact: true },
   { href: "/terminals", label: "Terminals", icon: SquareTerminal },

@@ -47,6 +47,8 @@ import {
   fitShift,
   GRID,
   gridSize,
+  LIVE_ID,
+  liveFate,
   maxRect,
   popupStart,
   moveCells,
@@ -57,6 +59,7 @@ import {
   stackDesktop,
   widgetWants,
   type Rect,
+  type WinGeom,
   resizeCells,
   resizeRect,
   subPath,
@@ -73,8 +76,14 @@ import { useIsMobile } from "@/lib/use-is-mobile";
 import { openTerminal } from "@/store/terminals";
 import { commandPalette } from "@/store/ui";
 import {
+  attachLive,
+  closeAttached,
+  closeLive,
   desk,
   hydrateDesk,
+  liveFocus,
+  liveToFrame,
+  liveWin,
   setGeom,
   setArrangement,
   setNavShown,
@@ -88,56 +97,265 @@ import {
   raiseApp,
   stack,
   updateFrame,
+  updateLive,
   type FrameWin,
 } from "@/store/desktop";
 
 const BY_HREF = new Map(NAV_FLAT.map((i) => [i.href, i]));
 
 /**
- * Where the page goes, in either interface: the scrolling column beside the sidebar, as classic has it. In the
- * desktop that column is the content area: Home ("/") there is the wallpaper with its widgets, and over the area float
- * the pop-ups, pages popped out (the top bar's detach, desktop-menu.tsx) or opened in a new window, each in a frame
- * (FrameWindows).
+ * Where the page goes: the content area beside the sidebar, under the top bar. The page shows there inline, scrolling
+ * as a plain column; Home ("/") there is the wallpaper with its widgets; over the area float the pop-ups. The page
+ * inline pops out live (the top bar's detach, desktop-menu.tsx): this very wrapper becomes its window, so nothing
+ * remounts and nothing reloads (its scroll, what's typed in it, an open editor all stay), the URL stays its own and
+ * Home draws behind; put back, it restyles inline. Where the route goes meanwhile decides the rest (liveFate): its own
+ * way, the window follows; something else's (a sidebar click, ⌘K, a link elsewhere), it goes on in a frame at its
+ * path, the new page inline. Pages opened in a new window are frames from the start (FrameWindows).
  *
- * The page sits at the same place in the tree in both, so switching interfaces doesn't remount it (its wrapper is
- * `display: contents` in classic). It has no z-index, as in classic; the pop-ups are layers over it (winZ).
+ * The page sits at the same place in the tree inline or popped out, and what scrolls it is the same element either
+ * way, so its scroll stays. Inline it has no z-index; each pop-up is a layer over it (winZ). On the login page
+ * (`shell` false) it's the page alone.
  */
-export function Workspace({ desktop, children }: { desktop: boolean; children: React.ReactNode }) {
+export function Workspace({ shell, children }: { shell: boolean; children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const mobile = useIsMobile();
   const areaRef = useRef<HTMLDivElement>(null);
   const [ws, setWs] = useState<{ w: number; h: number } | null>(null);
-  // Home is the wallpaper and its widgets in the page's place (the home's page renders nothing in the desktop)
-  const home = desktop && pathname === "/";
+  const [live] = useSubject(liveWin);
+  const [ownMove] = useSubject(liveFocus);
+  const [list] = useSubject(frames);
+  const [order] = useSubject(stack);
+  const [{ geoms }] = useSubject(desk);
+  const fate = shell && live ? liveFate(live, pathname, ownMove) : null;
+  // the page in a window of its own (a phone's: the whole area)
+  const floating = fate === "stay" || fate === "follow";
+  // Home: the route's, or drawn behind the page floating (the home's page renders nothing)
+  const atHome = shell && pathname === "/";
+  const item = live?.app ? (BY_HREF.get(live.app) ?? null) : null;
+  const area = ws ?? { w: 1024, h: 768 };
+  // a first place: where its app's last pop-up was (or the default), a step down and right for each frame open
+  const start = live?.geom ?? popupStart(live?.app ? geoms[live.app] : undefined, list.length, area.w, area.h);
+  const winRef = useRef<HTMLDivElement>(null);
+  const pop = usePopupMoves(winRef, start, area, mobile, (geom) => {
+    updateLive({ geom });
+    if (live?.app) setGeom(live.app, geom);
+  }, () => focusWin(LIVE_ID));
 
-  // Restore what this browser and tab remember, once the desktop first shows.
+  // Restore what this browser and tab remember, once the shell first shows (not on the login page).
   useEffect(() => {
-    if (desktop) hydrateDesk(NAV_HREFS);
-  }, [desktop]);
+    if (shell) hydrateDesk(NAV_HREFS, pathname);
+    // (once: where the route is at that moment)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shell]);
 
   useEffect(() => {
     const el = areaRef.current;
-    if (!desktop || !el) return;
+    if (!shell || !el) return;
     const ro = new ResizeObserver(() => setWs({ w: el.clientWidth, h: el.clientHeight }));
     ro.observe(el);
     return () => ro.disconnect();
-  }, [desktop]);
+  }, [shell]);
+
+  // Where the last press or key was: in the live window (where the route goes next is its own way) or elsewhere.
+  useEffect(() => {
+    if (!shell) return;
+    const note = (e: Event) => {
+      const inside = !!winRef.current?.contains(e.target as Node);
+      if (inside !== liveFocus.getValue()) liveFocus.next(inside);
+    };
+    window.addEventListener("pointerdown", note, true);
+    window.addEventListener("keydown", note, true);
+    return () => {
+      window.removeEventListener("pointerdown", note, true);
+      window.removeEventListener("keydown", note, true);
+    };
+  }, [shell]);
+
+  // The route moved: frames put back inline go (their page is here now); the live window follows, goes on in a
+  // frame, or, closed, is gone (decided above, as it's drawn).
+  useEffect(() => {
+    if (!shell) return;
+    closeAttached();
+    const l = liveWin.getValue();
+    if (!l) return;
+    const f = liveFate(l, pathname, liveFocus.getValue());
+    if (f === "follow") updateLive({ path: pathname + window.location.search, app: appOf(pathname, NAV_HREFS) });
+    else if (f === "frame") liveToFrame();
+    else if (f === "gone") attachLive();
+  }, [shell, pathname]);
+
+  // (its first place is kept: a frame of its app moving later doesn't move it)
+  const placed = !!live?.geom;
+  useEffect(() => {
+    if (floating && !placed && ws) updateLive({ geom: start });
+  }, [floating, placed, ws, start]);
 
   return (
     <div
       ref={areaRef}
-      className={desktop ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
+      className={shell ? "relative min-h-0 flex-1 overflow-hidden" : "scrollbar-clear flex-1 overflow-y-auto"}
     >
-      {home && <DesktopBackground mobile={mobile} />}
-      <div className={desktop ? (home ? "hidden" : "scrollbar-clear absolute inset-0 overflow-y-auto") : "contents"}>
-        {home ? null : children}
+      {(atHome || floating) && <DesktopBackground mobile={mobile} />}
+      <div
+        ref={winRef}
+        role={floating ? "region" : undefined}
+        aria-label={floating ? `${item?.label ?? "Page"} window` : undefined}
+        aria-hidden={floating && live?.hidden ? true : undefined}
+        onPointerDownCapture={floating ? () => focusWin(LIVE_ID) : undefined}
+        style={floating ? { ...pop.style, zIndex: winZ(order, LIVE_ID), ...(ws ? {} : { visibility: "hidden" }) } : undefined}
+        className={
+          !shell
+            ? "contents"
+            : floating
+              ? `${pop.className} ${live?.hidden ? "invisible" : ""}`
+              : atHome
+                ? "hidden"
+                : "absolute inset-0 flex flex-col"
+        }
+      >
+        {floating && live && (
+          <TitleBar
+            item={item}
+            pathname={pathname}
+            mobile={mobile}
+            max={pop.max}
+            onPointerDown={pop.onBarPointerDown}
+            onClose={() => {
+              closeLive();
+              router.push("/");
+            }}
+            onMinimize={() => updateLive({ hidden: true })}
+            onToggleMax={pop.toggleMax}
+            onAttach={attachLive}
+            onReload={() => router.refresh()}
+            href={`${BASE_PATH}${live.path}`}
+          />
+        )}
+        <div
+          className={
+            shell
+              ? `scrollbar-clear min-h-0 flex-1 overflow-y-auto ${floating && !mobile ? "rounded-b-[calc(var(--radius)*1.4-1px)]" : ""} ${
+                  floating && pop.dragging ? "pointer-events-none select-none" : ""
+                }`
+              : "contents"
+          }
+        >
+          {atHome ? null : children}
+        </div>
+        {floating && !mobile && !pop.max && <ResizeHandles onPointerDown={pop.onResizePointerDown} />}
       </div>
-      {desktop && <FrameWindows area={ws} mobile={mobile} />}
+      {shell && <FrameWindows area={ws} mobile={mobile} />}
     </div>
   );
 }
 
 /* ------------------------------- a pop-up ------------------------------- */
+
+/**
+ * A pop-up's place and its moves (the live page's window and the frames', `winRef`): its rect in the content area (`area`) from
+ * `geom` (maximized: the whole area, a gap around it), dragged by its title bar (a maximized one comes back to its size
+ * under the pointer), resized from any edge or corner, maximized and back with a glide; `save` keeps where it's let go,
+ * `focus` brings it to the front when grabbed. A phone's fills the area and doesn't move.
+ */
+function usePopupMoves(
+  winRef: React.RefObject<HTMLDivElement | null>,
+  geom: WinGeom,
+  area: { w: number; h: number },
+  mobile: boolean,
+  save: (g: WinGeom) => void,
+  focus: () => void,
+) {
+  const [live, setLive] = useState<Rect | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [glide, setGlide] = useState(false);
+  const { w: W, h: H } = area;
+  const max = !!geom.max;
+  const placed = clampRect(geom, W, H);
+  const rect = live ?? (max ? maxRect(W, H) : placed);
+  const saveGeom = (r: Rect, isMax = max) => save({ ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) });
+
+  function toggleMax() {
+    if (mobile) return;
+    setGlide(true);
+    window.setTimeout(() => setGlide(false), 260);
+    saveGeom(placed, !max);
+  }
+
+  function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || mobile || (e.target as HTMLElement).closest("button, a, input")) return;
+    focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let from = rect;
+    let last: Rect | null = null;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      const dy = ev.clientY - y0;
+      if (!last) {
+        if (Math.abs(dx) + Math.abs(dy) < 4) return;
+        setDragging(true);
+        deskDrag.next(true);
+        if (max) {
+          const left = winRef.current?.parentElement?.getBoundingClientRect().left ?? 0;
+          from = unmaximizeUnder(placed, rect, x0 - left);
+        }
+      }
+      last = { ...from, x: from.x + dx, y: Math.max(0, from.y + dy) };
+      setLive(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      if (!last) return;
+      saveGeom(last, false);
+      setLive(null);
+      setDragging(false);
+      deskDrag.next(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function onResizePointerDown(edges: Edges, e: React.PointerEvent<HTMLElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    focus();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const from = rect;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let last = from;
+    setDragging(true);
+    deskDrag.next(true);
+    const move = (ev: PointerEvent) => {
+      last = resizeRect(from, edges, ev.clientX - x0, ev.clientY - y0, W, H);
+      setLive(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      saveGeom(last);
+      setLive(null);
+      setDragging(false);
+      deskDrag.next(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  const style: React.CSSProperties = mobile ? { inset: 0 } : { left: rect.x, top: rect.y, width: rect.w, height: rect.h };
+  const className = `absolute flex origin-bottom flex-col bg-background motion-safe:animate-desk-in ${
+    mobile ? "" : "rounded-xl border shadow-[0_28px_70px_-18px_rgb(0_0_0/0.5)] ring-1 ring-black/5 dark:ring-white/10"
+  } ${glide && !dragging ? "transition-[left,top,width,height] duration-200 ease-out" : ""}`;
+  return { max, dragging, style, className, toggleMax, onBarPointerDown, onResizePointerDown };
+}
 
 function TitleBar({
   item,
@@ -311,7 +529,11 @@ function FrameWindows({ area, mobile }: { area: { w: number; h: number } | null;
       const id = el.dataset.deskFrame;
       if (e.data.type === "spiridus:path" && typeof e.data.path === "string" && e.data.path.startsWith("/"))
         updateFrame(id, { path: e.data.path, app: appOf(e.data.path.split("?")[0], NAV_HREFS) });
-      else if (e.data.type === "spiridus:focus") focusWin(id);
+      else if (e.data.type === "spiridus:focus") {
+        focusWin(id);
+        // (a press in a frame is one outside the live window)
+        liveFocus.next(false);
+      }
       else if (e.data.type === "spiridus:palette") commandPalette.next(!commandPalette.getValue());
       else if (e.data.type === "spiridus:terminal" && typeof e.data.name === "string") openTerminal(e.data.name);
     };
@@ -343,108 +565,40 @@ function FrameWindow({
   mobile: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const winRef = useRef<HTMLDivElement>(null);
   const [{ geoms }] = useSubject(desk);
   // (the frame's first page: later ones it goes to itself, and its src mustn't follow, or it would reload)
   const [src] = useState(() => `${BASE_PATH}${win.path}`);
   const [dragAny] = useSubject(deskDrag);
-  const [live, setLive] = useState<Rect | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const [glide, setGlide] = useState(false);
   const item = win.app ? (BY_HREF.get(win.app) ?? null) : null;
-  const { w: W, h: H } = area;
   // a new one: where its app's last was (or the default), a step down and right for each one open before it
-  const start = win.geom ?? popupStart(win.app ? geoms[win.app] : undefined, cascade, W, H);
-  const max = !!start.max;
-  const placed = clampRect(start, W, H);
-  const rect = live ?? (max ? maxRect(W, H) : placed);
+  const start = win.geom ?? popupStart(win.app ? geoms[win.app] : undefined, cascade, area.w, area.h);
+  // its place, and where its app's next one opens
+  const pop = usePopupMoves(winRef, start, area, mobile, (geom) => {
+    updateFrame(win.id, { geom });
+    if (win.app) setGeom(win.app, geom);
+  }, () => focusWin(win.id));
   // (kept from the first: another of its app's moving later doesn't move this one)
   useEffect(() => {
     if (!win.geom) updateFrame(win.id, { geom: start });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // its place, and where its app's next one opens
-  const saveGeom = (r: Rect, isMax = max) => {
-    const geom = { ...clampRect(r, W, H), ...(isMax ? { max: true } : {}) };
-    updateFrame(win.id, { geom });
-    if (win.app) setGeom(win.app, geom);
-  };
-
-  function toggleMax() {
-    if (mobile) return;
-    setGlide(true);
-    window.setTimeout(() => setGlide(false), 260);
-    saveGeom(placed, !max);
-  }
-
-  function onBarPointerDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (e.button !== 0 || mobile || (e.target as HTMLElement).closest("button, a, input")) return;
-    focusWin(win.id);
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    let from = rect;
-    let last: Rect | null = null;
-    const move = (ev: PointerEvent) => {
-      const dx = ev.clientX - x0;
-      const dy = ev.clientY - y0;
-      if (!last) {
-        if (Math.abs(dx) + Math.abs(dy) < 4) return;
-        setDragging(true);
-        deskDrag.next(true);
-        if (max) {
-          const left = winRef.current?.parentElement?.getBoundingClientRect().left ?? 0;
-          from = unmaximizeUnder(placed, rect, x0 - left);
-        }
-      }
-      last = { ...from, x: from.x + dx, y: Math.max(0, from.y + dy) };
-      setLive(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      if (!last) return;
-      saveGeom(last, false);
-      setLive(null);
-      setDragging(false);
-      deskDrag.next(false);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-  }
-
-  function onResizePointerDown(edges: Edges, e: React.PointerEvent<HTMLElement>) {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    focusWin(win.id);
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const from = rect;
-    const x0 = e.clientX;
-    const y0 = e.clientY;
-    let last = from;
-    setDragging(true);
-    deskDrag.next(true);
-    const move = (ev: PointerEvent) => {
-      last = resizeRect(from, edges, ev.clientX - x0, ev.clientY - y0, W, H);
-      setLive(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      saveGeom(last);
-      setLive(null);
-      setDragging(false);
-      deskDrag.next(false);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+  // Back inline, in place of the page there: it stays over it until its page is there (Workspace closes it then), so
+  // nothing flashes; its page already the route's (the live window's), that one goes back inline instead, as it is.
+  function attach() {
+    const bare = win.path.split("?")[0];
+    if (bare === pathname) {
+      closeFrame(win.id);
+      if (liveWin.getValue()) attachLive();
+      router.push(win.path);
+      return;
+    }
+    liveFocus.next(false);
+    updateFrame(win.id, { attaching: true });
+    router.push(win.path);
   }
 
   const cw = () => frameRef.current?.contentWindow ?? null;
@@ -455,24 +609,19 @@ function FrameWindow({
       aria-label={`${item?.label ?? "Page"} window`}
       aria-hidden={win.hidden ? true : undefined}
       onPointerDownCapture={() => focusWin(win.id)}
-      style={mobile ? { inset: 0, zIndex: z } : { left: rect.x, top: rect.y, width: rect.w, height: rect.h, zIndex: z }}
-      className={`absolute flex origin-bottom flex-col bg-background motion-safe:animate-desk-in ${
-        mobile ? "" : "rounded-xl border shadow-[0_28px_70px_-18px_rgb(0_0_0/0.5)] ring-1 ring-black/5 dark:ring-white/10"
-      } ${glide && !dragging ? "transition-[left,top,width,height] duration-200 ease-out" : ""} ${win.hidden ? "invisible" : ""}`}
+      style={{ ...pop.style, zIndex: z }}
+      className={`${pop.className} ${win.hidden ? "invisible" : ""}`}
     >
       <TitleBar
         item={item}
         pathname={win.path.split("?")[0]}
         mobile={mobile}
-        max={max}
-        onPointerDown={onBarPointerDown}
+        max={pop.max}
+        onPointerDown={pop.onBarPointerDown}
         onClose={() => closeFrame(win.id)}
         onMinimize={() => updateFrame(win.id, { hidden: true })}
-        onToggleMax={toggleMax}
-        onAttach={() => {
-          closeFrame(win.id);
-          router.push(win.path);
-        }}
+        onToggleMax={pop.toggleMax}
+        onAttach={attach}
         onReload={() => cw()?.location.reload()}
         href={`${BASE_PATH}${win.path}`}
       />
@@ -485,7 +634,7 @@ function FrameWindow({
           dragAny ? "pointer-events-none select-none" : ""
         }`}
       />
-      {!mobile && !max && <ResizeHandles onPointerDown={onResizePointerDown} />}
+      {!mobile && !pop.max && <ResizeHandles onPointerDown={pop.onResizePointerDown} />}
     </div>
   );
 }
@@ -897,7 +1046,7 @@ function WidgetFrame({
 }
 
 /**
- * An app's right-click menu in the sidebar, in the desktop (`children`: more of its own), "Hide from sidebar" last
+ * An app's right-click menu in the sidebar (`children`: more of its own), "Hide from sidebar" last
  * (Settings → General has them all; the home and Settings stay). No new window on a phone (`onNewWindow` absent).
  */
 function AppMenu({
@@ -947,19 +1096,19 @@ function AppMenu({
   );
 }
 
-/* ------------------------ the sidebar, in the desktop ----------------------- */
+/* ------------------------------- the sidebar ------------------------------- */
 
-/** A row of the sidebar, in the desktop: classic's (as tall as the size picked, 32 px at the default, as classic's). */
+/** A row of the sidebar (as tall as the size picked, 32 px at the default). */
 function sideRow(active: boolean, rail: boolean) {
   return `relative flex min-w-0 items-center gap-2.5 rounded-md px-2.5 py-1 leading-5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
     rail ? "justify-center" : ""
   } ${active ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"}`;
 }
 
-/** The names' size beside icons of `size` px: classic's 13 px, a little more with the bigger ones. */
+/** The names' size beside icons of `size` px: 13 px, a little more with the bigger ones. */
 const sideFont = (size: number) => Math.max(13, Math.round(10 + size / 8));
 
-/** An icon in the sidebar: classic's glyph, in the row's colour (sideGlyph: 15 px at the default size), the row `size` tall. */
+/** An icon in the sidebar: its glyph, in the row's colour (sideGlyph: 15 px at the default size), the row `size` tall. */
 function SideIcon({ icon: Icon, size }: { icon: NavItem["icon"]; size: number }) {
   const px = sideGlyph(size);
   return (
@@ -969,7 +1118,7 @@ function SideIcon({ icon: Icon, size }: { icon: NavItem["icon"]; size: number })
   );
 }
 
-/** A count on a row of the icon rail (which has no room for the row's own): classic's. */
+/** A count on a row of the icon rail (which has no room for the row's own). */
 function RailBadge({ count }: { count: number }) {
   return (
     <span className="absolute -top-1 right-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-medium text-primary-foreground">
@@ -979,11 +1128,11 @@ function RailBadge({ count }: { count: number }) {
 }
 
 /**
- * An app in the sidebar, in the desktop interface (app-sidebar.tsx): its icon, classic's, at the sidebar's size
- * (desk.sidebarSize), a dot by it while it's popped out. A click shows its page inline, as classic's does, unless it's
- * popped out: then its window comes to the front (raiseApp); a click with a modifier is the browser's (onNavigate isn't
- * called). Right-click: open it, in a new window (not on a phone) or tab, close its windows, `menu` (its own), hide it
- * from the sidebar. The home is Home: the wallpaper with its widgets, a page like the others.
+ * An app in the sidebar (app-sidebar.tsx): its icon at the sidebar's size (desk.sidebarSize), a dot by it while it's
+ * popped out. A click shows its page inline, unless it's popped out: then its window comes to the front (raiseApp); a
+ * click with a modifier is the browser's (onNavigate isn't called). Right-click: open it, in a new window (not on a
+ * phone) or tab, close its windows, `menu` (its own), hide it from the sidebar. Home is the wallpaper with its widgets,
+ * a page like the others (as it is while a page floats over it, live).
  */
 export function DeskNavLink({
   item,
@@ -1013,10 +1162,13 @@ export function DeskNavLink({
   const router = useRouter();
   const mobile = useIsMobile();
   const [wins] = useSubject(frames);
+  const [live] = useSubject(liveWin);
   const href = item.href;
-  const home = item.desktop;
-  const label = home?.label ?? item.label;
+  const home = href === "/";
+  const label = item.label;
   const appFrames = home ? [] : wins.filter((f) => f.app === href);
+  // popped out: in frames, or live
+  const out = appFrames.length > 0 || (!home && live?.app === href);
 
   const link = (
     <Link
@@ -1026,15 +1178,16 @@ export function DeskNavLink({
       title={rail ? `${label}${badge ? ` (${badge})` : ""}` : undefined}
       onClick={onClick}
       onNavigate={(e) => {
-        if (!home && raiseApp(href)) e.preventDefault();
+        // (Home: as it is while a page floats over it, live)
+        if (home ? !!liveWin.getValue() : raiseApp(href)) e.preventDefault();
       }}
       className={`flex-1 ${sideRow(active, rail)}`}
       style={{ fontSize: sideFont(size), paddingLeft: indent ? 10 + indent : undefined }}
     >
-      {appFrames.length > 0 && (
+      {out && (
         <span aria-hidden className="absolute top-1/2 size-1 -translate-y-1/2 rounded-full bg-foreground/60" style={{ left: indent }} />
       )}
-      <SideIcon icon={home?.icon ?? item.icon} size={size} />
+      <SideIcon icon={item.icon} size={size} />
       {rail && badge != null && <RailBadge count={badge} />}
       {!rail && <span className="truncate">{label}</span>}
       {!rail && children}
@@ -1064,8 +1217,8 @@ export function DeskNavLink({
 }
 
 /**
- * VS Code in the sidebar, in the desktop: code-server, outside the basePath, so a raw link to a new tab, as classic's
- * is. Its menu hides it from the sidebar.
+ * VS Code in the sidebar: code-server, outside the basePath, so a raw link to a new tab. Its menu hides it from the
+ * sidebar.
  */
 export function DeskVsCodeLink({ size, rail, onClick }: { size: number; rail: boolean; onClick?: () => void }) {
   return (

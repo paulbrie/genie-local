@@ -81,10 +81,12 @@ import {
   type PortChangePreview,
 } from "@/lib/nginx";
 import { IMAGE_RE, RUN_ISOLATIONS } from "@/lib/run-isolation";
+import { nextDependency, removeNextDir } from "@/lib/next-dir";
 import {
   listeningPortPids,
   restartApp,
   startApp,
+  statusFor,
   statusForWithPort,
   stopApp,
   type RunStatus,
@@ -673,6 +675,31 @@ export async function setAppRunSettingsAction(slug: string, appId: number, setti
   const run = runSettingsSchema.parse(settings);
   await updateAppRunSettings(projectId, appIdSchema.parse(appId), run);
   revalidateProject();
+}
+
+/**
+ * Delete a Next.js app's `.next` (its build output and caches). The app's scripts running from here are stopped first
+ * (a `next dev` loses its files from under it) and started again after, the delete done or not.
+ */
+export async function deleteNextDirAction(slug: string, appId: number): Promise<{ restarted: string[] }> {
+  await requireAdmin();
+  const t = await requireAppTarget(slug, appId);
+  if ((await nextDependency(t.path)) === null) {
+    throw new Error(`${t.projectSlug}/${t.appSlug || "(root)"} doesn't use Next.js`);
+  }
+  const scripts = Object.keys(await readScripts(t.path)).filter((s) => scriptNameSchema.safeParse(s).success);
+  const statuses = await Promise.all(scripts.map((s) => statusFor(t.projectSlug, t.appSlug, s)));
+  const running = scripts.filter((_, i) => statuses[i].running);
+  await Promise.all(running.map((s) => stopApp(t.projectSlug, t.appSlug, s)));
+  try {
+    await removeNextDir(t.path);
+  } finally {
+    for (const script of running) {
+      await startApp({ dir: t.path, projectSlug: t.projectSlug, appSlug: t.appSlug, port: t.port, script, run: t.run });
+    }
+    revalidateProject();
+  }
+  return { restarted: running };
 }
 
 /**

@@ -13,7 +13,7 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { BASE_PATH } from "@/lib/config";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { cn } from "@/lib/utils";
-import { raisePath } from "@/store/desktop";
+import { openPage } from "@/store/desktop";
 import { memoryOf, projectMemory } from "@/store/project-memory";
 import { liveTerminals, openTerminal, type LiveTerminal, type TermStatus } from "@/store/terminals";
 
@@ -59,7 +59,7 @@ export function TerminalsWidget({ folded }: { folded: boolean }) {
         <WidgetList>
           {terms.length === 0 && <Empty>No terminals.</Empty>}
           {terms.map((t) => (
-            // (right-click: the sidebar's menu, the same options as in the classic view)
+            // (right-click: the sidebar's menu, the same options as there)
             <TerminalContextMenu key={t.name} name={t.name} claude={t.status.startsWith("claude")} onNavigate={() => {}}>
               <TerminalRow t={t} onOpen={() => openTerminal(t.name)} />
             </TerminalContextMenu>
@@ -104,9 +104,7 @@ export function ProjectsWidget({ folded }: { folded: boolean }) {
   const running = (projects ?? []).filter((p) => p.running).length;
 
   // a project's page inline, or its window to the front if it's popped out
-  const openPath = (path: string) => {
-    if (!raisePath(path)) router.push(path);
-  };
+  const openPath = (path: string) => openPage(path, (href) => router.push(href));
   const openProject = (slug: string) => openPath(`/projects/${encodeURIComponent(slug)}`);
 
   return (

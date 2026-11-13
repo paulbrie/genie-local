@@ -216,7 +216,7 @@
 }
 
 /*
- * The desktop interface (components/desktop). Its wallpaper: the brand's
+ * The desktop (components/desktop). Its wallpaper, Home's: the brand's
  * grounds (Paper / a deeper Night) lit by soft Catppuccin glows, static, so
  * nothing repaints while it shows. A pop-up window: opening.
  */

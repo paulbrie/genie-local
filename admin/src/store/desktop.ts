@@ -7,6 +7,8 @@ import {
   type DeskAlign,
   type DeskSaved,
   frontmost,
+  LIVE_ID,
+  type LiveSaved,
   NAV_ALWAYS,
   parseDesk,
   parsePopups,
@@ -21,14 +23,18 @@ import {
 } from "@/lib/desktop";
 
 /**
- * The desktop shell's state (components/desktop). A page shows inline, beside the sidebar, as in classic; one popped
- * out is a window of its own over that area, as is one opened in a new window: each a page of the app in a frame
- * (FrameWindows in desktop.tsx). Home ("/") is the wallpaper with its widgets.
+ * The desktop shell's state (components/desktop). A page shows inline, beside the sidebar. Popped out,
+ * it's a window of its own over that area, live: the route's own page restyled, its state kept (`liveWin`); a page
+ * opened in a new window, or one popped out live that something else then took the route from, is a page of the app
+ * in a frame (FrameWindows in desktop.tsx). Home ("/") is the wallpaper with its widgets.
  *
- * `desk`      — where each app's pop-up opens, the widgets', the sidebar's size and the items it leaves out (classic's
- *               too): localStorage.
- * `frames`    — the pop-ups (the apps popped out: the sidebar's dots): sessionStorage, so a reload brings them back.
- * `stack`     — the pop-ups' ids, back to front.
+ * `desk`      — where each app's pop-up opens, the widgets', the sidebar's size and the items it leaves out:
+ *               localStorage.
+ * `frames`    — the frame pop-ups, and `liveWin` the live one (the apps popped out: the sidebar's dots), with `stack`:
+ *               sessionStorage, so a reload brings them back.
+ * `stack`     — the pop-ups' ids, back to front (LIVE_ID: the live one).
+ * `liveFocus` — whether the last press or key was in the live window: where the route goes then is the page's own
+ *               way (it follows), else something else's (it goes on in a frame); liveFate.
  * `deskDrag`  — a window or a widget is being dragged or resized: the frames stop taking the pointer meanwhile (a
  *               frame would swallow the moves).
  */
@@ -36,35 +42,44 @@ const KEY = "admin.desktop";
 
 export const desk = new Subject<DeskSaved>({ geoms: {} }, { name: "desk" });
 
-/** A pop-up window: a page of the app in a frame. */
-export type FrameWin = PopupSaved;
+/** A pop-up window: a page of the app in a frame (`attaching`: put back inline, it goes once its page is there). */
+export type FrameWin = PopupSaved & { attaching?: boolean };
+export type LiveWin = LiveSaved;
 const FRAMES_KEY = "admin.desktop.frames";
 export const frames = new Subject<FrameWin[]>([], { name: "desk.frames" });
+export const liveWin = new Subject<LiveWin | null>(null, { name: "desk.live" });
 export const stack = new Subject<string[]>([], { name: "desk.stack" });
+export const liveFocus = new Subject<boolean>(false, { name: "desk.liveFocus" });
 export const deskDrag = new Subject<boolean>(false, { name: "desk.drag" });
 
-function saveFrames(next: FrameWin[], order = stack.getValue()) {
-  frames.next(next);
-  const ids = next.map((f) => f.id);
+/** The pop-ups as they are now: the frames, the live one, their order (each once), kept for the tab. */
+function commit(list: FrameWin[], live: LiveWin | null, order = stack.getValue()) {
+  frames.next(list);
+  liveWin.next(live);
+  const ids = [...(live ? [LIVE_ID] : []), ...list.map((f) => f.id)];
   stack.next([...order.filter((id) => ids.includes(id)), ...ids.filter((id) => !order.includes(id))]);
   try {
-    sessionStorage.setItem(FRAMES_KEY, JSON.stringify({ frames: next, stack: stack.getValue() }));
+    const stored = live && !live.closing ? { path: live.path, app: live.app, geom: live.geom, hidden: live.hidden } : null;
+    sessionStorage.setItem(FRAMES_KEY, JSON.stringify({ frames: list, stack: stack.getValue(), live: stored }));
   } catch {
     /* ignore */
   }
 }
 
-/** Bring pop-up `id` to the front. */
+const saveFrames = (list: FrameWin[], order?: string[]) => commit(list, liveWin.getValue(), order);
+
+/** Bring pop-up `id` (LIVE_ID: the live one) to the front. */
 export function focusWin(id: string) {
   const cur = stack.getValue();
   if (cur[cur.length - 1] === id) return;
-  stack.next([...cur.filter((x) => x !== id), id]);
-  saveFrames(frames.getValue());
+  commit(frames.getValue(), liveWin.getValue(), [...cur.filter((x) => x !== id), id]);
 }
 
-/** A new pop-up showing `path` (of `app`), in front: a page popped out, or opened in a new window. Returns its id. */
+const newId = () => `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** A new frame pop-up showing `path` (of `app`), in front: a page opened in a new window. Returns its id. */
 export function openFrame(path: string, app: string | null): string {
-  const id = `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const id = newId();
   saveFrames([...frames.getValue(), { id, app, path }], [...stack.getValue(), id]);
   return id;
 }
@@ -77,40 +92,90 @@ export function closeFrame(id: string) {
   saveFrames(frames.getValue().filter((f) => f.id !== id));
 }
 
-/** Of the pop-ups that `pick` picks, the one nearest the front comes up (if minimized) and to the front; false: none. */
-function raise(pick: (f: FrameWin) => boolean): boolean {
+/** The page inline (`path`, with its query, of `app`) popped out live, in front: nothing reloads, the URL stays. */
+export function detachLive(path: string, app: string | null) {
+  commit(frames.getValue(), { path, app }, [...stack.getValue().filter((x) => x !== LIVE_ID), LIVE_ID]);
+}
+
+export function updateLive(patch: Partial<LiveWin>) {
+  const live = liveWin.getValue();
+  if (live) commit(frames.getValue(), { ...live, ...patch });
+}
+
+/** The live window put back inline: the page restyles in place, nothing reloads. */
+export function attachLive() {
+  commit(frames.getValue(), null);
+}
+
+/** The live window closed: out of sight while the route goes Home (the caller's), then gone (Workspace, liveFate). */
+export function closeLive() {
+  updateLive({ hidden: true, closing: true });
+}
+
+/** The live window gone on in a frame at its path, at its place and its place in the order: something else took the route. */
+export function liveToFrame() {
+  const live = liveWin.getValue();
+  if (!live) return;
+  const id = newId();
+  commit([...frames.getValue(), { id, app: live.app, path: live.path, geom: live.geom, hidden: live.hidden }], null, stack.getValue().map((x) => (x === LIVE_ID ? id : x)));
+}
+
+/** The frames put back inline, gone now that the route has moved (their page, or where it led, is inline). */
+export function closeAttached() {
   const list = frames.getValue();
-  const id = frontmost(stack.getValue(), list.filter(pick).map((f) => f.id));
+  if (list.some((f) => f.attaching)) saveFrames(list.filter((f) => !f.attaching));
+}
+
+/** Of the pop-ups that `pick` picks, the one nearest the front comes up (if minimized) and to the front; false: none. */
+function raise(pick: (w: { app: string | null; path: string }) => boolean): boolean {
+  const list = frames.getValue();
+  const live = liveWin.getValue();
+  const ids = [...(live && !live.closing && pick(live) ? [LIVE_ID] : []), ...list.filter(pick).map((f) => f.id)];
+  const id = frontmost(stack.getValue(), ids);
   if (!id) return false;
-  if (list.find((f) => f.id === id)?.hidden) updateFrame(id, { hidden: false });
+  if (id === LIVE_ID) {
+    if (live?.hidden) updateLive({ hidden: false });
+  } else if (list.find((f) => f.id === id)?.hidden) updateFrame(id, { hidden: false });
   focusWin(id);
   return true;
 }
 
 /**
- * App `app` from the sidebar (or a widget, Settings…): if it's popped out, its window comes to the front. True when it
- * is; false: the page shows inline (the caller's link navigates).
+ * App `app` from the sidebar (or a widget, Settings…): if it's popped out (live, or in a frame), its window comes to
+ * the front. True when it is; false: the page shows inline (the caller's link navigates).
  */
 export function raiseApp(app: string): boolean {
-  return raise((f) => f.app === app);
+  return raise((w) => w.app === app);
 }
 
 /** A page (`path`, e.g. a project's) from the desktop: the pop-up on it, or under it, comes to the front; false: none. */
 export function raisePath(path: string): boolean {
-  return raise((f) => pathUnder(f.path, path));
+  return raise((w) => pathUnder(w.path, path));
 }
 
-/** Every pop-up minimized (the Spiridus menu's "Show Home"). */
+/**
+ * Show page `href` from the desktop (⌘K, a widget's row, Settings): its pop-up to the front if it has one; Home as it
+ * is while a page floats over it, live; else inline (`push`).
+ */
+export function openPage(href: string, push: (href: string) => void) {
+  if (raisePath(href)) return;
+  if (href === "/" && liveWin.getValue()) return;
+  push(href);
+}
+
+/** Every pop-up minimized, the live one too (the Spiridus menu's "Show Home"). */
 export function minimizeAll() {
   const list = frames.getValue();
-  if (list.some((f) => !f.hidden)) saveFrames(list.map((f) => (f.hidden ? f : { ...f, hidden: true })));
+  const live = liveWin.getValue();
+  if (list.some((f) => !f.hidden) || (live && !live.hidden))
+    commit(list.map((f) => (f.hidden ? f : { ...f, hidden: true })), live && { ...live, hidden: true });
 }
 
 let loaded = false;
 
 /**
  * What this browser remembers of the desktop (localStorage), read once: the desktop's own hydrateDesk does it, and so
- * do the sidebar and the Settings page (in the classic interface too). It follows the changes another document makes
+ * do the sidebar and the Settings page. It follows the changes another document makes
  * (another tab, or Settings in a pop-up's frame), so the desktop around a frame changes with it.
  */
 export function loadDesk(apps: readonly string[]) {
@@ -139,8 +204,11 @@ function save(next: DeskSaved) {
 
 let hydrated = false;
 
-/** Restore what this browser and tab remember: the pop-ups (sessionStorage), and the desk. Once, client-side, after mount. */
-export function hydrateDesk(apps: readonly string[]) {
+/**
+ * Restore what this browser and tab remember: the pop-ups (sessionStorage), and the desk. Once, client-side, after
+ * mount. The page popped out live floats again if the route is its page (`here`); another's, it goes on in a frame.
+ */
+export function hydrateDesk(apps: readonly string[], here: string) {
   if (hydrated) return;
   hydrated = true;
   let raw: string | null = null;
@@ -149,8 +217,9 @@ export function hydrateDesk(apps: readonly string[]) {
   } catch {
     /* ignore */
   }
-  const { list, order } = parsePopups(raw, apps);
-  if (list.length) saveFrames(list, order);
+  const { list, order, live } = parsePopups(raw, apps);
+  if (list.length || live) commit(list, live, order);
+  if (live && live.path.split("?")[0] !== here) liveToFrame();
   loadDesk(apps);
 }
 
@@ -176,8 +245,8 @@ function patchWidget(id: WidgetId, patch: WidgetSaved) {
 }
 
 /**
- * Show a sidebar item (an app's href, or VSCODE_NAV) or leave it out, in both interfaces (Settings → General, or its
- * right-click menu); the home and Settings always show. Its window, if it has one, stays open.
+ * Show a sidebar item (an app's href, or VSCODE_NAV) or leave it out (Settings → General, or its right-click menu);
+ * Home and Settings always show. Its window, if it has one, stays open.
  */
 export function setNavShown(id: string, on: boolean) {
   if (NAV_ALWAYS.includes(id)) return;

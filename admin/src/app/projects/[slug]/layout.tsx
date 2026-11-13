@@ -7,12 +7,14 @@ import { ProjectTabNav } from "@/components/project-tab-nav";
 import { RescanProjectButton } from "@/components/rescan-project-button";
 import { RestoreProjectButton } from "@/components/restore-project-button";
 import { getNotes, getProduction, getTasks } from "@/lib/data";
+import { nextDependency } from "@/lib/next-dir";
 import { getProject } from "@/lib/project-page";
 import { readScripts } from "@/lib/signals";
 
 /**
  * A project: its header and the tab bar. Each tab is its own page
- * (/projects/<slug>/scripts, /production, /vercel, /tasks, /notes, /memory, /files, /git, /git/<hash>).
+ * (/projects/<slug>/scripts, /production, /vercel, /tasks, /notes, /memory, /files, /next, /git, /git/<hash>).
+ * Next.js shows when an app depends on `next`, Git when one is a repo.
  */
 export default async function ProjectLayout({
   children,
@@ -26,11 +28,12 @@ export default async function ProjectLayout({
   if (!detail) notFound();
   const { project, apps } = detail;
 
-  const [notes, tasks, production, appScripts] = await Promise.all([
+  const [notes, tasks, production, appScripts, appNext] = await Promise.all([
     getNotes(project.id),
     getTasks(project.id),
     getProduction(project.id),
     Promise.all(apps.map(({ app }) => readScripts(app.path))),
+    Promise.all(apps.map(({ app }) => nextDependency(app.path))),
   ]);
   const scriptCount = appScripts.reduce((n, s) => n + Object.keys(s).length, 0);
   const tabs = [
@@ -41,6 +44,7 @@ export default async function ProjectLayout({
     { id: "notes", label: `Notes (${notes.length})` },
     { id: "memory", label: "Memory" },
     { id: "files", label: "Files" },
+    ...(appNext.some((v) => v !== null) ? [{ id: "next", label: "Next.js" }] : []),
     ...(apps.some(({ app }) => app.isGit) ? [{ id: "git", label: "Git" }] : []),
   ];
 

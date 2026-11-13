@@ -1,11 +1,10 @@
 "use client";
 
-import { AlignCenter, AlignLeft, AlignRight, Code2, Monitor, Moon, PanelLeft, Sun, SunMoon } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Code2, Moon, Sun, SunMoon } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useEffect, useSyncExternalStore } from "react";
 import { useSubject } from "subjecto/react";
 
-import { useShellMode } from "@/components/desktop/shell-mode";
 import { NAV, NAV_HREFS, type NavItem } from "@/components/nav-items";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,14 +14,12 @@ import { cn } from "@/lib/utils";
 import { desk, loadDesk, setAlign, setNavShown, setSidebarSize, setWidgetMode, showAllNav } from "@/store/desktop";
 
 /**
- * The Settings app (/settings): the interface and the theme, the sidebar's items (in both interfaces) and size, and the
- * desktop's Home, its widgets and their arrangement (`desk`, this browser's localStorage). It reads them itself
- * (loadDesk), so it works from the classic interface too, and a change made here in a pop-up's frame reaches the
- * desktop around it.
+ * The Settings app (/settings): the theme, the sidebar's items and size, and Home's widgets and their arrangement
+ * (`desk`, this browser's localStorage). It reads them itself (loadDesk), and a change made here in a pop-up's frame
+ * reaches the page around it.
  */
 export function SettingsPanel() {
   const [d] = useSubject(desk);
-  const { mode, setMode } = useShellMode();
   const { theme, setTheme } = useTheme();
   // (the theme is only known in the browser: until then nothing shows as picked)
   const mounted = useSyncExternalStore(
@@ -33,14 +30,8 @@ export function SettingsPanel() {
   useEffect(() => loadDesk(NAV_HREFS), []);
 
   const side = d.sidebarSize ?? SIDEBAR_ICON.default;
-  // Every item the sidebar can show, in its order (a group's under it, set in), VS Code last; the home as this
-  // interface names it.
-  const item = (i: NavItem, parent?: string) => ({
-    id: i.href,
-    label: mode === "desktop" && i.desktop ? i.desktop.label : i.label,
-    icon: mode === "desktop" && i.desktop ? i.desktop.icon : i.icon,
-    parent,
-  });
+  // Every item the sidebar can show, in its order (a group's under it, set in), VS Code last.
+  const item = (i: NavItem, parent?: string) => ({ id: i.href, label: i.label, icon: i.icon, parent });
   const items = [
     ...NAV.flatMap((i) => [item(i), ...(i.children ?? []).map((c) => item(c, i.href))]),
     { id: VSCODE_NAV, label: "VS Code", icon: Code2, parent: undefined },
@@ -53,16 +44,6 @@ export function SettingsPanel() {
           <CardTitle>Appearance</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
-          <Setting label="Interface" hint="The classic view with its sidebar, or the desktop: the same sidebar, Home with its widgets, and pages that pop out as windows.">
-            <Segmented
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: "classic", label: "Classic", icon: PanelLeft },
-                { value: "desktop", label: "Desktop", icon: Monitor },
-              ]}
-            />
-          </Setting>
           <Setting label="Theme">
             <Segmented
               value={mounted ? (theme ?? "system") : null}
@@ -80,12 +61,12 @@ export function SettingsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Sidebar</CardTitle>
-          <CardDescription>The one in both interfaces.</CardDescription>
+          <CardDescription>The apps beside every page.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <Setting
             label="Items"
-            hint="The ones it shows. A right-click on one in the sidebar hides it too; the home and Settings always stay."
+            hint="The ones it shows. A right-click on one in the sidebar hides it too; Home and Settings always stay."
             actions={
               d.hiddenNav?.length ? (
                 <Button variant="outline" size="sm" onClick={showAllNav}>
@@ -118,7 +99,7 @@ export function SettingsPanel() {
             </div>
           </Setting>
 
-          <Setting label="Size" hint="In the desktop interface: how big its icons and rows are (the default is classic's).">
+          <Setting label="Size" hint="How big its icons and rows are.">
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -144,9 +125,7 @@ export function SettingsPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Home</CardTitle>
-          <CardDescription>
-            {mode === "desktop" ? "The desktop interface's Home: its widgets." : "For the desktop interface's Home (switch to it above)."}
-          </CardDescription>
+          <CardDescription>Its widgets, on the wallpaper.</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           <Setting label="Arrangement" hint="The widgets as you've laid them out, kept together against the left, in the middle, or against the right.">

@@ -1,89 +1,49 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { CommandPalette } from "@/components/command-palette";
 import { Workspace } from "@/components/desktop/desktop";
-import { rememberShellMode, ShellModeContext } from "@/components/desktop/shell-mode";
 import { StatsToolbar } from "@/components/stats-toolbar";
 import { isPaletteShortcut } from "@/lib/command-search";
-import type { ShellMode } from "@/lib/desktop";
 import { useScrollActivity } from "@/lib/use-scroll-activity";
 import { openTerminalsIn } from "@/store/terminals";
 
 /**
- * The app's frame around every page: the top bar, the sidebar, and the page
- * beside it, in either interface; the desktop's has Home and pop-up windows
- * besides (the top bar's switch picks; the layout passes what the cookie
- * says). In the desktop the top bar runs the whole width, the sidebar under it:
- * a grid, its inner column `display: contents`, so the page keeps its place in
- * the tree either way. The login page has none of it.
+ * The app's frame around every page: the sidebar at the left, the whole height (the Spiridus menu on its logo), the
+ * top bar beside it, and under that the content area (Workspace: the page inline, Home, the pop-ups). The login page
+ * has none of it.
  */
 export function AppShell({
-  initialMode,
   embedded = false,
   children,
 }: {
-  initialMode: ShellMode;
-  /** in one of the desktop's pop-ups (a frame): the page alone */
+  /** in one of the pop-ups (a frame): the page alone */
   embedded?: boolean;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const [mode, setMode] = useState(initialMode);
   // (scrollbars show while hovered or scrolling: globals.css)
   useScrollActivity();
-  const ctx = useMemo(
-    () => ({
-      mode,
-      setMode: (m: ShellMode) => {
-        rememberShellMode(m);
-        setMode(m);
-        // (the home's page is the Dashboard in classic only: the desktop's home had nothing to render)
-        if (m === "classic" && pathname === "/") router.refresh();
-      },
-    }),
-    [mode, pathname, router],
-  );
-  const desktop = mode === "desktop" && pathname !== "/login";
-  if (embedded) {
-    return (
-      <ShellModeContext value={ctx}>
-        <FramedPage>{children}</FramedPage>
-      </ShellModeContext>
-    );
-  }
+  if (embedded) return <FramedPage>{children}</FramedPage>;
   return (
-    <ShellModeContext value={ctx}>
-      <div
-        className={
-          desktop
-            ? "grid h-screen grid-cols-[auto_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden [&>aside]:col-start-1 [&>aside]:row-start-2"
-            : "flex h-screen overflow-hidden"
-        }
-      >
+    <>
+      <div className="flex h-screen overflow-hidden">
         <AppSidebar />
-        <div
-          className={
-            desktop
-              ? "contents [&>div]:col-start-2 [&>div]:row-start-2 [&>header]:col-span-2 [&>header]:row-start-1"
-              : "flex min-w-0 flex-1 flex-col"
-          }
-        >
+        <div className="flex min-w-0 flex-1 flex-col">
           <StatsToolbar />
-          <Workspace desktop={desktop}>{children}</Workspace>
+          <Workspace shell={pathname !== "/login"}>{children}</Workspace>
         </div>
       </div>
       <CommandPalette />
-    </ShellModeContext>
+    </>
   );
 }
 
 /**
- * A page in one of the desktop's pop-ups (FrameWindows in desktop.tsx): it fills the frame, and tells the window
+ * A page in one of the pop-ups (FrameWindows in desktop.tsx): it fills the frame, and tells the window
  * where it is (its title bar), that it was clicked (to come to the front), ⌘K / Ctrl+K (the palette is the
  * page around it's), and the terminals it opens (they float over the whole desktop, from the page around it).
  */

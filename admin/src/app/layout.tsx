@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Fredoka, Geist, Geist_Mono } from "next/font/google";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import "./globals.css";
 import { ActivityBeacon } from "@/components/activity-beacon";
 import { AskHost } from "@/components/ask-host";
@@ -15,7 +15,6 @@ import { TerminalVoiceMonitor } from "@/components/terminal-voice-monitor";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import { UploadDock } from "@/components/upload-dock";
-import { parseShellMode, SHELL_COOKIE } from "@/lib/desktop";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -53,8 +52,6 @@ export function generateMetadata(): Metadata {
 }
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
-  // classic (the sidebar) or desktop, as this browser last chose (the top bar's switch)
-  const shell = parseShellMode((await cookies()).get(SHELL_COOKIE)?.value);
   // A page in one of the desktop's windows (a frame, components/desktop): just the page, none of the frame around it,
   // and none of what the page it's in runs already (terminals, voice, alerts, activity), which would happen twice.
   const embedded = (await headers()).get("sec-fetch-dest") === "iframe";
@@ -71,7 +68,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           enableSystem
           disableTransitionOnChange
         >
-          <AppShell initialMode={shell} embedded={embedded}>
+          <AppShell embedded={embedded}>
             {children}
           </AppShell>
           {!embedded && (
