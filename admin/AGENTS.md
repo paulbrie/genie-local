@@ -228,7 +228,9 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     (`memory-widget.tsx`: now, the RAM as one segmented bar by project, agents striped, or by
     terminal; or over 24 h / 7 / 30 days (30 by default), a stacked area from the per-minute history,
     /api/widgets/memory, `memory-history-core.ts`); Processes (the busiest by CPU or memory, named by
-    port); Docker (containers with their CPU and memory, `docker stats` cached 15 s, and the images).
+    port; as a list or a tree, `processForest` in `src/lib/process-tree.ts`: the stats daemon records
+    only the 50 busiest, so /api/processes adds `ancestors` from /proc to join them up; a right-click
+    kills, `process-menu.tsx`, shared with the Processes page, Kill tree walking all of /proc); Docker (containers with their CPU and memory, `docker stats` cached 15 s, and the images).
     Off at first (`more-widgets.tsx`, data in `src/lib/widgets.ts` via /api/widgets/<id>, pure parts in
     `widgets-core.ts`): Health, Production errors, Git, Load (CPU and memory over the last hour, 24 h,
     7 or 30 days, 30 by default, from the stats history's `1h`…`30d`; the network now), Tickets (in progress, to do, recently

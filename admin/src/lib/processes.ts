@@ -1,7 +1,9 @@
 import "server-only";
 
+import { promises as fs } from "node:fs";
 import os from "node:os";
 
+import { descendants, parseProcStatus, type TreeProc } from "./process-tree";
 import { readLatestProcesses, type ProcessInfo } from "./stats";
 
 export type KillSignal = "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP";
@@ -46,28 +48,46 @@ function protectedPids(): Set<number> {
   return guarded;
 }
 
+/** The box's user names by uid (/etc/passwd), read once. */
+let usersByUid: Promise<Map<number, string>> | null = null;
+function userNames(): Promise<Map<number, string>> {
+  usersByUid ??= fs.readFile("/etc/passwd", "utf8").then(
+    (text) => new Map(text.split("\n").map((l) => l.split(":")).filter((f) => f.length > 2).map((f) => [Number(f[2]), f[0]] as const)),
+    () => new Map(),
+  );
+  return usersByUid;
+}
+
+/** What /proc says of process `pid`; null: it's gone (or can't be read). */
+async function readProc(pid: number, users: Map<number, string>): Promise<TreeProc | null> {
+  const s = parseProcStatus(await fs.readFile(`/proc/${pid}/status`, "utf8").catch(() => ""));
+  return s && { pid, ppid: s.ppid, user: users.get(s.uid) ?? String(s.uid), cpu: null, mem: s.mem, name: s.name, port: "" };
+}
+
+/** Every process now, from /proc. */
+async function readAllProcs(): Promise<TreeProc[]> {
+  const users = await userNames();
+  const pids = (await fs.readdir("/proc")).filter((n) => /^\d+$/.test(n)).map(Number);
+  return (await Promise.all(pids.map((pid) => readProc(pid, users)))).filter((p) => p !== null);
+}
+
 /**
- * Walk the ppid map to collect a process and all of its descendants.
- * Cyclic/self-parent references are guarded by a visited set.
+ * Those above `procs` that aren't among them, up to init, from /proc: the stats daemon records only the busiest
+ * processes, so a tree of those alone is in pieces (the Processes widget's tree). One gone meanwhile ends its line.
  */
-function descendantsOf(root: number, procs: ProcessInfo[]): number[] {
-  const childrenByParent = new Map<number, number[]>();
-  for (const p of procs) {
-    const list = childrenByParent.get(p.ppid);
-    if (list) list.push(p.pid);
-    else childrenByParent.set(p.ppid, [p.pid]);
+export async function readAncestors(procs: readonly ProcessInfo[]): Promise<TreeProc[]> {
+  const users = await userNames();
+  const known = new Set(procs.map((p) => p.pid));
+  const out: TreeProc[] = [];
+  let next = procs.map((p) => p.ppid);
+  while (next.length && out.length < 500) {
+    const want = [...new Set(next)].filter((pid) => pid > 1 && !known.has(pid));
+    for (const pid of want) known.add(pid);
+    const got = (await Promise.all(want.map((pid) => readProc(pid, users)))).filter((p) => p !== null);
+    out.push(...got);
+    next = got.map((p) => p.ppid);
   }
-  const collected = new Set<number>();
-  const stack = [root];
-  while (stack.length) {
-    const pid = stack.pop()!;
-    if (collected.has(pid)) continue;
-    collected.add(pid);
-    for (const child of childrenByParent.get(pid) ?? []) {
-      if (!collected.has(child)) stack.push(child);
-    }
-  }
-  return [...collected];
+  return out;
 }
 
 /**
@@ -75,7 +95,9 @@ function descendantsOf(root: number, procs: ProcessInfo[]): number[] {
  * unprivileged user, so the kernel already refuses processes we don't own
  * (EPERM); we additionally guard pid 1 and the admin server itself. When
  * `tree` is set we kill children before parents so a supervisor can't respawn
- * a child after we've already reaped it.
+ * a child after we've already reaped it. The tree is every process under it,
+ * from /proc (the daemon's snapshot only has the busiest, and a child left out
+ * of it would live on); the snapshot only if /proc can't be read.
  */
 export async function killProcess(
   pid: number,
@@ -86,15 +108,8 @@ export async function killProcess(
 
   let targets: number[] = [pid];
   if (opts.tree) {
-    const snapshot = await readLatestProcesses();
-    if (snapshot) {
-      const all = descendantsOf(pid, snapshot.processes);
-      // Deepest-first: sort so children (which appear later via BFS/DFS order)
-      // are signalled before their parents. We approximate by killing the root
-      // last.
-      targets = all.filter((p) => p !== pid);
-      targets.push(pid);
-    }
+    const all = await readAllProcs().catch(async () => (await readLatestProcesses())?.processes ?? []);
+    targets = descendants(pid, all);
   }
 
   const outcomes: KillOutcome[] = [];

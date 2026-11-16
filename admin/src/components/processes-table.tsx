@@ -1,28 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
-import {
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  ListTree,
-  Scissors,
-  Skull,
-  Table2,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, ListTree, Table2 } from "lucide-react";
 
+import { type KillFn, killFromUi, ProcessMenu } from "@/components/process-menu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -39,12 +23,6 @@ const POLL_MS = 5000;
 
 type SortKey = "cpu" | "mem" | "pid" | "name" | "port";
 type ViewMode = "table" | "tree";
-type KillSignal = "SIGTERM" | "SIGKILL";
-
-type KillResponse = {
-  requested: number;
-  outcomes: { pid: number; ok: boolean; error?: string }[];
-};
 
 export function ProcessesTable() {
   const [data, setData] = useState<ProcessSnapshot | null>(null);
@@ -82,41 +60,10 @@ export function ProcessesTable() {
     };
   }, [load]);
 
-  const kill = useCallback(
-    async (p: ProcessInfo, signal: KillSignal, tree: boolean) => {
-      const label = tree ? `tree of ${p.name} (${p.pid})` : `${p.name} (${p.pid})`;
-      try {
-        const res = await fetch(`${BASE_PATH}/api/processes/kill`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pid: p.pid, signal, tree }),
-        });
-        const body: KillResponse = await res.json().catch(() => ({
-          requested: p.pid,
-          outcomes: [],
-        }));
-        const ok = body.outcomes.filter((o) => o.ok).length;
-        const failed = body.outcomes.filter((o) => !o.ok);
-        if (res.ok && failed.length === 0) {
-          toast.success(
-            `Sent ${signal} to ${label}${ok > 1 ? ` — ${ok} processes` : ""}`,
-          );
-        } else if (ok > 0) {
-          toast.warning(
-            `${signal} → ${ok} ok, ${failed.length} failed: ${failed[0]?.error ?? ""}`,
-          );
-        } else {
-          toast.error(
-            `Could not ${signal} ${label}: ${failed[0]?.error ?? `HTTP ${res.status}`}`,
-          );
-        }
-      } catch (e) {
-        toast.error(`Kill failed: ${(e as Error).message}`);
-      } finally {
-        // Reflect the change quickly rather than waiting for the next poll.
-        setTimeout(() => void load(), 400);
-      }
-    },
+  const kill = useCallback<KillFn>(
+    (p, signal, tree) =>
+      // Reflect the change quickly rather than waiting for the next poll.
+      void killFromUi(p, signal, tree, () => setTimeout(() => void load(), 400)),
     [load],
   );
 
@@ -420,54 +367,6 @@ function TreeRow({ node, onKill }: { node: TreeNode; onKill: KillFn }) {
           <TreeRow key={c.pid} node={c} onKill={onKill} />
         ))}
     </div>
-  );
-}
-
-/* ---------------------------- shared context menu ---------------------------- */
-
-type KillFn = (p: ProcessInfo, signal: KillSignal, tree: boolean) => void;
-
-function ProcessMenu({
-  p,
-  onKill,
-  hasChildren,
-}: {
-  p: ProcessInfo;
-  onKill: KillFn;
-  hasChildren?: boolean;
-}) {
-  return (
-    <ContextMenuContent>
-      <ContextMenuLabel className="truncate">
-        {p.name} · {p.pid}
-      </ContextMenuLabel>
-      <ContextMenuSeparator />
-      <ContextMenuItem onClick={() => onKill(p, "SIGTERM", false)}>
-        <X /> Kill (SIGTERM)
-      </ContextMenuItem>
-      <ContextMenuItem
-        variant="destructive"
-        onClick={() => onKill(p, "SIGKILL", false)}
-      >
-        <Skull /> Force kill (SIGKILL)
-      </ContextMenuItem>
-      <ContextMenuItem
-        variant="destructive"
-        disabled={hasChildren === false}
-        onClick={() => onKill(p, "SIGKILL", true)}
-      >
-        <Scissors /> Force kill tree
-      </ContextMenuItem>
-      <ContextMenuSeparator />
-      <ContextMenuItem
-        onClick={() => {
-          void navigator.clipboard?.writeText(String(p.pid));
-          toast.success(`Copied PID ${p.pid}`);
-        }}
-      >
-        <Copy /> Copy PID
-      </ContextMenuItem>
-    </ContextMenuContent>
   );
 }
 

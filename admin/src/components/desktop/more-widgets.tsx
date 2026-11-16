@@ -1,11 +1,14 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Check, Container, Cpu, GitBranch, Gauge, HeartPulse, KeyRound, ListTodo, Server, TriangleAlert } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Container, Cpu, GitBranch, Gauge, HeartPulse, KeyRound, List, ListTodo, ListTree, Server, TriangleAlert } from "lucide-react";
 
 import { ago, Empty, ROW, Subhead, useOpenPath, usePolled, useWidgetView, ViewSwitch, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
+import { type KillFn, killFromUi, ProcessMenu } from "@/components/process-menu";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { StatusDot } from "@/components/ui/status-dot";
 import type { ProjectNavItem } from "@/lib/dashboard-metrics";
 import { formatBytes } from "@/lib/format";
+import { processForest, type TreeProc } from "@/lib/process-tree";
 import type { SystemStats } from "@/lib/stats";
 import { cn } from "@/lib/utils";
 import type { HealthItem, HealthState, RepoState } from "@/lib/widgets-core";
@@ -421,22 +424,29 @@ const ADMIN_PORTS: Record<string, string> = { "3002": "admin", "3003": "admin-de
 /**
  * Processes: the busiest ones, by CPU or by memory (the switch, remembered), each its figure drawn behind it, the
  * port it listens on; named for what they are where the process name says little (the admin's servers, a project's
- * dev server by its port). From the stats daemon's latest look (/api/processes, every 5 s); a row opens Processes.
+ * dev server by its port). As a list, or as a tree: the same ones under what started them, up to init's children (the
+ * ones above them that aren't among the busiest dimmed: the daemon's, or from /proc what it didn't record). From the
+ * stats daemon's latest look (/api/processes, every 5 s); a row opens Processes, its right-click kills it (or its tree).
  */
 export function ProcessesWidget({ folded }: { folded: boolean }) {
-  const { data, failed } = usePolled<{ processes: Proc[] }>("/api/processes", 5000);
+  const { data, failed, reload } = usePolled<{ processes: Proc[]; ancestors?: TreeProc[] }>("/api/processes", 5000);
   const { data: projs } = usePolled<{ projects?: ProjectNavItem[] }>("/api/projects", 30_000);
   const [by, setBy] = useWidgetView<"cpu" | "mem">("processes", "sort", ["cpu", "mem"], "cpu");
+  const [view, setView] = useWidgetView<"list" | "tree">("processes", "view", ["list", "tree"], "list");
   const open = useOpenPath();
   const owner = new Map((projs?.projects ?? []).flatMap((p) => p.ports.map((port) => [String(port), p.slug] as const)));
-  const label = (p: Proc) =>
+  const label = (p: TreeProc) =>
     ADMIN_PORTS[p.port] ?? owner.get(p.port) ?? (p.name === "MainThread" ? "node" : p.name.replace(/ \(v?\d*$/, ""));
   const list = [...(data?.processes ?? [])].sort((a, b) => (by === "cpu" ? b.cpu - a.cpu || b.mem - a.mem : b.mem - a.mem)).slice(0, 30);
-  const value = (p: Proc) => (by === "cpu" ? p.cpu : p.mem);
+  const value = (p: TreeProc) => (by === "cpu" ? (p.cpu ?? 0) : p.mem);
   const top = Math.max(by === "cpu" ? 1 : 64, ...list.map(value));
-  const show = (p: Proc, m: "cpu" | "mem") => (m === "cpu" ? `${p.cpu.toFixed(1)}%` : p.mem > 0 ? formatBytes(p.mem * 1024 * 1024) : "—");
+  const show = (p: TreeProc, m: "cpu" | "mem") => (m === "cpu" ? (p.cpu === null ? "—" : `${p.cpu.toFixed(1)}%`) : p.mem > 0 ? formatBytes(p.mem * 1024 * 1024) : "—");
   const color = by === "cpu" ? "#0ea5e9" : "#8b5cf6";
   const lead = list[0];
+  // (the tree: the busiest, joined up by the rest the daemon recorded and what /proc says of the ones it didn't)
+  const rows = view === "tree" && data ? processForest(list, [...data.processes, ...(data.ancestors ?? [])]) : list.map((p) => ({ ...p, depth: 0, busy: true }));
+  // (the list says it at once, not at the next look)
+  const kill: KillFn = (p, signal, tree) => void killFromUi(p, signal, tree, () => setTimeout(reload, 400));
   return (
     <>
       <WidgetHeader
@@ -450,8 +460,17 @@ export function ProcessesWidget({ folded }: { folded: boolean }) {
       {!folded && (
         <WidgetList>
           <div className="flex items-center gap-2 pr-2 pb-1.5 pl-7 text-[11px] text-muted-foreground">
-            <span>{data ? `${data.processes.length} busiest` : ""}</span>
+            <span className="min-w-0 truncate">{data ? `${data.processes.length} busiest` : ""}</span>
             <span className="ml-auto" />
+            <ViewSwitch
+              label="Show the processes as"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: "list", label: "List", icon: List },
+                { value: "tree", label: "Tree", icon: ListTree },
+              ]}
+            />
             <ViewSwitch
               label="Sort the processes by"
               value={by}
@@ -463,22 +482,28 @@ export function ProcessesWidget({ folded }: { folded: boolean }) {
             />
           </div>
           {!data && <Empty>{failed ? "Couldn't read the processes." : "Loading…"}</Empty>}
-          {list.map((p) => (
-            <button
-              key={p.pid}
-              type="button"
-              onClick={() => open("/processes")}
-              title={`${p.name} (pid ${p.pid}, ${p.user})${p.port ? ` on :${p.port}` : ""}: ${show(p, "cpu")} CPU, ${show(p, "mem")}`}
-              className={cn(ROW, "relative isolate overflow-hidden")}
-            >
-              {/* (its share of the busiest's, drawn behind it) */}
-              <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-md opacity-[0.12] transition-[width] duration-500" style={{ width: `${(value(p) / top) * 100}%`, background: color }} />
-              <span className="min-w-0 truncate text-foreground/90">{label(p)}</span>
-              <span className="shrink-0 font-mono text-[9px] opacity-50">{p.pid}</span>
-              {p.port && <span className="shrink-0 font-mono text-[9px] text-emerald-700 dark:text-emerald-400">:{p.port}</span>}
-              <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{show(p, by)}</span>
-              <span className="w-12 shrink-0 text-right font-mono text-[9px] tabular-nums opacity-50">{show(p, by === "cpu" ? "mem" : "cpu")}</span>
-            </button>
+          {rows.map((p) => (
+            <ContextMenu key={p.pid}>
+              <ContextMenuTrigger
+                render={<button type="button" />}
+                onClick={() => open("/processes")}
+                title={`${p.name} (pid ${p.pid}, ${p.user})${p.port ? ` on :${p.port}` : ""}: ${show(p, "cpu")} CPU, ${show(p, "mem")}${p.busy ? "" : " (not among the busiest)"}`}
+                className={cn(ROW, "relative isolate overflow-hidden", !p.busy && "opacity-60")}
+                // (a level a step in, its corner under the one above's name; deep ones no further than six)
+                style={p.depth ? { paddingLeft: 30 + (Math.min(p.depth, 6) - 1) * 12 } : undefined}
+              >
+                {/* (its share of the busiest's, drawn behind it) */}
+                {p.busy && <span aria-hidden className="absolute inset-y-0 left-0 -z-10 rounded-md opacity-[0.12] transition-[width] duration-500" style={{ width: `${(value(p) / top) * 100}%`, background: color }} />}
+                {p.depth > 0 && <span aria-hidden className="h-2.5 w-1.5 shrink-0 -translate-y-1 rounded-bl-[3px] border-b border-l border-current opacity-40" />}
+                <span className="min-w-0 truncate text-foreground/90">{label(p)}</span>
+                {/* (the tree's names have less room: its pid is in the tooltip and the menu) */}
+                {view === "list" && <span className="shrink-0 font-mono text-[9px] opacity-50">{p.pid}</span>}
+                {p.port && <span className="shrink-0 font-mono text-[9px] text-emerald-700 dark:text-emerald-400">:{p.port}</span>}
+                <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums">{show(p, by)}</span>
+                <span className="w-12 shrink-0 text-right font-mono text-[9px] tabular-nums opacity-50">{show(p, by === "cpu" ? "mem" : "cpu")}</span>
+              </ContextMenuTrigger>
+              <ProcessMenu p={p} label={label(p)} onKill={kill} />
+            </ContextMenu>
           ))}
         </WidgetList>
       )}
