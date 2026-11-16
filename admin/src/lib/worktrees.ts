@@ -4,7 +4,9 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
+import { withRepoLock } from "@/lib/git-merge";
 import { listTerminals } from "@/lib/terminals";
+import { ownSizes, parseDuTotal } from "@/lib/worktrees-core";
 
 const run = promisify(execFile);
 const git = async (cwd: string, args: string[]) =>
@@ -113,4 +115,66 @@ export async function listWorktrees(repoDir: string): Promise<Worktree[]> {
       };
     }),
   );
+}
+
+// (each worktree's folder as du measured it, by path, kept a little: a big tree takes du a while the first time)
+const SIZE_FRESH_MS = 2 * 60_000;
+const measured = new Map<string, { at: number; p: Promise<number | null> }>();
+
+/** du of a folder at low priority (it can say something even when it exits non-zero, a folder in it unreadable). */
+function du(dir: string): Promise<number | null> {
+  const hit = measured.get(dir);
+  if (hit && Date.now() - hit.at < SIZE_FRESH_MS) return hit.p;
+  const p = run("nice", ["-n", "19", "du", "-sxB1", "--", dir], { timeout: 180_000 }).then(
+    (r) => parseDuTotal(r.stdout),
+    (e: { stdout?: string }) => parseDuTotal(e.stdout ?? ""),
+  );
+  measured.set(dir, { at: Date.now(), p });
+  if (measured.size > 200) measured.delete(measured.keys().next().value!);
+  return p;
+}
+
+/**
+ * The room each worktree takes on disk, by path: its folder, less the worktrees inside it. The main checkout's
+ * counts .git, the history they all share. Null: its folder is gone, or du said nothing.
+ */
+export async function worktreeSizes(repoDir: string): Promise<Record<string, number | null>> {
+  const trees = parsePorcelain(await git(repoDir, ["worktree", "list", "--porcelain"]));
+  const sizes = await Promise.all(trees.map((t) => (t.missing ? null : du(t.path))));
+  return ownSizes(Object.fromEntries(trees.map((t, i) => [t.path, sizes[i]])));
+}
+
+/**
+ * Delete worktree `dir` of the repo (`git worktree remove`; a worktree's right-click on the Git tab), never the repo's
+ * own checkout; its branch stays. Unforced, nothing changes when there's work in it to lose or a hold on it: `changes`,
+ * its uncommitted files (untracked ones too; ignored ones, node_modules and builds, go with it), and `lockedBy` (Claude
+ * Code locks its own while a session works in one). The caller asks, then `force` deletes it all the same.
+ */
+export async function removeWorktree(
+  repoDir: string,
+  dir: string,
+  force: boolean,
+): Promise<{ removed: true; branch: string | null } | { removed: false; changes: number; lockedBy: string | null }> {
+  return withRepoLock("worktree delete", async () => {
+    const trees = parsePorcelain(await git(repoDir, ["worktree", "list", "--porcelain"]));
+    const i = trees.findIndex((t) => t.path === dir);
+    if (i < 0) throw new Error(`${dir} isn't one of this repo's worktrees`);
+    if (i === 0) throw new Error("that's the repo's own checkout: it isn't deleted from here");
+    const t = trees[i];
+    if (!force) {
+      const status = t.missing ? "" : await git(t.path, ["status", "--porcelain"]).catch(() => "");
+      const changes = status.split("\n").filter(Boolean).length;
+      if (changes || t.lockedBy) return { removed: false, changes, lockedBy: t.lockedBy };
+    }
+    try {
+      // (a big one takes a while to delete; -f -f: uncommitted work and a lock alike)
+      await run("git", ["worktree", "remove", ...(force ? ["-f", "-f"] : []), "--", t.path], { cwd: repoDir, timeout: 300_000 });
+    } catch (e) {
+      const x = e as { stderr?: string; message?: string };
+      throw new Error((x.stderr || x.message || "git worktree remove failed").trim().split("\n").slice(0, 4).join(" "));
+    }
+    measured.delete(t.path);
+    console.log(`[git-worktree] removed ${t.path} (${t.branch ?? t.head.slice(0, 7)})${force ? " (forced)" : ""}`);
+    return { removed: true, branch: t.branch };
+  });
 }
