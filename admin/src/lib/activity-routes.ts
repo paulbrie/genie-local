@@ -160,6 +160,7 @@ export const API_ROUTES = [
   "/api/terminals/[name]",
   "/api/terminals/[name]/image",
   "/api/tts",
+  "/api/widgets/cron",
   "/api/widgets/docker",
   "/api/widgets/errors",
   "/api/widgets/git",

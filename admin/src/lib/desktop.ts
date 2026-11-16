@@ -210,9 +210,9 @@ export type DeskAlign = "left" | "center" | "right";
 /**
  * The desktop's widgets: the terminals, the projects, the disk, the memory, the processes and Docker, and the ones that start off
  * (WIDGETS_OFF: a right-click on the desktop adds them): the services' health, the production errors, the repos'
- * state, the load, the tickets and the sign-ins.
+ * state, the load, the tickets, the sign-ins and the cron jobs.
  */
-export const WIDGETS = ["terminals", "projects", "disk", "memory", "processes", "docker", "health", "errors", "git", "load", "tickets", "signins"] as const;
+export const WIDGETS = ["terminals", "projects", "disk", "memory", "processes", "docker", "health", "errors", "git", "load", "tickets", "signins", "cron"] as const;
 export type WidgetId = (typeof WIDGETS)[number];
 export const WIDGET_LABEL: Record<WidgetId, string> = {
   terminals: "Terminals",
@@ -227,6 +227,7 @@ export const WIDGET_LABEL: Record<WidgetId, string> = {
   load: "Load",
   tickets: "Tickets",
   signins: "Sign-ins",
+  cron: "Cron",
 };
 /** The app each widget is a glance at, where there's one: its header has the app's icon, to open it. */
 export const WIDGET_APP: Partial<Record<WidgetId, string>> = {
@@ -240,7 +241,7 @@ export const WIDGET_APP: Partial<Record<WidgetId, string>> = {
 };
 
 /** The widgets off the desktop until they're put on it. */
-export const WIDGETS_OFF: ReadonlySet<WidgetId> = new Set(["health", "errors", "git", "load", "tickets", "signins"]);
+export const WIDGETS_OFF: ReadonlySet<WidgetId> = new Set(["health", "errors", "git", "load", "tickets", "signins", "cron"]);
 
 export type WidgetMode = "open" | "collapsed" | "hidden";
 

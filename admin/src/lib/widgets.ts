@@ -1,6 +1,9 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { open, readdir, readFile, stat } from "node:fs/promises";
+import { homedir, userInfo } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
@@ -12,6 +15,7 @@ import { parseDockerSize } from "@/lib/disk-overview-core";
 import { listDocker } from "@/lib/docker";
 import { listServices } from "@/lib/services";
 import { describeUserAgent } from "@/lib/user-agent";
+import { commandInfo, type CronJob, describeSchedule, fieldsOf, looksLikeError, nextRun, parseCrontab, prevRun } from "@/lib/cron-core";
 import { healthOf, type HealthItem, parseDockerStats, parseGitStatus, type RepoState } from "@/lib/widgets-core";
 
 // The data behind the desktop's widgets that start off (WIDGETS_OFF in lib/desktop.ts), one function per widget and
@@ -147,4 +151,91 @@ export async function dockerData() {
     containers,
     images: { count: snap.images.length, bytes: snap.images.reduce((n, i) => n + parseDockerSize(i.size), 0) },
   };
+}
+
+export type CronRow = {
+  key: string;
+  /** "user": the app's own user's crontab (`crontab -l`); "system": /etc/crontab and /etc/cron.d */
+  scope: "user" | "system";
+  source: string;
+  line: number;
+  schedule: string;
+  /** the schedule in words */
+  when: string;
+  command: string;
+  user: string;
+  note: string | null;
+  /** the script or command, short */
+  name: string;
+  /** the folder it `cd`s to first */
+  dir: string | null;
+  next: string | null;
+  prev: string | null;
+  /** the file its output goes to, when it says: when it last changed, its last line, whether that reads as an error */
+  log: { path: string; at: string | null; last: string | null; error: boolean } | null;
+};
+
+/** The last non-empty line of a file, from its last 4 KB (a regular file only; anything else, or unreadable: null). */
+async function lastLine(file: string): Promise<{ at: string; last: string | null } | null> {
+  try {
+    const st = await stat(file);
+    if (!st.isFile()) return null;
+    const fh = await open(file, "r");
+    try {
+      const len = Math.min(st.size, 4096), buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, st.size - len);
+      const lines = buf.toString("utf8").split("\n").map((l) => l.trim()).filter(Boolean);
+      return { at: st.mtime.toISOString(), last: lines.length ? lines[lines.length - 1].slice(0, 300) : null };
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cron: the jobs in the app's user's crontab and the system's (/etc/crontab, /etc/cron.d: files whose names cron reads,
+ * no dots), each with its schedule in words, its next and last run (the server's time, cron's), and, where its output goes
+ * to a file, when that last changed and its last line; and whether cron itself is running.
+ */
+export async function cronData(): Promise<{ running: boolean | null; me: string; jobs: CronRow[] }> {
+  const home = homedir(), me = userInfo().username, now = new Date();
+  const mine = pexec("crontab", ["-l"], { timeout: 5000 })
+    .then(({ stdout }) => parseCrontab(stdout, "crontab"))
+    // (no crontab is an error to `crontab -l`: no jobs)
+    .catch(() => [] as CronJob[]);
+  const system = (async () => {
+    const files = ["/etc/crontab", ...(await readdir("/etc/cron.d").catch(() => [] as string[])).filter((n) => /^[A-Za-z0-9_-]+$/.test(n)).map((n) => `/etc/cron.d/${n}`)];
+    const all = await Promise.all(files.map((f) => readFile(f, "utf8").then((t) => parseCrontab(t, f, true)).catch(() => [] as CronJob[])));
+    return all.flat();
+  })();
+  const running = pexec("systemctl", ["is-active", "cron"], { timeout: 5000 })
+    .then(({ stdout }) => stdout.trim() === "active")
+    .catch((e: { stdout?: string }) => (e.stdout?.trim() ? false : null));
+  const [user, sys, active] = await Promise.all([mine, system, running]);
+  const rows = await Promise.all(
+    [...user.map((j) => ["user", j] as const), ...sys.map((j) => ["system", j] as const)].map(async ([scope, j]): Promise<CronRow> => {
+      const f = fieldsOf(j.schedule), info = commandInfo(j.command, home);
+      const log = info.log ? path.resolve(info.dir ?? home, info.log) : null;
+      const tail = log ? await lastLine(log) : null;
+      return {
+        key: `${j.source}:${j.line}`,
+        scope,
+        source: j.source,
+        line: j.line,
+        schedule: j.schedule,
+        when: describeSchedule(j.schedule),
+        command: j.command,
+        user: j.user ?? me,
+        note: j.note,
+        name: info.name,
+        dir: info.dir,
+        next: f ? (nextRun(f, now)?.toISOString() ?? null) : null,
+        prev: f ? (prevRun(f, now)?.toISOString() ?? null) : null,
+        log: log ? { path: log, at: tail?.at ?? null, last: tail?.last ?? null, error: !!tail?.last && looksLikeError(tail.last) } : null,
+      };
+    }),
+  );
+  return { running: active, me, jobs: rows };
 }

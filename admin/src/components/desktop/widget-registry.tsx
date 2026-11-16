@@ -1,7 +1,8 @@
 "use client";
 
-import { Container, Cpu, FolderKanban, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListTodo, type LucideIcon, MemoryStick, SquareTerminal, TriangleAlert } from "lucide-react";
+import { CalendarClock, Container, Cpu, FolderKanban, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListTodo, type LucideIcon, MemoryStick, SquareTerminal, TriangleAlert } from "lucide-react";
 
+import { CronWidget } from "@/components/desktop/cron-widget";
 import { MemoryWidget } from "@/components/desktop/memory-widget";
 import { DockerWidget, ErrorsWidget, GitWidget, HealthWidget, LoadWidget, ProcessesWidget, SigninsWidget, TicketsWidget } from "@/components/desktop/more-widgets";
 import { DiskWidget } from "@/components/desktop/disk-widget";
@@ -22,6 +23,7 @@ export const WIDGET_ICON: Record<WidgetId, LucideIcon> = {
   load: Gauge,
   tickets: ListTodo,
   signins: KeyRound,
+  cron: CalendarClock,
 };
 
 /** What each widget holds, by id (its frame is desktop.tsx's WidgetFrame). */
@@ -38,4 +40,5 @@ export const WIDGET_BODY: Record<WidgetId, (p: { folded: boolean }) => React.Rea
   load: LoadWidget,
   tickets: TicketsWidget,
   signins: SigninsWidget,
+  cron: CronWidget,
 };
