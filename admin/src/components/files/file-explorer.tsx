@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppWindow, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, File as FileIcon, FileLock, FilePlus, Folder, FolderOpen, FolderPlus, FolderUp,
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { Z_FILE_DIALOGS, Z_FILE_WINDOWS } from "@/lib/z-layers";
 import { startUploads, uploadedInto } from "@/store/uploads";
 import { confirmDialog } from "@/lib/ask";
+import type { FolderSizes } from "@/lib/files/sizes";
 import { API, api, downloadFile, type Entry, postTo, pseudo, viewable, when, within } from "./files-api";
 import { FileWindow } from "./file-window";
 import { filesOfDrop } from "./upload-client";
@@ -69,8 +71,10 @@ function TreeNode({ path, name, depth, current, scope, onOpen }: { path: string;
  * several at once, and they stay open from folder to folder): any file, any size, a page at a time, images, PDFs, a
  * credential file's contents on request, and a text file the server lets change in an editor (file-viewer.tsx). Unsaved
  * changes are asked about before their window closes, the file is renamed, moved or deleted, or the page is left.
+ * Each folder's size is measured once the folder shows (du, apart from the listing: a big tree takes a while).
  * `project`: a project's Files tab, the explorer rooted at that project's folder (the server holds every request of
- * this view to it, `&project=` / `project`).
+ * this view to it, `&project=` / `project`). Elsewhere the address names the folder showing (`?dir=`): a reload stays
+ * there, and the Disk widget's "Open in Files" goes to one.
  */
 export function FileExplorer({ project }: { project?: string } = {}) {
   const scope = project ? `&project=${encodeURIComponent(project)}` : "";
@@ -93,7 +97,17 @@ export function FileExplorer({ project }: { project?: string } = {}) {
   const [trashCount, setTrashCount] = useState(0);
   const filePick = useRef<HTMLInputElement>(null), folderPick = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async (p: string) => {
+  // The sizes of the folders in the folder showing (`busy`: being measured; what was measured before stays meanwhile).
+  const [sizes, setSizes] = useState<{ path: string; of: Record<string, number> | null; busy: boolean }>({ path: "", of: null, busy: false });
+  const measure = useCallback((p: string, fresh: boolean) => {
+    setSizes((s) => ({ path: p, of: s.path === p ? s.of : null, busy: true }));
+    api<FolderSizes>(`${API}?op=sizes&path=${encodeURIComponent(p)}${fresh ? "&fresh=1" : ""}${scope}`).then(
+      (r) => setSizes((s) => (s.path === p ? { path: p, of: r.sizes, busy: false } : s)),
+      () => setSizes((s) => (s.path === p ? { ...s, busy: false } : s)),
+    );
+  }, [scope]);
+  /** shows folder `p` (true once it does); `fresh`: after a change there, its folders are measured again */
+  const load = useCallback(async (p: string, fresh = false): Promise<boolean> => {
     setLoading(true);
     try {
       const l = await api<Listing>(`${API}?op=list&path=${encodeURIComponent(p)}${scope}`);
@@ -101,22 +115,37 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       setCwd(l.path);
       setError(null);
       setSelected((s) => (s && l.entries.find((e) => e.path === s.path)) ?? null);
+      if (!l.noPermission) measure(l.path, fresh);
+      return true;
     } catch (err) {
       setError((err as Error).message);
+      return false;
     } finally {
       setLoading(false);
     }
-  }, [scope]);
+  }, [scope, measure]);
   const refreshTrash = useCallback(() => { api<{ items: TrashItem[] }>(`${API}?op=trash${scope}`).then((t) => setTrashCount(t.items.length), () => {}); }, [scope]);
   const post = useCallback(<T,>(body: object) => postTo<T>(project ? { ...body, project } : body), [project]);
 
+  // (the address: outside a project's tab, `?dir=` is the folder showing)
+  const pathname = usePathname();
+  const asked = useSearchParams().get("dir");
+  const ownUrl = !project && pathname === "/files";
+  const firstDir = useRef(ownUrl ? asked : null);
   useEffect(() => {
     api<{ roots: string[]; writeRoots: string[] }>(`${API}?op=roots${scope}`).then((r) => {
       setRoots(r.roots);
       setWriteRoots(r.writeRoots);
-      // (opens where the work is: the first write root that can be seen, else the first root)
+      // (opens where the address says, if it can; else where the work is: the first write root that can be seen, else
+      // the first root)
       const start = r.writeRoots.find((w) => r.roots.some((root) => within(w, root))) ?? r.roots[0];
-      if (start) void load(start);
+      const first = firstDir.current;
+      if (first) void load(first).then((ok) => {
+        if (ok || !start) return;
+        toast.error(`Couldn't open ${first}`);
+        void load(start);
+      });
+      else if (start) void load(start);
     }, (err) => setError((err as Error).message));
     refreshTrash();
   }, [load, refreshTrash, scope]);
@@ -204,16 +233,21 @@ export function FileExplorer({ project }: { project?: string } = {}) {
     return () => { window.removeEventListener("beforeunload", onUnload); window.removeEventListener("click", onClick, true); };
   }, [anyDirty, leave]);
 
+  /** a folder's size, once measured (on disk, as du counts it) */
+  const measured = listing && sizes.path === listing.path ? sizes : null;
+  const dirBytes = (e: Entry) => (e.type === "dir" ? measured?.of?.[e.name] : undefined);
   const entries = useMemo(() => {
     const q = filter.trim().toLowerCase();
     const list = (listing?.entries ?? []).filter((e) => !q || e.name.toLowerCase().includes(q));
-    const v = (e: Entry) => (sort.key === "name" ? e.name.toLowerCase() : sort.key === "size" ? e.size : sort.key === "modified" ? e.modified : extOf(e));
+    const of = listing && sizes.path === listing.path ? sizes.of : null;
+    const size = (e: Entry) => (e.type === "dir" ? (of?.[e.name] ?? 0) : e.size);
+    const v = (e: Entry) => (sort.key === "name" ? e.name.toLowerCase() : sort.key === "size" ? size(e) : sort.key === "modified" ? e.modified : extOf(e));
     return list.sort((a, b) => {
       if (sort.key === "name" && (a.type === "dir") !== (b.type === "dir")) return a.type === "dir" ? -1 : 1;
       const x = v(a), y = v(b), c = x < y ? -1 : x > y ? 1 : 0;
       return sort.desc ? -c : c;
     });
-  }, [listing, filter, sort]);
+  }, [listing, filter, sort, sizes]);
 
   const crumbs = useMemo(() => {
     if (!listing) return [];
@@ -226,8 +260,19 @@ export function FileExplorer({ project }: { project?: string } = {}) {
   const cwdRef = useRef(cwd);
   useEffect(() => { cwdRef.current = cwd; }, [cwd]);
   useEffect(() => {
-    if (done && done.dir === cwdRef.current) void load(done.dir);
+    if (done && done.dir === cwdRef.current) void load(done.dir, true);
   }, [done, load]);
+  // (the address follows the folder showing, in place: no history entry per folder; and when it asks for another one,
+  // "Open in Files" again, that one shows)
+  useEffect(() => {
+    if (!ownUrl || !cwd || new URLSearchParams(window.location.search).get("dir") === cwd) return;
+    const q = new URLSearchParams(window.location.search);
+    q.set("dir", cwd);
+    window.history.replaceState(null, "", `${window.location.pathname}?${q.toString().replace(/%2F/g, "/")}${window.location.hash}`);
+  }, [ownUrl, cwd]);
+  useEffect(() => {
+    if (ownUrl && asked && cwdRef.current && asked !== cwdRef.current) void load(asked);
+  }, [ownUrl, asked, load]);
 
   const act = async (fn: () => Promise<unknown>, after?: () => void) => {
     setBusy(true);
@@ -235,7 +280,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       await fn();
       setDialog(null);
       after?.();
-      void load(cwd);
+      void load(cwd, true);
       refreshTrash();
     } catch (err) {
       setDialog((d) => (d ? { ...d, error: (err as Error).message } as typeof d : d));
@@ -285,6 +330,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
       <button type="button" className="inline-flex items-center gap-1 hover:text-foreground" onClick={() => setSort((s) => ({ key, desc: s.key === key ? !s.desc : key !== "name" && key !== "type" }))}>
         {label}{sort.key === key && (sort.desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
       </button>
+      {key === "size" && measured?.busy && <Loader2 className="ml-1 inline size-3 animate-spin align-[-2px]" aria-label="Measuring the folders" />}
     </th>
   );
   /** changes are allowed here (the server checks again) */
@@ -314,7 +360,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
         <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => filePick.current?.click()}><Upload className="size-4" /> Upload files</Button>
         <Button size="sm" variant="outline" disabled={!writable} title={writable ? undefined : readOnlyWhy} onClick={() => folderPick.current?.click()}><FolderUp className="size-4" /> Upload a folder</Button>
         <Button size="sm" variant="outline" onClick={openTrash}><Trash2 className="size-4" /> Trash{trashCount ? ` (${trashCount})` : ""}</Button>
-        <Button size="sm" variant="ghost" aria-label="Refresh" onClick={() => load(cwd)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button>
+        <Button size="sm" variant="ghost" aria-label="Refresh" onClick={() => load(cwd, true)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button>
         <input ref={filePick} type="file" multiple hidden onChange={(e) => { const fs = [...(e.target.files ?? [])].map((file) => ({ file, rel: file.name })); e.target.value = ""; void startUploads(fs, cwd, project); }} />
         <input ref={folderPick} type="file" multiple hidden {...{ webkitdirectory: "" }} onChange={(e) => { const fs = [...(e.target.files ?? [])].map((file) => ({ file, rel: file.webkitRelativePath || file.name })); e.target.value = ""; void startUploads(fs, cwd, project); }} />
       </div>
@@ -356,7 +402,9 @@ export function FileExplorer({ project }: { project?: string } = {}) {
                       {e.type === "dir" ? <button type="button" className="truncate hover:underline" onClick={() => go(e.path)}>{e.name}</button> : <span className="truncate">{e.name}</span>}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">{e.type === "file" ? formatBytes(e.size) : ""}</td>
+                  <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground" title={e.type !== "dir" ? undefined : dirBytes(e) !== undefined ? "On disk, everything in it" : measured?.busy ? "Measuring…" : undefined}>
+                    {e.type === "file" ? formatBytes(e.size) : dirBytes(e) !== undefined ? formatBytes(dirBytes(e)!) : e.type === "dir" && measured?.busy ? "…" : ""}
+                  </td>
                   <td className="px-2 py-1 whitespace-nowrap text-muted-foreground">{when(e.modified)}</td>
                   <td className="px-2 py-1 text-muted-foreground">{e.secret ? "credential" : extOf(e)}</td>
                   <td className="px-1 py-1">
@@ -445,7 +493,7 @@ export function FileExplorer({ project }: { project?: string } = {}) {
               </div>
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 border-t px-3 py-2 text-xs text-muted-foreground">
                 <dt>Path</dt><dd className="truncate font-mono" title={selected.path}>{selected.path}</dd>
-                <dt>Size</dt><dd>{selected.type === "file" ? `${formatBytes(selected.size)} (${selected.size.toLocaleString()} bytes)` : "—"}</dd>
+                <dt>Size</dt><dd>{selected.type === "file" ? `${formatBytes(selected.size)} (${selected.size.toLocaleString()} bytes)` : dirBytes(selected) !== undefined ? `${formatBytes(dirBytes(selected)!)} on disk` : selected.type === "dir" && measured?.busy ? "Measuring…" : "—"}</dd>
                 <dt>Modified</dt><dd>{when(selected.modified)}</dd>
               </dl>
             </>

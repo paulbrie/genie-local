@@ -163,6 +163,18 @@ export function openPage(href: string, push: (href: string) => void) {
   push(href);
 }
 
+/**
+ * Files at folder `dir` (the Disk widget's "Open in Files"): inline; or, when Files is the page popped out live, that
+ * window goes there (the route stays its page) and comes up and to the front. A frame on Files stays as it is.
+ */
+export function openInFiles(dir: string, push: (href: string) => void) {
+  const live = liveWin.getValue();
+  push(`/files?dir=${encodeURIComponent(dir).replace(/%2F/g, "/")}`);
+  if (!live || live.closing || !pathUnder(live.path, "/files")) return;
+  if (live.hidden) updateLive({ hidden: false });
+  focusWin(LIVE_ID);
+}
+
 /** Every pop-up minimized, the live one too (the Spiridus menu's "Show Home"). */
 export function minimizeAll() {
   const list = frames.getValue();

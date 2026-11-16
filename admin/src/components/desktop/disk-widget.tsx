@@ -1,15 +1,18 @@
 "use client";
 
-import { ChartBarStacked, ChartPie, ChevronRight, HardDrive, LayoutDashboard, List, Loader2, RotateCw } from "lucide-react";
+import { ChartBarStacked, ChartPie, ChevronRight, FolderOpen, HardDrive, LayoutDashboard, List, Loader2, RotateCw } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { ago, Empty, Meter, usePolled, useWidgetView, ViewSwitch, WidgetHeader, WidgetList } from "@/components/desktop/widget-parts";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { BASE_PATH } from "@/lib/config";
 import type { DiskDir, DiskEntry, DiskOverview, DiskPart } from "@/lib/disk-overview-core";
 import { formatBytes } from "@/lib/format";
 import { squarify } from "@/lib/treemap";
 import { cn } from "@/lib/utils";
+import { openInFiles } from "@/store/desktop";
 
 /** Each part's colour: the folders, Docker, and the rest (grey); the home folder (its path differs per box) violet. */
 const COLORS: Record<string, string> = {
@@ -36,7 +39,8 @@ type View = (typeof VIEWS)[number]["value"];
  * Shown as a list with each part's largest entries, one segmented bar, a donut, or a treemap of the parts and what's
  * in them (the switch, remembered). In the bar and the donut, a part and its row light each other up. In every view, a
  * click on a folder drills into it (its own entries and theirs, /api/disk/dir), a breadcrumb leading back up; switching
- * views stays in the folder.
+ * views stays in the folder. A right-click on a folder (or, drilled in, anywhere else: the folder shown) has "Open in
+ * Files".
  */
 export function DiskWidget({ folded }: { folded: boolean }) {
   const { data, failed, reload } = usePolled<DiskOverview>("/api/disk", 60_000, (d) => (d.scanning ? 4000 : null));
@@ -70,6 +74,14 @@ export function DiskWidget({ folded }: { folded: boolean }) {
   const of: Scale | null = shown ? { total: shown.bytes, free: null, label: shown.path.split("/").pop() || shown.path } : disk ? { total: disk.size, free: disk.avail, label: "the disk" } : null;
   const onDrill = loading ? undefined : drill;
 
+  // The right-click's menu: for the folder it's on (`data-folder`), else the one drilled into; on neither, none.
+  const router = useRouter();
+  const picked = useRef<string | null>(null);
+  const [menu, setMenu] = useState<{ open: boolean; path: string | null }>({ open: false, path: null });
+  const pick = (e: React.SyntheticEvent) => {
+    picked.current = (e.target as Element).closest("[data-folder]")?.getAttribute("data-folder") ?? trail;
+  };
+
   return (
     <>
       <WidgetHeader
@@ -93,30 +105,52 @@ export function DiskWidget({ folded }: { folded: boolean }) {
           )}
           {data && !parts && <Empty>Measuring the folders (a minute the first time)…</Empty>}
           {disk && parts && of && (
-            // (the treemap's column fills the widget, taking all the room left; the others are as tall as they are)
-            <div className={cn("flex flex-col pr-2 pl-7", view === "treemap" && "min-h-44 flex-1")}>
-              {trail && <Crumbs parts={parts} trail={trail} bytes={drilled?.bytes ?? null} onDrill={drill} />}
-              {dirFailed && trail && !drilled ? (
-                <p className="py-2 text-xs text-muted-foreground">Couldn&apos;t measure that folder.</p>
-              ) : drilled && !drilled.entries.length ? (
-                <p className="py-2 text-xs text-muted-foreground">Nothing in it takes room.</p>
-              ) : (
-                <div className={cn("relative flex flex-col", view === "treemap" && "min-h-0 flex-1")}>
-                  <div className={cn("flex flex-col transition-opacity", view === "treemap" && "min-h-0 flex-1", loading && "opacity-35")}>
-                    {view === "list" && <ListView blocks={blocks} of={of} onDrill={onDrill} />}
-                    {view === "bar" && <BarView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
-                    {view === "donut" && <DonutView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
-                    {view === "treemap" && <TreemapView blocks={blocks} onDrill={onDrill} />}
-                    {(view === "bar" || view === "donut") && <PartRows blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+            <ContextMenu
+              open={menu.open}
+              onOpenChange={(open) => {
+                if (open && !picked.current) return;
+                setMenu((m) => ({ open, path: open ? picked.current : m.path }));
+              }}
+            >
+              {/* (the treemap's column fills the widget, taking all the room left; the others are as tall as they are) */}
+              <ContextMenuTrigger
+                onContextMenuCapture={pick}
+                // (a long press opens it too)
+                onTouchStartCapture={pick}
+                className={cn("flex flex-col pr-2 pl-7", view === "treemap" && "min-h-44 flex-1")}
+              >
+                {trail && <Crumbs parts={parts} trail={trail} bytes={drilled?.bytes ?? null} onDrill={drill} />}
+                {dirFailed && trail && !drilled ? (
+                  <p className="py-2 text-xs text-muted-foreground">Couldn&apos;t measure that folder.</p>
+                ) : drilled && !drilled.entries.length ? (
+                  <p className="py-2 text-xs text-muted-foreground">Nothing in it takes room.</p>
+                ) : (
+                  <div className={cn("relative flex flex-col", view === "treemap" && "min-h-0 flex-1")}>
+                    <div className={cn("flex flex-col transition-opacity", view === "treemap" && "min-h-0 flex-1", loading && "opacity-35")}>
+                      {view === "list" && <ListView blocks={blocks} of={of} onDrill={onDrill} />}
+                      {view === "bar" && <BarView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                      {view === "donut" && <DonutView blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                      {view === "treemap" && <TreemapView blocks={blocks} onDrill={onDrill} />}
+                      {(view === "bar" || view === "donut") && <PartRows blocks={blocks} of={of} hot={hot} setHot={setHot} onDrill={onDrill} />}
+                    </div>
+                    {loading && (
+                      <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                        <Loader2 className="size-3.5 animate-spin" /> Measuring {trail?.split("/").pop()}…
+                      </span>
+                    )}
                   </div>
-                  {loading && (
-                    <span className="absolute inset-0 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                      <Loader2 className="size-3.5 animate-spin" /> Measuring {trail?.split("/").pop()}…
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
+                )}
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-56">
+                <ContextMenuLabel className="truncate font-mono" title={menu.path ?? undefined}>
+                  {menu.path}
+                </ContextMenuLabel>
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={() => menu.path && openInFiles(menu.path, (href) => router.push(href))}>
+                  <FolderOpen /> Open in Files
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           )}
           {data && (
             <div className="mt-auto flex items-center gap-1.5 pt-1.5 pr-1 pl-7 text-[11px] text-muted-foreground">
@@ -175,10 +209,15 @@ const dirBlocks = (d: DiskDir): Block[] =>
     return { key: full, label: e.name, bytes: e.bytes, top: e.top, color: DRILL_COLORS[i % DRILL_COLORS.length], path: e.dir ? full : null, mono: false };
   });
 
-/** What makes something drill into `path` on a click (or Enter): nothing when it isn't a folder, or while one's measured. */
+/**
+ * What makes something drill into `path` on a click (or Enter): nothing when it isn't a folder, or while one's measured.
+ * A folder's `data-folder` is what its right-click opens in Files.
+ */
 function drillable(path: string | null, onDrill: ((path: string) => void) | undefined) {
-  if (!path || !onDrill) return {};
+  if (!path) return {};
+  if (!onDrill) return { "data-folder": path };
   return {
+    "data-folder": path,
     role: "button",
     tabIndex: 0,
     onClick: () => onDrill(path),
@@ -212,6 +251,7 @@ function Crumbs({ parts, trail, bytes, onDrill }: { parts: DiskPart[]; trail: st
           <button
             type="button"
             onClick={() => onDrill(c.path)}
+            data-folder={c.path}
             aria-current={i === crumbs.length - 1 ? "page" : undefined}
             className={cn("min-w-0 truncate rounded px-1 hover:bg-foreground/10 hover:text-foreground", i === crumbs.length - 1 && "font-medium text-foreground")}
           >
@@ -450,7 +490,8 @@ function TreemapView({ blocks: items, onDrill }: { blocks: Block[]; onDrill?: (p
               // (where a click goes: the block from its first tile, which is named for it; else the entry when it's a
               // folder, the block for what else is in it)
               const opensBlock = i === 0 || !entry;
-              const target = !onDrill || !p.path ? null : opensBlock ? p.path : entry.dir ? `${p.path}/${entry.name}` : null;
+              const folder = !p.path ? null : opensBlock ? p.path : entry.dir ? `${p.path}/${entry.name}` : null;
+              const target = onDrill ? folder : null;
               const tw = t.w - PAD * 2;
               const th = t.h - PAD * 2;
               return (
@@ -458,6 +499,7 @@ function TreemapView({ blocks: items, onDrill }: { blocks: Block[]; onDrill?: (p
                   <TooltipTrigger
                     render={<div />}
                     onClick={target ? () => onDrill!(target) : undefined}
+                    data-folder={folder ?? undefined}
                     className={cn(
                       "absolute flex flex-col overflow-hidden rounded-[5px] p-1 leading-tight text-white transition-[filter]",
                       target ? "cursor-pointer hover:brightness-115" : "hover:brightness-105",

@@ -10,6 +10,7 @@ import { assertWritable, isPseudo, resolveExisting, rootOf, scopeRoots, writeRoo
 import { isSecretPath, listDir } from "@/lib/files/listing";
 import { audit, deletePath, makeFile, makeFolder, movePath, planDelete, renamePath } from "@/lib/files/ops";
 import { readPage } from "@/lib/files/preview";
+import { folderSizes } from "@/lib/files/sizes";
 import { emptyTrash, listTrash, purgeFromTrash, restoreFromTrash, trashDir } from "@/lib/files/trash";
 import { CHUNK_BYTES } from "@/lib/files/uploads";
 import { errorResponse, whoOf } from "./shared";
@@ -34,6 +35,12 @@ export async function GET(req: NextRequest) {
         throw err;
       });
       return NextResponse.json({ path: t.abs, root: t.root, parent, entries: entries ?? [], noPermission: entries === null });
+    }
+    if (op === "sizes") {
+      // (each folder in it, du one level down: slow on a big tree, so asked for apart from the listing; not in /proc, /sys)
+      if (!(await fs.stat(t.abs)).isDirectory()) return NextResponse.json({ error: "not a folder" }, { status: 400 });
+      if (isPseudo(t.abs)) return NextResponse.json({ path: t.abs, bytes: null, sizes: {}, measuredAt: Date.now() });
+      return NextResponse.json(await folderSizes(t.abs, q.get("fresh") === "1"));
     }
     if (op === "plan-delete") return NextResponse.json(await planDelete(t.abs, roots));
     if (op === "read") {

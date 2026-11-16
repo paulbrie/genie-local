@@ -257,3 +257,26 @@ describe("the explorer scoped to a project (its Files tab)", () => {
     assert.equal(await fs.readFile(f, "utf8"), "edited\n");
   });
 });
+
+describe("the folders' sizes (op sizes)", () => {
+  it("measures each folder in a folder by name, kept until asked for fresh; none in /proc, and not of a file", async () => {
+    const d = path.join(base, "sized");
+    await fs.mkdir(path.join(d, "big"), { recursive: true });
+    await fs.mkdir(path.join(d, "empty"));
+    await fs.writeFile(path.join(d, "big", "blob.bin"), Buffer.alloc(256 * 1024, 1));
+    await fs.writeFile(path.join(d, "loose.txt"), "a file: its size is the listing's\n");
+    const sizes = async (q: string) => (await (await get(`op=sizes&${q}path=${enc(d)}`)).json());
+    const body = await sizes("");
+    assert.equal(body.path, d);
+    assert.deepEqual(Object.keys(body.sizes).sort(), ["big", "empty"]);
+    assert.ok(body.sizes.big > 128 * 1024 && body.sizes.big > body.sizes.empty);
+    assert.ok(body.bytes >= body.sizes.big + body.sizes.empty);
+
+    await fs.mkdir(path.join(d, "later"));
+    assert.ok(!("later" in (await sizes("")).sizes), "kept");
+    assert.ok("later" in (await sizes("fresh=1&")).sizes, "measured again");
+
+    assert.deepEqual((await (await get("op=sizes&path=/proc")).json()).sizes, {});
+    assert.equal((await get(`op=sizes&path=${enc(path.join(d, "loose.txt"))}`)).status, 400);
+  });
+});

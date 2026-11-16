@@ -221,7 +221,10 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
     `disk-overview.ts`, du at `nice` in the background at most every 10 min; in every view a click on
     a folder (a row, a segment, an arc, a tile) drills into it, a breadcrumb back up, switching views
     staying there: /api/disk/dir, du two levels deep, within the Files
-    explorer's roots, kept 5 min); Memory
+    explorer's roots, kept 5 min; a right-click on a folder, or drilled in anywhere, has Open in Files:
+    `openInFiles`, `/files?dir=`, the address Files keeps its folder in, a live Files pop-up going
+    there itself. Files measures its folders too: `op=sizes`, du one level deep, `lib/files/sizes.ts`,
+    kept 5 min, fresh after a change or Refresh); Memory
     (`memory-widget.tsx`: now, the RAM as one segmented bar by project, agents striped, or by
     terminal; or over 24 h / 7 / 30 days (30 by default), a stacked area from the per-minute history,
     /api/widgets/memory, `memory-history-core.ts`); Processes (the busiest by CPU or memory, named by
