@@ -85,6 +85,15 @@ export function TaskBoard({
   // The terminals' live status (kept fresh app-wide by the terminal dock): an
   // in-progress card shows its assignee's Claude state.
   const [terms] = useSubject(liveTerminals);
+  // An agent's claim with a lease still running (claim_task, local-genie): until when; the clock moves a minute at a
+  // time, so a lease that runs out leaves its card.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  const leaseOf = (t: Task) =>
+    t.status !== "done" && t.claimedUntil && new Date(t.claimedUntil).getTime() > now ? new Date(t.claimedUntil) : null;
   const agentState = (assignee: string | null): AgentState => {
     if (!assignee) return null;
     const t = terms.find((x) => x.name === assignee);
@@ -402,6 +411,7 @@ export function TaskBoard({
                   dragging={draggingId === t.id}
                   agent={null}
                   assigneeLive={!!t.assignee && terms.some((x) => x.name === t.assignee)}
+                  leaseUntil={leaseOf(t)}
                   onOpen={() => setOpenId(t.id)}
                   onDragStart={(e) => onDragStart(e, t.id)}
                   onDragEnd={onDragEnd}
@@ -423,6 +433,7 @@ export function TaskBoard({
                   dragging={draggingId === t.id}
                   agent={t.status === "in_progress" ? agentState(t.assignee) : null}
                   assigneeLive={!!t.assignee && terms.some((x) => x.name === t.assignee)}
+                  leaseUntil={leaseOf(t)}
                   onOpen={() => setOpenId(t.id)}
                   onDragStart={(e) => onDragStart(e, t.id)}
                   onDragEnd={onDragEnd}
@@ -462,6 +473,7 @@ function TaskCard({
   dragging,
   agent,
   assigneeLive,
+  leaseUntil,
   onOpen,
   onDragStart,
   onDragEnd,
@@ -476,6 +488,8 @@ function TaskCard({
   agent: AgentState;
   /** the assignee's terminal exists: its name (and glyph) open it */
   assigneeLive: boolean;
+  /** an agent's claim whose lease is still running (an agent without a terminal of its own): until when */
+  leaseUntil: Date | null;
   onOpen: () => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
@@ -549,9 +563,22 @@ function TaskCard({
               <span className="truncate">{task.assignee}</span>
             </button>
           ) : (
-            <span className="flex min-w-0 items-center gap-0.5" title={`Delegated to ${task.assignee} (terminal gone)`}>
+            // (no terminal of its own: an agent's claim holds while its lease lasts, else another agent may claim it)
+            <span
+              className="flex min-w-0 items-center gap-0.5"
+              title={
+                leaseUntil
+                  ? `Claimed by ${task.assignee} until ${leaseUntil.toLocaleString()} (the agent renews its claim)`
+                  : `${task.assignee}'s terminal is gone${done ? "" : ": another agent may claim it"}`
+              }
+            >
               <Bot className="size-3 shrink-0" />
               <span className="truncate">{task.assignee}</span>
+              {leaseUntil && (
+                <span className="shrink-0" suppressHydrationWarning>
+                  · until {leaseUntil.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
             </span>
           ))}
         {commentCount > 0 && (

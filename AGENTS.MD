@@ -34,6 +34,12 @@ uses. Tools cover **tasks** (`list_tasks`, `create_task`, `update_task`,
 — all scoped by project slug.
 See its README. `.mcp.json` loads at session start, so reload to pick it up.
 
+**Claim a task before working on it** (`claim_task`, by id or the next free one), so two
+agents never take the same one: it's yours while your admin terminal is open (outside the
+terminals, pass `as` and `renew_task` within the 30-minute lease). Never work on a task
+`list_tasks` shows as `held`. Finished: `set_task_status` done with the commit; stopping
+without finishing: a comment on where you left it, then `release_task`.
+
 ## Tooling: agent-browser (browser for agents)
 
 **`agent-browser`** (Vercel, https://agent-browser.dev) is a Rust CLI that

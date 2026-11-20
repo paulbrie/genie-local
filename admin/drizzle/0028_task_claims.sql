@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "claimed_until" timestamp with time zone;

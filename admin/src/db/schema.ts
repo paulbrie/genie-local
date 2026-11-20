@@ -132,6 +132,9 @@ export const tasks = pgTable("tasks", {
   // The terminal (Claude session, by its admin name) the task was delegated to.
   assignee: text("assignee"),
   assignedAt: timestamp("assigned_at", { withTimezone: true }),
+  // An agent's claim on the task (local-genie's claim_task): the assignee holds it while its terminal is open, or
+  // until then (an agent outside the admin's terminals renews it); past both, another agent may claim it.
+  claimedUntil: timestamp("claimed_until", { withTimezone: true }),
   // Manual sort order within a project (smaller = higher in the list).
   position: integer("position").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })

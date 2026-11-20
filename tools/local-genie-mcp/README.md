@@ -23,10 +23,13 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | Tool | Args | Purpose |
 | --- | --- | --- |
 | `list_projects` | — | slugs + names of tracked projects |
-| `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `assignee` (the terminal it was delegated to), `comment_count`, `attachment_count` |
+| `list_tasks` | `project`, `status?` (all/open/in_progress/done) | list tasks, top→bottom, with `status`, `commit_sha`, `assignee` (the terminal it was delegated to, or the agent that claimed it), `claimed_until`, `claim` (free / mine / held / done, as the caller sees it), `comment_count`, `attachment_count` |
 | `create_task` | `project`, `title`, `description?` | add a task (to the top) |
 | `update_task` | `project`, `id`, `title?`, `description?`, `commit?` | edit title/description/commit sha |
-| `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; in_progress / done on an unassigned ticket records the calling terminal as its agent; `done` still accepted |
+| `set_task_status` | `project`, `id`, `status` (open/in_progress/done), `commit?` | move between the board's columns; in_progress / done on a ticket nobody holds claims it for the calling terminal, in_progress on one another agent holds is refused; `done` still accepted |
+| `claim_task` | `project`, `id?`, `as?`, `minutes?` | claim a task (or, without `id`, the next free one: open ones in board order, then in-progress ones whose agent went away) and move it to in_progress; refused, with who and until when, if another agent holds it |
+| `renew_task` | `project`, `id`, `as?`, `minutes?` | restart your claim's lease |
+| `release_task` | `project`, `id`, `as?` | give a claimed task back (in progress → open, nobody holds it) |
 | `delete_task` | `project`, `id` | remove a task |
 | `reorder_tasks` | `project`, `orderedIds` | set manual order (position) |
 | `list_task_comments` | `project`, `id?` | a task's comment thread (author `user`/`claude`), each comment with its `files` (abs paths); all threads without `id` |
@@ -43,5 +46,14 @@ Reads `DATABASE_URL` from the environment, or falls back to
 | `update_note` | `project`, `id`, `body` | edit a note |
 | `delete_note` | `project`, `id` | remove a note |
 | `reorder_notes` | `project`, `orderedIds` | set manual note order |
+
+## Claims
+
+A task's claim is its `assignee` (`claims.mjs`, tested: `node --test tools/local-genie-mcp`). The assignee holds
+it while its admin terminal is open (its tmux session `admin-<name>`: an agent there never has to renew), or until
+`claimed_until`, the lease an agent outside the terminals (named with `as`) keeps renewing; past both, another agent
+may claim it. Claims are taken with a conditional update (the assignee must still be the one read), so of two agents
+racing for a task one gets it. The admin's Tasks tab shows a running lease on the card; delegating a task there
+drops a former agent's lease.
 
 Reinstall deps if `node_modules` is missing: `cd /opt/project/tools/local-genie-mcp && npm install`.

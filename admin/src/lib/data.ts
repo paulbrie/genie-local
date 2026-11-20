@@ -252,7 +252,7 @@ export async function delegatedTickets() {
     .orderBy(desc(tasks.assignedAt));
 }
 
-/** Record the delegation on the task and leave a line in its thread. */
+/** Record the delegation on the task and leave a line in its thread (a former agent's claim goes with it). */
 export async function assignTask(
   projectId: number,
   taskId: number,
@@ -262,7 +262,7 @@ export async function assignTask(
 ) {
   await db
     .update(tasks)
-    .set({ assignee, assignedAt: new Date(), updatedAt: new Date() })
+    .set({ assignee, assignedAt: new Date(), claimedUntil: null, updatedAt: new Date() })
     .where(and(eq(tasks.id, taskId), eq(tasks.projectId, projectId)));
   await db.insert(taskComments).values({
     taskId,
