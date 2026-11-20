@@ -1,8 +1,12 @@
 // Push from the Git tab: the view's checkout's branch to origin/<same name>.
-//   POST {project, app, view} → { branch, pushed, created }
+//   POST {project, app, view} → JSON lines as it goes (code-review/push-stream.ts): the review before push's progress,
+//   then { type: "done", branch, pushed, created, review } or { type: "error", error, review }; a request it can't
+//   start on: a JSON error
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { pushTimeoutMs } from "@/lib/code-review";
+import { pushStream } from "@/lib/code-review/push-stream";
 import { gitRemoteEnv } from "@/lib/git-auth";
 import { pushBranch } from "@/lib/git-commit";
 import { listRepos, parseView, resolveRepo } from "@/lib/git-graph";
@@ -30,7 +34,8 @@ export async function POST(req: NextRequest) {
     const app = b.app || ((await listRepos(b.project))[0]?.app ?? "");
     const repo = await resolveRepo(b.project, app);
     if (!repo) throw new Error("no git repo");
-    return NextResponse.json(await pushBranch(repo, parseView(b.view), await gitRemoteEnv(b.project, app)));
+    const [env, timeoutMs] = await Promise.all([gitRemoteEnv(b.project, app), pushTimeoutMs(repo)]);
+    return pushStream((onStart) => pushBranch(repo, parseView(b.view), env, { timeoutMs, onStart }));
   } catch (err) {
     return fail(err instanceof z.ZodError ? "bad request" : err);
   }

@@ -26,3 +26,6 @@ export function pusherSelected(who: ReviewSettings["who"], isAgent: boolean): bo
 export function parsePushLines(stdin: string): PushLine[];
 export function verdictFor(findings: Finding[], blockAt: ReviewSettings["blockAt"]): "blocked" | "warned" | "passed";
 export function reviewPrompt(o: { project: string; branch: string; commits: string[]; truncated: boolean }): string;
+export function diffStats(diff: string): { files: number; added: number; removed: number };
+export function describeReviewStep(block: unknown, repo?: string): string | null;
+export function pushBudgetMs(settings: ReviewSettings | null | undefined): number;

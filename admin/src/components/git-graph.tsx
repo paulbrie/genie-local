@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRightLeft, FolderGit2, GitBranch, GitCommitHorizontal, KeyRound, RefreshCw, Trash2, Upload } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { GitRemoteDialog } from "@/components/git-remote-dialog";
 import { GitCommitDialog } from "@/components/git-commit-dialog";
 import { GitWorktrees } from "@/components/git-worktrees";
+import { PushReviewDialog, VERDICT } from "@/components/review-progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,10 +31,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { LiveReview, ReviewResult } from "@/lib/code-review";
 import { BASE_PATH } from "@/lib/config";
 import { formatRelativeTime } from "@/lib/format";
 import type { GitGraph, GitRepo, GraphRow, GraphViews } from "@/lib/git-graph";
 import { confirmDialog } from "@/lib/ask";
+import { readPush } from "@/lib/push-client";
 
 // Lane colours — mid-saturation so they read on both light and dark themes.
 const PALETTE = [
@@ -166,21 +169,40 @@ export function GitGraphView({
       toast.error(e instanceof Error ? e.message : String(e));
     }
   };
+  // A push's review before push: followed in a dialog while it runs, and kept up after when it found something (closed,
+  // it stays closed for that push, which goes on regardless).
+  const [pushView, setPushView] = useState<{
+    live: LiveReview | null;
+    result: ReviewResult | null;
+    outcome: { title: string; text: string } | null;
+  } | null>(null);
+  const following = useRef(true);
   const push = async () => {
     setPushing(true);
+    following.current = true;
+    const show = (v: NonNullable<typeof pushView>) => following.current && setPushView(v);
     try {
       const r = await fetch(`${BASE_PATH}/api/git/push`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project: projectSlug, app, view: view === ALL ? "" : view }),
       });
-      const j = (await r.json()) as { branch?: string; pushed?: number; created?: boolean; error?: string };
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      toast.success(
-        `Pushed ${j.pushed} commit${j.pushed === 1 ? "" : "s"} to origin/${j.branch}${j.created ? " (new on origin)" : ""}`,
-      );
+      const end = await readPush<{ branch: string; pushed: number; created: boolean }>(r, (live) => show({ live, result: null, outcome: null }));
+      const review = end.review ?? null;
+      if (typeof end.error === "string") {
+        if (review) show({ live: null, result: review, outcome: { title: "Not pushed", text: end.error } });
+        else setPushView(null);
+        toast.error(`Not pushed: ${end.error}`, { duration: 15_000 });
+        return;
+      }
+      const what = `Pushed ${end.pushed} commit${end.pushed === 1 ? "" : "s"} to origin/${end.branch}${end.created ? " (new on origin)" : ""}`;
+      // (a review with something to say stays up; a clean one is said in the toast)
+      if (review && (review.findings.length > 0 || review.verdict !== "passed")) show({ live: null, result: review, outcome: { title: "Pushed", text: what } });
+      else setPushView(null);
+      toast.success(review ? `${what} · review ${VERDICT[review.verdict].label}` : what);
       await reread();
     } catch (e) {
+      setPushView(null);
       toast.error(`Not pushed: ${e instanceof Error ? e.message : String(e)}`, { duration: 15_000 });
     } finally {
       setPushing(false);
@@ -408,6 +430,16 @@ export function GitGraphView({
             <Upload className="size-3.5" />
             {pushing ? "Pushing…" : `Push ↑${graph.sync.ahead}`}
           </Button>
+        )}
+        {pushView && (
+          <PushReviewDialog
+            branch={graph.sync?.branch ?? ""}
+            {...pushView}
+            onClose={() => {
+              following.current = false;
+              setPushView(null);
+            }}
+          />
         )}
         {committing && graph.checkout && (
           <GitCommitDialog

@@ -1,8 +1,12 @@
 // Commit from the Git tab, in the checkout the view shows (and push, if asked).
-//   POST {project, app, view, message, paths[], push?} → { sha, files, pushed? }
+//   POST {project, app, view, message, paths[], push?} → { sha, files }; with push, JSON lines as it goes
+//   (code-review/push-stream.ts): the review before push's progress, then { type: "done", sha, files, push | pushError,
+//   review } (committed either way)
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { pushTimeoutMs } from "@/lib/code-review";
+import { pushStream } from "@/lib/code-review/push-stream";
 import { gitRemoteEnv } from "@/lib/git-auth";
 import { commitChanges, pushBranch } from "@/lib/git-commit";
 import { listRepos, parseView, resolveRepo } from "@/lib/git-graph";
@@ -42,11 +46,13 @@ export async function POST(req: NextRequest) {
     const commit = await commitChanges(repo, view, b.message, b.paths);
     if (!b.push) return NextResponse.json(commit);
     // committed either way: a failed push is reported next to it
-    try {
-      return NextResponse.json({ ...commit, push: await pushBranch(repo, view, await gitRemoteEnv(b.project, app)) });
-    } catch (err) {
-      return NextResponse.json({ ...commit, pushError: err instanceof Error ? err.message : String(err) });
-    }
+    const [env, timeoutMs] = await Promise.all([gitRemoteEnv(b.project, app), pushTimeoutMs(repo)]);
+    return pushStream((onStart) =>
+      pushBranch(repo, view, env, { timeoutMs, onStart }).then(
+        (push) => ({ ...commit, push }),
+        (err) => ({ ...commit, pushError: err instanceof Error ? err.message : String(err) }),
+      ),
+    );
   } catch (err) {
     return fail(err);
   }

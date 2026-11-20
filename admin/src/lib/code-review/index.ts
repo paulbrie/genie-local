@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import { getProjectDetail } from "@/lib/scan";
 
-import { withDefaults, type Finding, type ReviewSettings } from "./core.mjs";
+import { pushBudgetMs, withDefaults, type Finding, type ReviewSettings } from "./core.mjs";
 
 export type { Finding, ReviewSettings } from "./core.mjs";
 
@@ -25,6 +25,7 @@ const pexec = promisify(execFile);
 const DIR = process.env.REVIEW_DIR ?? "/opt/project/.review";
 const CONFIG = path.join(DIR, "config.json");
 const RESULTS = path.join(DIR, "results");
+const LIVE = path.join(DIR, "live");
 const HOOK_SCRIPT = path.join(process.cwd(), "scripts", "review-hook.mjs");
 /** Marks the hook as ours, so it's never mistaken for (or written over) a project's own. */
 const MARK = "# genie-review";
@@ -56,7 +57,30 @@ export type ReviewResult = {
   costUsd: number | null;
 };
 
-export type ProjectReview = { settings: ReviewSettings; hooks: HookState[]; results: ReviewResult[] };
+/** A review under way: where it's at, what it's looking at, what Claude has done so far (the hook's live file). */
+export type LiveReview = {
+  id: string;
+  at: string;
+  project: string;
+  repo: string;
+  branch: string;
+  pusher: "agent" | "person";
+  pid: number;
+  /** finding what the push adds; waiting for a free review slot; Claude reviewing */
+  phase: "preparing" | "waiting" | "reviewing";
+  reviewingSince?: string;
+  commits: string[];
+  files: number;
+  added: number;
+  removed: number;
+  truncated: boolean;
+  effort: ReviewSettings["effort"];
+  timeoutSec: number;
+  steps: { at: string; text: string }[];
+  updatedAt: string;
+};
+
+export type ProjectReview = { settings: ReviewSettings; hooks: HookState[]; results: ReviewResult[]; live: LiveReview[] };
 
 async function readConfig(): Promise<Config> {
   try {
@@ -138,16 +162,51 @@ export async function uninstall(repo: string) {
   await fs.rename(path.join(dir, CHAINED), hook).catch(() => {});
 }
 
-/** The newest results for a project, newest first. */
-async function results(project: string, limit = 30): Promise<ReviewResult[]> {
-  const names = (await fs.readdir(RESULTS).catch(() => [] as string[])).filter((n) => n.endsWith(".json")).sort().reverse();
+/** The newest results `pick` picks, newest first (of the newest `scan` written). */
+async function results(pick: (r: ReviewResult) => boolean, limit = 30, scan = Infinity): Promise<ReviewResult[]> {
+  const names = (await fs.readdir(RESULTS).catch(() => [] as string[])).filter((n) => n.endsWith(".json")).sort().reverse().slice(0, scan);
   const out: ReviewResult[] = [];
   for (const n of names) {
     if (out.length >= limit) break;
     const r = JSON.parse(await fs.readFile(path.join(RESULTS, n), "utf8").catch(() => "null")) as ReviewResult | null;
-    if (r?.project === project) out.push(r);
+    if (r && pick(r)) out.push(r);
   }
   return out;
+}
+
+/** The review of a push from `dir` to `branch` begun since `since` (an ISO time), once it's done; null: none. */
+export async function pushReview(dir: string, branch: string, since: string): Promise<ReviewResult | null> {
+  return (await results((r) => r.repo === dir && r.branch === branch && r.at >= since, 1, 50))[0] ?? null;
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/** The reviews under way that `pick` picks, the oldest first. One whose hook is gone (killed mid-review) is cleared away. */
+export async function liveReviews(pick: (r: LiveReview) => boolean): Promise<LiveReview[]> {
+  const out: LiveReview[] = [];
+  for (const n of (await fs.readdir(LIVE).catch(() => [] as string[])).filter((x) => x.endsWith(".json"))) {
+    const file = path.join(LIVE, n);
+    const r = JSON.parse(await fs.readFile(file, "utf8").catch(() => "null")) as LiveReview | null;
+    if (!r) continue;
+    if (!alive(r.pid)) {
+      await fs.rm(file, { force: true }).catch(() => {});
+      continue;
+    }
+    if (pick(r)) out.push(r);
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+
+/** How long a push from `repo` may take: with its review on, time for the review (and a wait for a free slot) too. */
+export async function pushTimeoutMs(repo: string): Promise<number> {
+  return pushBudgetMs((await readConfig()).repos[repo]?.settings);
 }
 
 export async function projectReview(slug: string): Promise<ProjectReview | null> {
@@ -155,7 +214,12 @@ export async function projectReview(slug: string): Promise<ProjectReview | null>
   if (!repos) return null;
   const config = await readConfig();
   const settings = withDefaults(repos.map((r) => config.repos[r]?.settings).find(Boolean));
-  return { settings, hooks: await Promise.all(repos.map(hookState)), results: await results(slug) };
+  return {
+    settings,
+    hooks: await Promise.all(repos.map(hookState)),
+    results: await results((r) => r.project === slug),
+    live: await liveReviews((r) => r.project === slug),
+  };
 }
 
 /** Saves a project's settings for all its repos and installs (or, turned off, removes) their hooks. */

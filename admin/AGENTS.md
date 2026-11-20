@@ -310,6 +310,14 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   containers (the user, password and database their image's env sets up, at the port they publish).
   One connection per server and user (`connKey`), so admin_app on :5432 is one for every database it
   owns. Listing the connections looks (at most every 30 s) and syncs them into `connections` rows with
+  While it runs, its progress is in `.review/live/<id>.json` (phase, commits, files and lines,
+  Claude's steps from `--output-format stream-json`; gone once the result is written, cleared if
+  its pid dies): the Git tab's review panel shows the ones under way, whoever pushed. The Git tab's
+  Push and Commit & push answer as JSON lines (`code-review/push-stream.ts`, read by
+  `lib/push-client.ts`): the review's progress as it goes, a tick every 10 s (nginx drops a quiet
+  answer after 300 s), then the push with the review's result, followed in a dialog
+  (`review-progress.tsx`), kept up when it found something. git push gets time for the review and
+  a wait for a free slot (`pushBudgetMs`). Hook test: `code-review/hook.test.ts`.
   an `auto_key`: kept up to date from their source, not editable by hand (409), removed when their
   source goes unless they have saved queries; one the same as a connection added by hand is left to
   that one. A port nothing answers on shows as "not running".

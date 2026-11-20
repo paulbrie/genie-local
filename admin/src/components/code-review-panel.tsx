@@ -4,25 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
+import { Findings, ReviewProgress, VERDICT } from "@/components/review-progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import type { ProjectReview, ReviewResult, ReviewSettings } from "@/lib/code-review";
+import type { ProjectReview, ReviewSettings } from "@/lib/code-review";
 import { BASE_PATH } from "@/lib/config";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const API = `${BASE_PATH}/api/code-review`;
-
-const VERDICT: Record<ReviewResult["verdict"], { label: string; className: string }> = {
-  passed: { label: "passed", className: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" },
-  warned: { label: "warned", className: "bg-amber-500/15 text-amber-700 dark:text-amber-400" },
-  blocked: { label: "stopped", className: "bg-destructive/15 text-destructive" },
-  overridden: { label: "skipped (REVIEW=skip)", className: "bg-muted text-muted-foreground" },
-  timeout: { label: "timed out, let through", className: "bg-muted text-muted-foreground" },
-  error: { label: "not reviewed", className: "bg-muted text-muted-foreground" },
-};
 
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 
@@ -30,7 +21,8 @@ const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
  * Review before push, on a project's Git tab: Claude reviews what a push to the
  * chosen branches adds and stops it on serious findings (src/lib/code-review,
  * scripts/review-hook.mjs). The settings, each repo's hook, and the latest
- * reviews with their findings.
+ * reviews with their findings; above them, folded or not, the reviews under
+ * way (a terminal's push as well as the Git tab's), as they go.
  */
 export function CodeReviewPanel({ slug }: { slug: string }) {
   const [data, setData] = useState<ProjectReview | null>(null);
@@ -46,15 +38,17 @@ export function CodeReviewPanel({ slug }: { slug: string }) {
     setData(d);
     setDraft((cur) => cur ?? d.settings);
   }, [slug]);
+  // (every 20 s, to catch a push from a terminal; every 2 s while a review is under way, to follow it)
+  const busy = !!data?.live.length;
   useEffect(() => {
     // (off the mount tick, like the update button; then as pushes happen)
     const first = setTimeout(load, 0);
-    const id = setInterval(load, 20_000);
+    const id = setInterval(load, busy ? 2000 : 20_000);
     return () => {
       clearTimeout(first);
       clearInterval(id);
     };
-  }, [load]);
+  }, [load, busy]);
 
   const save = async (next: ReviewSettings) => {
     setSaving(true);
@@ -95,6 +89,12 @@ export function CodeReviewPanel({ slug }: { slug: string }) {
         )}
         <ChevronDown className={cn("size-4 shrink-0 transition-transform", !last && "ml-auto", open && "rotate-180")} />
       </button>
+
+      {data.live.map((r) => (
+        <div key={r.id} className="border-t px-3 py-2">
+          <ReviewProgress live={r} />
+        </div>
+      ))}
 
       {open && (
         <div className="space-y-4 border-t p-3 text-sm">
@@ -204,16 +204,7 @@ export function CodeReviewPanel({ slug }: { slug: string }) {
                     <div className="mt-1 space-y-1 pl-2 text-xs">
                       {r.summary && <p>{r.summary}</p>}
                       {r.note && <p className="text-muted-foreground">{r.note}</p>}
-                      {r.findings.map((f, i) => (
-                        <div key={i} className="rounded border p-1.5">
-                          <div className="flex items-center gap-2">
-                            <Badge variant={f.severity === "high" ? "destructive" : "secondary"}>{f.severity}</Badge>
-                            <span className="font-mono">{f.file}{f.line ? `:${f.line}` : ""}</span>
-                            <span className="font-medium">{f.title}</span>
-                          </div>
-                          <p className="mt-1 whitespace-pre-line text-muted-foreground">{f.detail}</p>
-                        </div>
-                      ))}
+                      <Findings findings={r.findings} />
                       <p className="text-muted-foreground">
                         {r.base ? `${r.base.slice(0, 8)}..` : ""}{r.head.slice(0, 8)} · {(r.durationMs / 1000).toFixed(1)} s{r.cached ? " · reviewed before" : ""}{r.costUsd != null ? ` · $${r.costUsd.toFixed(3)}` : ""}
                       </p>

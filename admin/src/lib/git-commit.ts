@@ -68,12 +68,15 @@ export async function commitChanges(
  * (as git's push.default=simple: never into another branch, whatever the
  * upstream is), setting it as upstream when there's none. Never forced: when
  * origin has moved on, git refuses and says so. `env`: the repo's saved token
- * (git-auth.ts `gitRemoteEnv`), when it has one.
+ * (git-auth.ts `gitRemoteEnv`), when it has one. `timeoutMs`: how long git
+ * may take (a review before push runs inside it); `onStart`: the checkout and
+ * branch, as the push begins.
  */
 export async function pushBranch(
   repoDir: string,
   view: GraphView,
   env: Record<string, string> = {},
+  opts: { timeoutMs?: number; onStart?: (dir: string, branch: string) => void } = {},
 ): Promise<{ dir: string; branch: string; pushed: number; created: boolean }> {
   return withRepoLock("push", async () => {
     const dir = await dirOf(repoDir, view);
@@ -85,8 +88,9 @@ export async function pushBranch(
       () => false,
     );
     const ref = `refs/heads/${sync.branch}`;
+    opts.onStart?.(dir, sync.branch);
     try {
-      await git(dir, ["push", "--porcelain", ...(hasUpstream ? [] : ["--set-upstream"]), "origin", `${ref}:${ref}`], 120_000, env);
+      await git(dir, ["push", "--porcelain", ...(hasUpstream ? [] : ["--set-upstream"]), "origin", `${ref}:${ref}`], opts.timeoutMs ?? 120_000, env);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (/\[rejected\]|non-fast-forward|fetch first/.test(msg)) {

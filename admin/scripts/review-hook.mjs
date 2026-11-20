@@ -3,7 +3,9 @@
 //   node review-hook.mjs <repo dir> <remote name> <remote url>   with git's pre-push lines on stdin.
 // For each pushed branch the repo's settings select, it has Claude (`claude -p`, read-only tools, structured output)
 // review what the push adds, prints the findings, writes the result for the admin to show, and stops the push when a
-// finding is at or above the settings' `blockAt` (exit 1). Anything going wrong on its side (no settings, Claude
+// finding is at or above the settings' `blockAt` (exit 1). While it works, its progress is in REVIEW_DIR/live/<id>.json
+// (where it's at, the commits and files, what Claude is reading), for the admin to show as it goes; gone once the
+// result is written. Anything going wrong on its side (no settings, Claude
 // missing, a timeout) lets the push through with a note: a review must never be the reason work can't leave.
 //
 // Plain Node ESM, built-ins only: it runs from git, without the admin's TS runtime. Overrides: REVIEW=skip (logged).
@@ -13,13 +15,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { branchSelected, FINDINGS_SCHEMA, parsePushLines, pusherSelected, reviewPrompt, verdictFor, withDefaults } from "../src/lib/code-review/core.mjs";
+import { branchSelected, describeReviewStep, diffStats, FINDINGS_SCHEMA, parsePushLines, pusherSelected, reviewPrompt, verdictFor, withDefaults } from "../src/lib/code-review/core.mjs";
 
 const DIR = process.env.REVIEW_DIR ?? "/opt/project/.review";
 const CONFIG = path.join(DIR, "config.json");
 const RESULTS = path.join(DIR, "results");
 const CACHE = path.join(DIR, "cache");
 const SLOTS = path.join(DIR, "slots");
+const LIVE = path.join(DIR, "live");
+/** The steps of Claude's a review's progress keeps (the latest). */
+const KEEP_STEPS = 40;
 /** Reviews at once on this box: each is a Claude process, and memory is shared with everything else. */
 const MAX_SLOTS = 2;
 const MAX_DIFF = 300 * 1024;
@@ -49,8 +54,8 @@ async function baseFor(repo, remote, push) {
   return gitOk(repo, ["rev-parse", "--verify", "--quiet", `${push.localSha}^`]);
 }
 
-/** One of MAX_SLOTS review slots (a lock directory holding its owner's pid), waiting up to `ms`. */
-async function takeSlot(ms) {
+/** One of MAX_SLOTS review slots (a lock directory holding its owner's pid), waiting up to `ms` (`onWait`: once, if it has to). */
+async function takeSlot(ms, onWait) {
   await fs.mkdir(SLOTS, { recursive: true });
   const until = Date.now() + ms;
   for (;;) {
@@ -76,17 +81,36 @@ async function takeSlot(ms) {
       }
     }
     if (Date.now() > until) return null;
+    onWait?.();
+    onWait = null;
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
 
-/** Claude's review of `diff`, or { error }. Its own env, cleared of the calling session's (an agent's push). */
-function claudeReview({ repo, prompt, diff, effort, timeoutMs }) {
+/**
+ * Claude's review of `diff`, or { error }. Its own env, cleared of the calling session's (an agent's push). Streamed, so
+ * what it's doing (`onStep`: a file read, a search…) shows as it goes; the answer is the closing "result" event's.
+ */
+function claudeReview({ repo, prompt, diff, effort, timeoutMs, onStep }) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("CLAUDE")));
-  const args = ["-p", "--output-format", "json", "--json-schema", JSON.stringify(FINDINGS_SCHEMA), "--effort", effort, "--no-session-persistence",
-    "--allowedTools", "Read", "Grep", "Glob", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch", "--", prompt];
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--json-schema", JSON.stringify(FINDINGS_SCHEMA), "--effort", effort,
+    "--no-session-persistence", "--allowedTools", "Read", "Grep", "Glob", "--disallowedTools", "Bash", "Edit", "Write", "WebFetch", "WebSearch", "--", prompt];
   return new Promise((resolve) => {
-    let out = "", err = "", done = false;
+    let pending = "", err = "", done = false, final = null;
+    const onLine = (line) => {
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+        for (const block of msg.message.content) {
+          const step = describeReviewStep(block, repo);
+          if (step) onStep?.(step);
+        }
+      } else if (msg.type === "result") final = msg;
+    };
     const child = spawn(process.env.REVIEW_CLAUDE ?? "claude", args, { cwd: repo, env, stdio: ["pipe", "pipe", "pipe"] });
     const timer = setTimeout(() => {
       if (done) return;
@@ -94,7 +118,12 @@ function claudeReview({ repo, prompt, diff, effort, timeoutMs }) {
       child.kill("SIGTERM");
       resolve({ error: "timeout" });
     }, timeoutMs);
-    child.stdout.on("data", (d) => (out += d));
+    child.stdout.on("data", (d) => {
+      pending += d;
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      for (const l of lines) if (l.trim()) onLine(l);
+    });
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => {
       if (done) return;
@@ -106,17 +135,41 @@ function claudeReview({ repo, prompt, diff, effort, timeoutMs }) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      try {
-        const o = JSON.parse(out);
-        const s = o.structured_output;
-        if (o.is_error || !s || !Array.isArray(s.findings)) return resolve({ error: (o.result || err || "no answer").toString().slice(0, 300) });
-        resolve({ summary: s.summary ?? "", findings: s.findings, costUsd: o.total_cost_usd ?? null });
-      } catch {
-        resolve({ error: (err || out || "no answer").slice(0, 300) });
-      }
+      if (pending.trim()) onLine(pending);
+      const s = final?.structured_output;
+      if (!final || final.is_error || !s || !Array.isArray(s.findings)) return resolve({ error: String(final?.result || err || "no answer").slice(0, 300) });
+      resolve({ summary: s.summary ?? "", findings: s.findings, costUsd: final.total_cost_usd ?? null });
     });
     child.stdin.end(diff);
   });
+}
+
+/**
+ * A review's progress, as the admin shows it while the push waits: written whole each time it changes (a temp file
+ * renamed over it), one write after another, so the last word is the last written; `end` removes it.
+ */
+function liveFile(live) {
+  const file = path.join(LIVE, `${live.id}.json`);
+  let chain = fs.mkdir(LIVE, { recursive: true }).catch(() => {});
+  const write = () => {
+    const text = JSON.stringify({ ...live, updatedAt: new Date().toISOString() });
+    chain = chain.then(async () => {
+      const tmp = `${file}.${process.pid}.tmp`;
+      await fs.writeFile(tmp, text);
+      await fs.rename(tmp, file);
+    }).catch(() => {});
+  };
+  return {
+    update(patch) {
+      Object.assign(live, patch);
+      write();
+    },
+    step(text) {
+      live.steps = [...live.steps, { at: new Date().toISOString(), text }].slice(-KEEP_STEPS);
+      write();
+    },
+    end: () => (chain = chain.then(() => fs.rm(file, { force: true })).catch(() => {})),
+  };
 }
 
 async function saveResult(r) {
@@ -172,6 +225,25 @@ async function main() {
       durationMs: 0,
       costUsd: null,
     };
+    const live = liveFile({
+      id: result.id,
+      at: result.at,
+      project: entry.project,
+      repo,
+      branch: push.branch,
+      pusher: result.pusher,
+      pid: process.pid,
+      phase: "preparing",
+      commits: [],
+      files: 0,
+      added: 0,
+      removed: 0,
+      truncated: false,
+      effort: settings.effort,
+      timeoutSec: settings.timeoutSec,
+      steps: [],
+    });
+    live.update({});
     try {
       if (process.env.REVIEW === "skip") {
         Object.assign(result, { verdict: "overridden", note: "REVIEW=skip" });
@@ -189,6 +261,7 @@ async function main() {
         continue;
       }
       const truncated = diff.length > MAX_DIFF;
+      live.update({ commits: result.commits, truncated, ...diffStats(diff) });
       if (truncated) diff = diff.slice(0, MAX_DIFF);
 
       // the same changes under the same settings: the same answer
@@ -198,19 +271,21 @@ async function main() {
       if (review) result.cached = true;
       else {
         say(`review: Claude is reviewing ${result.commits.length} commit(s) on ${push.branch}${truncated ? " (diff cut short for size)" : ""}…`);
-        const slot = await takeSlot(settings.timeoutSec * 1000);
+        const slot = await takeSlot(settings.timeoutSec * 1000, () => live.update({ phase: "waiting" }));
         if (!slot) {
           Object.assign(result, { verdict: "error", note: "two other reviews were still running: let through unreviewed" });
           say("review: busy (two reviews already running): let through unreviewed.");
           continue;
         }
         try {
+          live.update({ phase: "reviewing", reviewingSince: new Date().toISOString() });
           review = await claudeReview({
             repo,
             prompt: reviewPrompt({ project: entry.project, branch: push.branch, commits: result.commits, truncated }),
             diff,
             effort: settings.effort,
             timeoutMs: settings.timeoutSec * 1000,
+            onStep: (text) => live.step(text),
           });
         } finally {
           await fs.rm(slot, { recursive: true, force: true });
@@ -245,6 +320,7 @@ async function main() {
     } finally {
       result.durationMs = Date.now() - started;
       await saveResult(result).catch(() => {});
+      await live.end();
     }
   }
   return blocked ? 1 : 0;

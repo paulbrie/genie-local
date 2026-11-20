@@ -4,12 +4,15 @@ import { GitCommitHorizontal, Upload } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { PushReviewDialog, ReviewProgress, VERDICT } from "@/components/review-progress";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import type { LiveReview, ReviewResult } from "@/lib/code-review";
 import { BASE_PATH } from "@/lib/config";
 import type { GitStatusFile, GitSync } from "@/lib/git-graph";
+import { readPush } from "@/lib/push-client";
 
 /** A status code in words, for the file list's tooltip. */
 function codeLabel(code: string): string {
@@ -20,7 +23,9 @@ function codeLabel(code: string): string {
 
 /**
  * Commit the checkout's changes from the Git tab: tick the files (all at
- * first), write the message, Commit, or Commit & push to origin.
+ * first), write the message, Commit, or Commit & push to origin. A push's
+ * review before push shows here as it goes, and its result after, in place of
+ * the form, when it found something.
  */
 export function GitCommitDialog({
   projectSlug,
@@ -47,6 +52,8 @@ export function GitCommitDialog({
   const [busy, setBusy] = useState<"commit" | "push" | null>(null);
   const all = picked.size === files.length;
   const canPush = !!sync?.origin;
+  const [live, setLive] = useState<LiveReview | null>(null);
+  const [after, setAfter] = useState<{ result: ReviewResult; outcome: { title: string; text: string } } | null>(null);
 
   async function submit(push: boolean) {
     setBusy(push ? "push" : "commit");
@@ -63,21 +70,33 @@ export function GitCommitDialog({
           push,
         }),
       });
-      const j = (await r.json()) as { sha?: string; files?: number; error?: string; pushError?: string; push?: { branch: string } };
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
+      const j = await readPush<{ sha: string; files: number; pushError?: string; push?: { branch: string } }>(r, setLive);
+      if (typeof j.error === "string") throw new Error(j.error);
       const what = `Committed ${String(j.sha).slice(0, 7)} (${j.files} file${j.files === 1 ? "" : "s"})`;
-      if (j.pushError) toast.warning(`${what}, but the push failed: ${j.pushError}`, { duration: 15_000 });
-      else toast.success(j.push ? `${what} and pushed to origin/${j.push.branch}` : what);
+      const review = j.review ?? null;
+      // (stopped by the review: its findings say why, better than git's lines)
+      const pushError = review?.verdict === "blocked" ? "the review before push stopped it" : j.pushError;
+      if (pushError) toast.warning(`${what}, but the push failed: ${pushError}`, { duration: 15_000 });
+      else toast.success(j.push ? `${what} and pushed to origin/${j.push.branch}${review ? ` · review ${VERDICT[review.verdict].label}` : ""}` : what);
       onDone();
-      onClose();
+      if (review && (review.findings.length > 0 || review.verdict !== "passed")) {
+        setAfter({
+          result: review,
+          outcome: pushError
+            ? { title: "Committed, not pushed", text: `${what}; the push failed: ${pushError}` }
+            : { title: "Committed and pushed", text: `${what}, pushed to origin/${j.push?.branch}` },
+        });
+      } else onClose();
     } catch (e) {
       toast.error(`Not committed: ${e instanceof Error ? e.message : String(e)}`, { duration: 15_000 });
     } finally {
       setBusy(null);
+      setLive(null);
     }
   }
 
   const ready = picked.size > 0 && message.trim().length > 0 && !busy;
+  if (after) return <PushReviewDialog branch={sync?.branch ?? ""} live={null} result={after.result} outcome={after.outcome} onClose={onClose} />;
 
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
@@ -149,6 +168,11 @@ export function GitCommitDialog({
               origin/{sync.branch} has {sync.behind} commit{sync.behind === 1 ? "" : "s"} this branch lacks: a push will be
               refused until you pull them.
             </p>
+          )}
+          {busy === "push" && live && (
+            <div className="max-h-72 overflow-y-auto rounded-md border p-2">
+              <ReviewProgress live={live} />
+            </div>
           )}
         </div>
 

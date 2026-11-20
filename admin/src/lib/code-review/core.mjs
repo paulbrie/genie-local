@@ -126,3 +126,56 @@ export function reviewPrompt({ project, branch, commits, truncated }) {
     .filter(Boolean)
     .join("\n");
 }
+
+/** What a diff touches: its files, and the lines it adds and removes (in its hunks, not its headers). */
+export function diffStats(diff) {
+  let files = 0, added = 0, removed = 0, inHunk = false;
+  for (const l of diff.split("\n")) {
+    if (l.startsWith("diff --git ")) {
+      files++;
+      inHunk = false;
+    } else if (l.startsWith("@@")) inHunk = true;
+    else if (inHunk && l.startsWith("+")) added++;
+    else if (inHunk && l.startsWith("-")) removed++;
+  }
+  return { files, added, removed };
+}
+
+/**
+ * What Claude is doing in a review, in a few words, from one block of its streamed answer (a file read, a search, its
+ * own aside, the findings written up), paths shown from `repo`; null for what isn't worth showing.
+ */
+export function describeReviewStep(block, repo = "") {
+  const rel = (p) => {
+    const s = String(p ?? "");
+    return repo && s.startsWith(`${repo}/`) ? s.slice(repo.length + 1) : s;
+  };
+  if (block?.type === "text") {
+    const t = block.text?.trim();
+    return t && !t.startsWith("{") && !t.startsWith("```") ? t.replace(/\s+/g, " ").slice(0, 200) : null;
+  }
+  if (block?.type !== "tool_use") return null;
+  const a = block.input ?? {};
+  switch (block.name) {
+    case "Read":
+      return `Reading ${rel(a.file_path) || "a file"}`;
+    case "Grep":
+      return `Searching for ${JSON.stringify(String(a.pattern ?? "").slice(0, 60))}${a.path && rel(a.path) !== repo ? ` in ${rel(a.path)}` : ""}`;
+    case "Glob":
+      return `Looking for ${String(a.pattern ?? "files").slice(0, 60)}`;
+    case "StructuredOutput": {
+      const n = Array.isArray(a.findings) ? a.findings.length : 0;
+      return n ? `Writing up ${n} finding${n === 1 ? "" : "s"}` : "Writing up: nothing found";
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * How long a push may take when its review can run (the hook waits up to `timeoutSec` for a free review slot, then
+ * gives Claude as long), with a minute to spare; without one, two minutes.
+ */
+export function pushBudgetMs(settings) {
+  return settings?.enabled ? (2 * settings.timeoutSec + 60) * 1000 : 120_000;
+}
