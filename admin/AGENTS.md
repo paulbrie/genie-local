@@ -102,6 +102,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
 - Postgres: role `admin_app`, db `admin_dashboard`. `DATABASE_URL` and
   `PROJECTS_ROOT` live in `/opt/project/admin/.env.local` (git-ignored, loaded by
   `next start`). Drizzle: `npm run db:generate | db:migrate | db:studio`.
+- **Claude's memory** lives under `~/claude-memory/projects/<project>/memory`, not `~/.claude`: the box's
+  managed Claude policy (`/etc/claude-code/managed-settings.json`, from the genie setup) denies Claude all of
+  `~/.claude`, the memory folders included. Each admin start (`src/instrumentation.ts` →
+  `src/lib/claude-memory.ts`) sets `CLAUDE_CODE_REMOTE_MEMORY_DIR` (the CLI's base for those folders) in the
+  `env` of `~/.claude/settings.json`, so every session reads it, terminal, SSH or agent (one already set is
+  kept), and copies each project's memory from `~/.claude/projects` over once. Sessions use it once they restart.
 - Schema: `src/db/schema.ts`. Model is **project → apps**: a `projects` row per
   top-level dir; an `apps` row per sub-project/app (immediate subdir with `.git`
   or `package.json`, e.g. `shop/server-app`, `shop/server-admin`; `slug=''` if the
@@ -304,12 +310,6 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   JSON schema reviews the pushed range, findings at or above the setting stop the push, results go
   to `.review/results/` (shown on the Git tab). It fails open (busy, timeout, no Claude);
   `REVIEW=skip git push` overrides and is logged. Decisions: `src/lib/code-review/core.mjs` (tested).
-- **DB Explorer (`/db`) finds this box's databases itself** (`src/lib/db-discovery.ts`, pure parts
-  in `db-discovery-core.ts`, tested): the admin's own `DATABASE_URL`, every local postgres:// / mysql://
-  URL in the projects' and their apps' `.env*` files (remote hosts left out), and the running database
-  containers (the user, password and database their image's env sets up, at the port they publish).
-  One connection per server and user (`connKey`), so admin_app on :5432 is one for every database it
-  owns. Listing the connections looks (at most every 30 s) and syncs them into `connections` rows with
   While it runs, its progress is in `.review/live/<id>.json` (phase, commits, files and lines,
   Claude's steps from `--output-format stream-json`; gone once the result is written, cleared if
   its pid dies): the Git tab's review panel shows the ones under way, whoever pushed. The Git tab's
@@ -318,6 +318,12 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   answer after 300 s), then the push with the review's result, followed in a dialog
   (`review-progress.tsx`), kept up when it found something. git push gets time for the review and
   a wait for a free slot (`pushBudgetMs`). Hook test: `code-review/hook.test.ts`.
+- **DB Explorer (`/db`) finds this box's databases itself** (`src/lib/db-discovery.ts`, pure parts
+  in `db-discovery-core.ts`, tested): the admin's own `DATABASE_URL`, every local postgres:// / mysql://
+  URL in the projects' and their apps' `.env*` files (remote hosts left out), and the running database
+  containers (the user, password and database their image's env sets up, at the port they publish).
+  One connection per server and user (`connKey`), so admin_app on :5432 is one for every database it
+  owns. Listing the connections looks (at most every 30 s) and syncs them into `connections` rows with
   an `auto_key`: kept up to date from their source, not editable by hand (409), removed when their
   source goes unless they have saved queries; one the same as a connection added by hand is left to
   that one. A port nothing answers on shows as "not running".

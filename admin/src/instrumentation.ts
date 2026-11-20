@@ -9,6 +9,13 @@ export async function register() {
   // Not while building, and only on prod by default: admin-dev reads the same
   // .env.local, and two sockets for one Slack app would split its events between them.
   if (process.env.NEXT_PHASE === "phase-production-build") return;
+  // Claude's memory out of the ~/.claude the box's Claude policy locks (src/lib/claude-memory-core.ts): once a start,
+  // so every instance has it from its next deploy on.
+  const { ensureClaudeMemory } = await import("./lib/claude-memory");
+  void ensureClaudeMemory().then(
+    (r) => (r.set || r.copied.length) && console.log(`[claude-memory] sessions keep their memory under ${r.base}${r.copied.length ? `; copied over: ${r.copied.join(", ")}` : ""}`),
+    (e) => console.warn(`[claude-memory] ${e instanceof Error ? e.message : String(e)}`),
+  );
   // Production problems on Vercel (each project's Vercel tab): listened for all the time, by the live admin only
   // (the dev instance shares the database, and would count every error twice).
   if (process.env.NODE_ENV === "production" || process.env.VERCEL_COLLECT_ON_DEV === "1") {
