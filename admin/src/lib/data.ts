@@ -13,6 +13,7 @@ import {
   tasks,
   type TaskStatus,
 } from "@/db/schema";
+import { delegationLine, type Effort } from "@/lib/effort";
 import type { RunSettings } from "@/lib/run-isolation";
 
 export async function getProjectIdBySlug(slug: string): Promise<number | null> {
@@ -259,6 +260,7 @@ export async function assignTask(
   assignee: string,
   note: string | null,
   freshContext = false,
+  effort: Effort | null = null,
 ) {
   await db
     .update(tasks)
@@ -267,7 +269,7 @@ export async function assignTask(
   await db.insert(taskComments).values({
     taskId,
     author: "user",
-    body: `Delegated to ${assignee}${freshContext ? " (fresh context)" : ""}${note ? `: ${note}` : ""}`,
+    body: delegationLine(assignee, { fresh: freshContext, effort, note }),
   });
 }
 

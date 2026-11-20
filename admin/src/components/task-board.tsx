@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Eraser, GitCommitHorizontal, MessageSquare, Paperclip, Send, UserPlus, X } from "lucide-react";
+import { Bot, Check, Eraser, Gauge, GitCommitHorizontal, MessageSquare, Paperclip, Send, UserPlus, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -43,6 +43,7 @@ import {
   type TaskComment,
   type TaskStatus,
 } from "@/db/schema";
+import { EFFORT_LABEL, EFFORTS, isEffort, type Effort } from "@/lib/effort";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import type { DelegateTarget } from "@/lib/task-delegate";
 import { liveTerminals, openTerminal } from "@/store/terminals";
@@ -665,22 +666,48 @@ function AgentBadge({ name, state }: { name: string; state: string }) {
  * Delegate with clear context ▸ (the terminal's Claude is /clear-ed first, so
  * it starts on a clean slate; only idle terminals can be cleared).
  */
+/** The effort picked in a task's menu (the last one, for every task): null leaves the agent's own. */
+const EFFORT_KEY = "admin.delegateEffort";
+function savedEffort(): Effort | null {
+  try {
+    const v = localStorage.getItem(EFFORT_KEY);
+    return isEffort(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 function DelegateMenu({ slug, task, children }: { slug: string; task: Task; children: React.ReactNode }) {
   const [targets, setTargets] = useState<DelegateTarget[] | null>(null);
+  // How hard the agent thinks on the ticket (the Effort submenu, at the end): kept for the next delegation too.
+  const [effort, setEffort] = useState<Effort | null>(null);
   const load = () => {
     setTargets(null);
+    setEffort(savedEffort());
     delegateTargetsAction(slug).then(setTargets, () => setTargets([]));
   };
+  const pickEffort = (e: Effort | null) => {
+    setEffort(e);
+    try {
+      if (e) localStorage.setItem(EFFORT_KEY, e);
+      else localStorage.removeItem(EFFORT_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+  const atEffort = effort ? `, ${effort} effort` : "";
 
   async function delegate(name: string, fresh: boolean) {
-    const pending = toast.loading(fresh ? `Clearing ${name}'s context, then delegating #${task.id}…` : `Delegating #${task.id} to ${name}…`);
-    const res = await delegateTaskAction(slug, task.id, name, null, fresh);
+    const pending = toast.loading(
+      fresh ? `Clearing ${name}'s context, then delegating #${task.id}${atEffort}…` : `Delegating #${task.id} to ${name}${atEffort}…`,
+    );
+    const res = await delegateTaskAction(slug, task.id, name, null, fresh, effort);
     if (!res.ok) toast.error(res.error, { id: pending });
     else
       toast.success(
         res.queued
-          ? `Brief queued in ${name}: it starts after its current turn`
-          : `Delegated #${task.id} to ${name}${fresh ? " on a fresh context" : ""}`,
+          ? `Brief queued in ${name}: it starts after its current turn${atEffort}`
+          : `Delegated #${task.id} to ${name}${fresh ? " on a fresh context" : ""}${atEffort}`,
         { id: pending },
       );
   }
@@ -690,13 +717,15 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
   const newExists = !!targets?.some((t) => t.name === newName);
   async function delegateNew() {
     const pending = toast.loading(`Starting ${newName} on #${task.id}…`);
-    const res = await delegateToNewAgentAction(slug, task.id);
+    const res = await delegateToNewAgentAction(slug, task.id, effort);
     if (!res.ok) toast.error(res.error, { id: pending });
     else toast.success(`${res.name} started on #${task.id}: it's in Terminals`, { id: pending });
   }
 
-  const list = (fresh: boolean) =>
-    !targets ? (
+  const list = (fresh: boolean) => {
+    // (a /clear or an /effort first: only an idle agent takes it)
+    const idleOnly = fresh || effort !== null;
+    return !targets ? (
       <ContextMenuLabel>Loading…</ContextMenuLabel>
     ) : targets.length === 0 ? (
       <ContextMenuLabel>No Claude terminal is running</ContextMenuLabel>
@@ -706,7 +735,7 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
         const why =
           t.busyWith && t.busyWith.id !== task.id
             ? `on #${t.busyWith.id} · ${t.busyWith.project}`
-            : fresh
+            : idleOnly
               ? t.status === "claude-working"
                 ? "working"
                 : t.status === "claude-input"
@@ -737,6 +766,7 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
         );
       })
     );
+  };
 
   return (
     <ContextMenu onOpenChange={(open) => open && load()}>
@@ -749,13 +779,14 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
         <ContextMenuItem
           disabled={newExists}
           onClick={() => void delegateNew()}
-          title="A fresh Claude (Opus, high effort, auto permissions) in this project's folder, starting on this ticket"
+          title={`A fresh Claude (Opus, ${effort ?? "high"} effort, auto permissions) in this project's folder, starting on this ticket`}
         >
           <UserPlus />
           <span className="flex min-w-0 flex-1 flex-col">
             <span>New agent</span>
             <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {newName} · opus, high{newExists ? " · exists" : ""}
+              {newName} · opus, {effort ?? "high"}
+              {newExists ? " · exists" : ""}
             </span>
           </span>
         </ContextMenuItem>
@@ -772,6 +803,32 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
             Delegate with clear context
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className="w-80">{list(true)}</ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        {/* (picked, the menu stays open: then Delegate to, above) */}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger title="How hard the agent thinks on this ticket: a new agent starts with it; an idle one gets /effort before its brief (for its session only: your default for new sessions stays)">
+            <Gauge />
+            <span className="flex flex-1 items-center justify-between gap-2">
+              Effort
+              <span className="text-xs text-muted-foreground">{effort ? EFFORT_LABEL[effort] : "unchanged"}</span>
+            </span>
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-60">
+            <ContextMenuItem closeOnClick={false} onClick={() => pickEffort(null)}>
+              <Check className={effort === null ? "" : "invisible"} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span>Unchanged</span>
+                <span className="text-[11px] text-muted-foreground">the agent&apos;s own; a new agent: high</span>
+              </span>
+            </ContextMenuItem>
+            {EFFORTS.map((e) => (
+              <ContextMenuItem key={e} closeOnClick={false} onClick={() => pickEffort(e)}>
+                <Check className={effort === e ? "" : "invisible"} />
+                {EFFORT_LABEL[e]}
+              </ContextMenuItem>
+            ))}
+          </ContextMenuSubContent>
         </ContextMenuSub>
       </ContextMenuContent>
     </ContextMenu>

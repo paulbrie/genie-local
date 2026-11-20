@@ -114,8 +114,10 @@ import {
   delegateBrief,
   delegateTargets,
   sendBrief,
+  setEffort,
   type DelegateTarget,
 } from "@/lib/task-delegate";
+import { EFFORTS, type Effort } from "@/lib/effort";
 import {
   removeAttachmentFile,
   removeTaskAttachmentDir,
@@ -354,6 +356,8 @@ export async function delegateTaskAction(
   note: string | null,
   /** /clear the terminal's Claude first, so it starts the ticket on a clean slate (idle terminals only) */
   freshContext = false,
+  /** how hard it thinks on it (`/effort`, before the brief); null: as it is */
+  effort: Effort | null = null,
 ): Promise<{ ok: true; queued: boolean } | { ok: false; error: string }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
@@ -361,6 +365,7 @@ export async function delegateTaskAction(
   if (!task) return { ok: false, error: `No task ${taskId} in project ${slug}` };
   const name = z.string().trim().min(1).max(100).parse(terminal);
   const trimmedNote = z.string().max(2000).parse(note ?? "").trim() || null;
+  const level = z.enum(EFFORTS).nullable().parse(effort);
   // One in-progress ticket per agent: one already on another isn't given this one.
   const busy = (await delegatedTickets()).find(
     (x) => x.assignee === name && x.status === "in_progress" && x.id !== task.id,
@@ -371,8 +376,9 @@ export async function delegateTaskAction(
   // Returned, not thrown: in production a thrown action error reaches the page redacted.
   try {
     if (z.boolean().parse(freshContext)) await clearContext(name);
+    if (level) await setEffort(name, level);
     const status = await sendBrief(name, delegateBrief(slug, task, trimmedNote));
-    await assignTask(id, task.id, name, trimmedNote, freshContext);
+    await assignTask(id, task.id, name, trimmedNote, freshContext, level);
     revalidateProject();
     // A working terminal holds the brief until its current turn ends.
     return { ok: true, queued: status === "claude-working" };
@@ -384,11 +390,12 @@ export async function delegateTaskAction(
 /**
  * Delegate a ticket to a new agent: a fresh Claude terminal named
  * "<project>-<ticket id>", started in the project's folder with the brief as
- * its first prompt (Opus, high effort, auto permissions, as the team's agents).
+ * its first prompt (Opus, high effort unless `effort` says otherwise, auto permissions, as the team's agents).
  */
 export async function delegateToNewAgentAction(
   slug: string,
   taskId: number,
+  effort: Effort | null = null,
 ): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
@@ -396,15 +403,16 @@ export async function delegateToNewAgentAction(
   const detail = await getProjectDetail(slug);
   if (!task || !detail) return { ok: false, error: `No task ${taskId} in project ${slug}` };
   const name = newAgentName(slug, task.id);
+  const level = z.enum(EFFORTS).nullable().parse(effort) ?? NEW_AGENT.effort;
   if ((await listTerminals()).some((t) => t.name === name)) {
     return { ok: false, error: `A terminal "${name}" already exists: pick it under Delegate to` };
   }
   try {
-    await startAgent(name, detail.project.path, delegateBrief(slug, task, null));
+    await startAgent(name, detail.project.path, delegateBrief(slug, task, null), level);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  await assignTask(id, task.id, name, `a new agent (${NEW_AGENT.model}, ${NEW_AGENT.effort} effort) in ${detail.project.path}`);
+  await assignTask(id, task.id, name, `a new agent (${NEW_AGENT.model}, ${level} effort) in ${detail.project.path}`);
   revalidateProject();
   return { ok: true, name };
 }
