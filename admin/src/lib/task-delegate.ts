@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { delegatedTickets } from "@/lib/data";
-import { type Effort, restoreEffortDefault } from "@/lib/effort";
+import { type Effort, type Model, restoreDefaults } from "@/lib/delegate-options";
 import { createTerminalRunning, listTerminals, sendKey, sendText, type TermStatus } from "@/lib/terminals";
 
 /** A ticket as the delegation picker mentions it. */
@@ -159,25 +159,44 @@ export async function clearContext(terminal: string): Promise<void> {
   }
 }
 
-// Claude's user settings: /effort saves its level there as the default for new sessions (restoreEffortDefault).
+// Claude's user settings: /model and /effort save their choice there as the default for new sessions (restoreDefaults).
 const CLAUDE_SETTINGS = path.join(os.homedir(), ".claude", "settings.json");
-let effortQueue: Promise<unknown> = Promise.resolve();
+let tuneQueue: Promise<unknown> = Promise.resolve();
+
+/** Type a slash command into the terminal's Claude and wait for its prompt; a picker it leaves open is escaped. */
+async function command(terminal: string, text: string, what: string) {
+  await sendText(terminal, text);
+  await sendKey(terminal, "Enter");
+  await sleep(700);
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const now = (await listTerminals()).find((t) => t.name === terminal);
+    if (now?.status === "claude-idle") return;
+    if (now?.status === "claude-input") {
+      await sendKey(terminal, "Escape");
+      throw new Error(`"${terminal}" didn't take ${what}`);
+    }
+    if (Date.now() > deadline) throw new Error(`"${terminal}" didn't come back to its prompt after ${text}`);
+    await sleep(300);
+  }
+}
 
 /**
- * Set the terminal's Claude to `effort` (`/effort <level>`), before its brief, then wait for its prompt. Only from
- * idle, like /clear: a busy Claude might take the command after its turn. /effort also saves low…xhigh as the default
- * for every new session, and this is for the one agent: the default the settings held before goes back as soon as
- * it's done (one effort change at a time, so two don't put back each other's). A level its model doesn't have leaves
- * Claude in a picker: that's escaped, and said.
+ * Set the terminal's Claude to `model` (`/model`) and then `effort` (`/effort`: the levels on offer depend on the
+ * model), before its brief. Only from idle, like /clear: a busy Claude might take them after its turn. Both commands
+ * also save their choice as the default for every new session, and this is for the one agent: the defaults the
+ * settings held before go back as soon as they're done (one agent at a time, so two don't put back each other's). A
+ * choice its model doesn't have leaves Claude in a picker: that's escaped, and said.
  */
-export function setEffort(terminal: string, effort: Effort): Promise<void> {
-  const run = effortQueue.then(async () => {
+export function tuneAgent(terminal: string, { model, effort }: { model?: Model | null; effort?: Effort | null }): Promise<void> {
+  const run = tuneQueue.then(async () => {
+    if (!model && !effort) return;
     const target = (await listTerminals()).find((t) => t.name === terminal);
     if (!target || target.dead) throw new Error(`Terminal "${terminal}" is gone`);
     if (target.status !== "claude-idle") {
       throw new Error(
         target.status === "claude-working" || target.status === "claude-background"
-          ? `"${terminal}" is working: its effort can only be set when it's idle`
+          ? `"${terminal}" is working: its model and effort can only be set when it's idle`
           : target.status === "claude-input"
             ? `"${terminal}" is waiting on a prompt; answer it first`
             : `"${terminal}" isn't running Claude`,
@@ -185,22 +204,10 @@ export function setEffort(terminal: string, effort: Effort): Promise<void> {
     }
     const before = await fs.readFile(CLAUDE_SETTINGS, "utf8").catch(() => null);
     try {
-      await sendText(terminal, `/effort ${effort}`);
-      await sendKey(terminal, "Enter");
-      await sleep(700);
-      const deadline = Date.now() + 5000;
-      for (;;) {
-        const now = (await listTerminals()).find((t) => t.name === terminal);
-        if (now?.status === "claude-idle") break;
-        if (now?.status === "claude-input") {
-          await sendKey(terminal, "Escape");
-          throw new Error(`"${terminal}" didn't take ${effort} effort (its model may not have it)`);
-        }
-        if (Date.now() > deadline) throw new Error(`"${terminal}" didn't come back to its prompt after /effort ${effort}`);
-        await sleep(300);
-      }
+      if (model) await command(terminal, `/model ${model}`, `the ${model} model`);
+      if (effort) await command(terminal, `/effort ${effort}`, `${effort} effort (its model may not have it)`);
     } finally {
-      const put = restoreEffortDefault(before, await fs.readFile(CLAUDE_SETTINGS, "utf8").catch(() => null));
+      const put = restoreDefaults(before, await fs.readFile(CLAUDE_SETTINGS, "utf8").catch(() => null));
       if (put !== null) {
         const mode = (await fs.stat(CLAUDE_SETTINGS).catch(() => null))?.mode;
         const tmp = `${CLAUDE_SETTINGS}.${process.pid}.tmp`;
@@ -209,7 +216,7 @@ export function setEffort(terminal: string, effort: Effort): Promise<void> {
       }
     }
   });
-  effortQueue = run.catch(() => {});
+  tuneQueue = run.catch(() => {});
   return run;
 }
 
@@ -222,15 +229,20 @@ export const newAgentName = (slug: string, taskId: number) => `${slug}-${taskId}
 /**
  * Start a new Claude agent in its own terminal (named `name`, both the tmux
  * session and Claude's -n), in `cwd`, with `brief` as its first prompt: it
- * starts on the ticket at once, no waiting for a ready prompt. `effort`: how
- * hard it thinks (NEW_AGENT's by default).
+ * starts on the ticket at once, no waiting for a ready prompt. Its model and
+ * effort: NEW_AGENT's unless given.
  */
-export async function startAgent(name: string, cwd: string, brief: string, effort: Effort = NEW_AGENT.effort): Promise<void> {
+export async function startAgent(
+  name: string,
+  cwd: string,
+  brief: string,
+  { model = NEW_AGENT.model, effort = NEW_AGENT.effort }: { model?: Model; effort?: Effort } = {},
+): Promise<void> {
   // A leading "-" would be read as a claude option, not as the prompt.
   const prompt = brief.startsWith("-") ? ` ${brief}` : brief;
   await createTerminalRunning(name, (target) => [
     "new-session", "-d", "-s", target, "-x", "200", "-y", "50", "-c", cwd,
-    "claude", "--model", NEW_AGENT.model, "--effort", effort,
+    "claude", "--model", model, "--effort", effort,
     "--permission-mode", NEW_AGENT.permissionMode, "-n", name, prompt,
     // the pane stays readable if claude exits; the wheel scrolls tmux's history
     ";", "set-option", "-w", "-t", target, "remain-on-exit", "on",

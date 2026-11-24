@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, Check, Eraser, Gauge, GitCommitHorizontal, MessageSquare, Paperclip, Send, UserPlus, X } from "lucide-react";
+import { Bot, Check, Cpu, Eraser, Gauge, GitCommitHorizontal, MessageSquare, Paperclip, Send, UserPlus, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
@@ -43,7 +43,7 @@ import {
   type TaskComment,
   type TaskStatus,
 } from "@/db/schema";
-import { EFFORT_LABEL, EFFORTS, isEffort, type Effort } from "@/lib/effort";
+import { EFFORT_LABEL, EFFORTS, isEffort, isModel, MODEL_LABEL, MODELS, type Effort, type Model } from "@/lib/delegate-options";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import type { DelegateTarget } from "@/lib/task-delegate";
 import { liveTerminals, openTerminal } from "@/store/terminals";
@@ -666,42 +666,63 @@ function AgentBadge({ name, state }: { name: string; state: string }) {
  * Delegate with clear context ▸ (the terminal's Claude is /clear-ed first, so
  * it starts on a clean slate; only idle terminals can be cleared).
  */
-/** The effort picked in a task's menu (the last one, for every task): null leaves the agent's own. */
+/** Under the Model and Effort choices: what picking one does (in the submenu, where a tooltip would cover it). */
+function OptionNote() {
+  return (
+    <p className="border-t px-2 pt-1.5 pb-1 text-[11px] leading-snug text-muted-foreground">
+      A new agent starts with it. An idle agent gets /model or /effort before its brief, for its session only: your
+      default for new sessions stays.
+    </p>
+  );
+}
+
+/** The model and effort picked in a task's menu (the last ones, for every task): null leaves the agent's own. */
+const MODEL_KEY = "admin.delegateModel";
 const EFFORT_KEY = "admin.delegateEffort";
-function savedEffort(): Effort | null {
+function saved<T>(key: string, is: (v: unknown) => v is T): T | null {
   try {
-    const v = localStorage.getItem(EFFORT_KEY);
-    return isEffort(v) ? v : null;
+    const v = localStorage.getItem(key);
+    return is(v) ? v : null;
   } catch {
     return null;
+  }
+}
+function keep(key: string, v: string | null) {
+  try {
+    if (v) localStorage.setItem(key, v);
+    else localStorage.removeItem(key);
+  } catch {
+    /* ignore */
   }
 }
 
 function DelegateMenu({ slug, task, children }: { slug: string; task: Task; children: React.ReactNode }) {
   const [targets, setTargets] = useState<DelegateTarget[] | null>(null);
-  // How hard the agent thinks on the ticket (the Effort submenu, at the end): kept for the next delegation too.
+  // The model the agent works with and how hard it thinks (the Model and Effort submenus, at the end): kept for the
+  // next delegation too.
+  const [model, setModel] = useState<Model | null>(null);
   const [effort, setEffort] = useState<Effort | null>(null);
   const load = () => {
     setTargets(null);
-    setEffort(savedEffort());
+    setModel(saved(MODEL_KEY, isModel));
+    setEffort(saved(EFFORT_KEY, isEffort));
     delegateTargetsAction(slug).then(setTargets, () => setTargets([]));
+  };
+  const pickModel = (m: Model | null) => {
+    setModel(m);
+    keep(MODEL_KEY, m);
   };
   const pickEffort = (e: Effort | null) => {
     setEffort(e);
-    try {
-      if (e) localStorage.setItem(EFFORT_KEY, e);
-      else localStorage.removeItem(EFFORT_KEY);
-    } catch {
-      /* ignore */
-    }
+    keep(EFFORT_KEY, e);
   };
-  const atEffort = effort ? `, ${effort} effort` : "";
+  const atEffort = `${model ? `, ${MODEL_LABEL[model]}` : ""}${effort ? `, ${effort} effort` : ""}`;
 
   async function delegate(name: string, fresh: boolean) {
     const pending = toast.loading(
       fresh ? `Clearing ${name}'s context, then delegating #${task.id}${atEffort}…` : `Delegating #${task.id} to ${name}${atEffort}…`,
     );
-    const res = await delegateTaskAction(slug, task.id, name, null, fresh, effort);
+    const res = await delegateTaskAction(slug, task.id, name, null, fresh, effort, model);
     if (!res.ok) toast.error(res.error, { id: pending });
     else
       toast.success(
@@ -717,14 +738,14 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
   const newExists = !!targets?.some((t) => t.name === newName);
   async function delegateNew() {
     const pending = toast.loading(`Starting ${newName} on #${task.id}…`);
-    const res = await delegateToNewAgentAction(slug, task.id, effort);
+    const res = await delegateToNewAgentAction(slug, task.id, effort, model);
     if (!res.ok) toast.error(res.error, { id: pending });
     else toast.success(`${res.name} started on #${task.id}: it's in Terminals`, { id: pending });
   }
 
   const list = (fresh: boolean) => {
-    // (a /clear or an /effort first: only an idle agent takes it)
-    const idleOnly = fresh || effort !== null;
+    // (a /clear, a /model or an /effort first: only an idle agent takes it)
+    const idleOnly = fresh || effort !== null || model !== null;
     return !targets ? (
       <ContextMenuLabel>Loading…</ContextMenuLabel>
     ) : targets.length === 0 ? (
@@ -779,13 +800,13 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
         <ContextMenuItem
           disabled={newExists}
           onClick={() => void delegateNew()}
-          title={`A fresh Claude (Opus, ${effort ?? "high"} effort, auto permissions) in this project's folder, starting on this ticket`}
+          title={`A fresh Claude (${MODEL_LABEL[model ?? "opus"]}, ${effort ?? "high"} effort, auto permissions) in this project's folder, starting on this ticket`}
         >
           <UserPlus />
           <span className="flex min-w-0 flex-1 flex-col">
             <span>New agent</span>
             <span className="truncate font-mono text-[11px] text-muted-foreground">
-              {newName} · opus, {effort ?? "high"}
+              {newName} · {model ?? "opus"}, {effort ?? "high"}
               {newExists ? " · exists" : ""}
             </span>
           </span>
@@ -807,14 +828,39 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
         <ContextMenuSeparator />
         {/* (picked, the menu stays open: then Delegate to, above) */}
         <ContextMenuSub>
-          <ContextMenuSubTrigger title="How hard the agent thinks on this ticket: a new agent starts with it; an idle one gets /effort before its brief (for its session only: your default for new sessions stays)">
+          <ContextMenuSubTrigger>
+            <Cpu />
+            <span className="flex flex-1 items-center justify-between gap-2">
+              Model
+              <span className="text-xs text-muted-foreground">{model ? MODEL_LABEL[model] : "unchanged"}</span>
+            </span>
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className="w-64">
+            <ContextMenuItem closeOnClick={false} onClick={() => pickModel(null)}>
+              <Check className={model === null ? "" : "invisible"} />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span>Unchanged</span>
+                <span className="text-[11px] text-muted-foreground">the agent&apos;s own; a new agent: Opus</span>
+              </span>
+            </ContextMenuItem>
+            {MODELS.map((m) => (
+              <ContextMenuItem key={m} closeOnClick={false} onClick={() => pickModel(m)}>
+                <Check className={model === m ? "" : "invisible"} />
+                {MODEL_LABEL[m]}
+              </ContextMenuItem>
+            ))}
+            <OptionNote />
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
             <Gauge />
             <span className="flex flex-1 items-center justify-between gap-2">
               Effort
               <span className="text-xs text-muted-foreground">{effort ? EFFORT_LABEL[effort] : "unchanged"}</span>
             </span>
           </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-60">
+          <ContextMenuSubContent className="w-64">
             <ContextMenuItem closeOnClick={false} onClick={() => pickEffort(null)}>
               <Check className={effort === null ? "" : "invisible"} />
               <span className="flex min-w-0 flex-1 flex-col">
@@ -828,6 +874,7 @@ function DelegateMenu({ slug, task, children }: { slug: string; task: Task; chil
                 {EFFORT_LABEL[e]}
               </ContextMenuItem>
             ))}
+            <OptionNote />
           </ContextMenuSubContent>
         </ContextMenuSub>
       </ContextMenuContent>

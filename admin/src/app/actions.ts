@@ -114,10 +114,10 @@ import {
   delegateBrief,
   delegateTargets,
   sendBrief,
-  setEffort,
+  tuneAgent,
   type DelegateTarget,
 } from "@/lib/task-delegate";
-import { EFFORTS, type Effort } from "@/lib/effort";
+import { EFFORTS, MODELS, type Effort, type Model } from "@/lib/delegate-options";
 import {
   removeAttachmentFile,
   removeTaskAttachmentDir,
@@ -358,6 +358,8 @@ export async function delegateTaskAction(
   freshContext = false,
   /** how hard it thinks on it (`/effort`, before the brief); null: as it is */
   effort: Effort | null = null,
+  /** the model it works with (`/model`, before the brief); null: as it is */
+  model: Model | null = null,
 ): Promise<{ ok: true; queued: boolean } | { ok: false; error: string }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
@@ -366,6 +368,7 @@ export async function delegateTaskAction(
   const name = z.string().trim().min(1).max(100).parse(terminal);
   const trimmedNote = z.string().max(2000).parse(note ?? "").trim() || null;
   const level = z.enum(EFFORTS).nullable().parse(effort);
+  const family = z.enum(MODELS).nullable().parse(model);
   // One in-progress ticket per agent: one already on another isn't given this one.
   const busy = (await delegatedTickets()).find(
     (x) => x.assignee === name && x.status === "in_progress" && x.id !== task.id,
@@ -376,9 +379,9 @@ export async function delegateTaskAction(
   // Returned, not thrown: in production a thrown action error reaches the page redacted.
   try {
     if (z.boolean().parse(freshContext)) await clearContext(name);
-    if (level) await setEffort(name, level);
+    await tuneAgent(name, { model: family, effort: level });
     const status = await sendBrief(name, delegateBrief(slug, task, trimmedNote));
-    await assignTask(id, task.id, name, trimmedNote, freshContext, level);
+    await assignTask(id, task.id, name, trimmedNote, freshContext, { model: family, effort: level });
     revalidateProject();
     // A working terminal holds the brief until its current turn ends.
     return { ok: true, queued: status === "claude-working" };
@@ -390,12 +393,13 @@ export async function delegateTaskAction(
 /**
  * Delegate a ticket to a new agent: a fresh Claude terminal named
  * "<project>-<ticket id>", started in the project's folder with the brief as
- * its first prompt (Opus, high effort unless `effort` says otherwise, auto permissions, as the team's agents).
+ * its first prompt (Opus, high effort unless `model` / `effort` say otherwise, auto permissions, as the team's agents).
  */
 export async function delegateToNewAgentAction(
   slug: string,
   taskId: number,
   effort: Effort | null = null,
+  model: Model | null = null,
 ): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
   await requireAdmin();
   const id = await requireProjectId(slug);
@@ -404,15 +408,16 @@ export async function delegateToNewAgentAction(
   if (!task || !detail) return { ok: false, error: `No task ${taskId} in project ${slug}` };
   const name = newAgentName(slug, task.id);
   const level = z.enum(EFFORTS).nullable().parse(effort) ?? NEW_AGENT.effort;
+  const family = z.enum(MODELS).nullable().parse(model) ?? NEW_AGENT.model;
   if ((await listTerminals()).some((t) => t.name === name)) {
     return { ok: false, error: `A terminal "${name}" already exists: pick it under Delegate to` };
   }
   try {
-    await startAgent(name, detail.project.path, delegateBrief(slug, task, null), level);
+    await startAgent(name, detail.project.path, delegateBrief(slug, task, null), { model: family, effort: level });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  await assignTask(id, task.id, name, `a new agent (${NEW_AGENT.model}, ${level} effort) in ${detail.project.path}`);
+  await assignTask(id, task.id, name, `a new agent (${family}, ${level} effort) in ${detail.project.path}`);
   revalidateProject();
   return { ok: true, name };
 }
