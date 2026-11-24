@@ -21,6 +21,9 @@ export async function register() {
   if (process.env.NODE_ENV === "production" || process.env.VERCEL_COLLECT_ON_DEV === "1") {
     const { startVercelCollector } = await import("./lib/vercel-collector");
     startVercelCollector();
+    // (and on Railway, read from its logs every few minutes: src/lib/railway-collector.ts)
+    const { startRailwayCollector } = await import("./lib/railway-collector");
+    startRailwayCollector();
   }
   if (process.env.NODE_ENV !== "production" && process.env.SLACK_ON_DEV !== "1") return;
   // Should ws ever be bundled again (next.config.ts), its bufferutil stub would break every frame the bot sends:

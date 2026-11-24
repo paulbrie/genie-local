@@ -318,6 +318,15 @@ A dashboard that supervises every project under `/opt/project/projects`. Stack:
   answer after 300 s), then the push with the review's result, followed in a dialog
   (`review-progress.tsx`), kept up when it found something. git push gets time for the review and
   a wait for a free slot (`pushBudgetMs`). Hook test: `code-review/hook.test.ts`.
+- **A project's Railway tab** (`/projects/<slug>/railway`, as its Vercel tab): the Railway project and
+  environment it shows (`project_railway`), its services, deployments with build / deploy / HTTP logs
+  (`src/lib/railway-project.ts`, pure parts in `railway-core.ts`, tested), and production issues
+  (`railway_issues`): `src/lib/railway-collector.ts`, in the live admin only, reads Railway's kept logs every
+  5 minutes from where it stopped (`collected_until`; a new link looks back a day), as Railway's API allows
+  only 100 requests an hour on its free plan (1000 Hobby). It uses the box's token (`RAILWAY_API_TOKEN`, the
+  `/railway` explorer's, `src/lib/railway.ts`) unless the project has one of its own (account, workspace or
+  project token, AES-GCM). `next.config.ts` turns off Next's dev MCP endpoint (`experimental.mcpServer`):
+  its log file inside `.next-dev` made `/admin-dev` reload itself four times a second.
 - **DB Explorer (`/db`) finds this box's databases itself** (`src/lib/db-discovery.ts`, pure parts
   in `db-discovery-core.ts`, tested): the admin's own `DATABASE_URL`, every local postgres:// / mysql://
   URL in the projects' and their apps' `.env*` files (remote hosts left out), and the running database

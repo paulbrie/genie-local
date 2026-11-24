@@ -40,6 +40,7 @@ export default async function ProjectLayout({
     { id: "scripts", label: `Scripts (${scriptCount})` },
     { id: "production", label: "Production" },
     { id: "vercel", label: "Vercel" },
+    { id: "railway", label: "Railway" },
     { id: "tasks", label: `Tasks (${tasks.length})` },
     { id: "notes", label: `Notes (${notes.length})` },
     { id: "memory", label: "Memory" },

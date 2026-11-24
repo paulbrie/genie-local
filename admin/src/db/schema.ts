@@ -443,6 +443,64 @@ export const vercelIssues = pgTable(
 );
 
 /**
+ * A project's Railway link (its Railway tab): the Railway project and environment it shows, how far the
+ * production-problem collector has read their logs, and a token of the project's own when it has one (AES-GCM, never
+ * sent back to the browser) of one of Railway's kinds: an account's, a workspace's, or a project's (bound to one
+ * project and environment). No token of its own: the box's (RAILWAY_API_TOKEN, the Railway explorer's).
+ */
+export const projectRailway = pgTable("project_railway", {
+  projectId: integer("project_id")
+    .primaryKey()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  tokenEnc: text("token_enc"),
+  tokenHint: text("token_hint"),
+  // "account" | "workspace" | "project" (the box's token is an account's)
+  tokenKind: text("token_kind"),
+  workspaceId: text("workspace_id"),
+  railwayProjectId: text("railway_project_id"),
+  railwayProjectName: text("railway_project_name"),
+  environmentId: text("environment_id"),
+  environmentName: text("environment_name"),
+  // the collector (src/lib/railway-collector.ts) has read the logs up to here
+  collectedUntil: timestamp("collected_until", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A problem seen in a project's production on Railway (its Railway tab), as vercel_issues for Vercel: error and warning
+ * lines from its services' logs and 5xx responses (`runtime`), failed builds (`build`) and crashed deployments
+ * (`crash`), read by src/lib/railway-collector.ts. Same problem, same `fingerprint`: one row, counted.
+ */
+export const railwayIssues = pgTable(
+  "railway_issues",
+  {
+    id: serial("id").primaryKey(),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    fingerprint: text("fingerprint").notNull(),
+    // "runtime" | "build" | "crash"
+    kind: text("kind").notNull(),
+    // "error" | "warning"
+    level: text("level").notNull(),
+    title: text("title").notNull(),
+    sample: text("sample").notNull().default(""),
+    // the latest few: { at, path, method, status, message, deployment, service }
+    recent: jsonb("recent").notNull().default([]),
+    paths: jsonb("paths").notNull().default([]),
+    // the services it was seen in (names)
+    services: jsonb("services").notNull().default([]),
+    count: integer("count").notNull().default(0),
+    firstSeen: timestamp("first_seen", { withTimezone: true }).notNull().defaultNow(),
+    lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
+    lastDeploymentId: text("last_deployment_id"),
+    taskId: integer("task_id"),
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("railway_issues_project_fingerprint_key").on(t.projectId, t.fingerprint), index("railway_issues_project_last").on(t.projectId, t.lastSeen)],
+);
+
+/**
  * Where a project runs in production (its Production tab): the URL, and free notes
  * (hosting, how it deploys, accounts…). One row per project; more fields can join it.
  */
@@ -526,3 +584,4 @@ export type GitCredential = typeof gitCredentials.$inferSelect;
 export type ProjectProduction = typeof projectProduction.$inferSelect;
 export type ProjectVercel = typeof projectVercel.$inferSelect;
 export type VercelIssue = typeof vercelIssues.$inferSelect;
+export type RailwayIssue = typeof railwayIssues.$inferSelect;

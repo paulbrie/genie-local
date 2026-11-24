@@ -55,6 +55,10 @@ const nextConfig: NextConfig = {
     serverActions: {
       allowedOrigins: PUBLIC_HOSTS,
     },
+    // Dev only. Next's MCP endpoint (on by default since 16.4) writes every browser console line to
+    // <distDir>/logs/next-development.log, which the dev server watches here (distDir is .next-dev): each line
+    // rebuilt and reloaded the page, which logged again, four reloads a second on any page of /admin-dev.
+    mcpServer: false,
   },
 };
 
